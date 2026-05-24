@@ -3,6 +3,13 @@ from logger import logger
 
 _loader = None
 
+
+def configure(loader=None):
+    global _loader
+    if loader is not None:
+        _loader = loader
+
+
 definition = {
     "type": "function",
     "function": {

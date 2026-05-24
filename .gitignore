@@ -4,6 +4,7 @@ __pycache__/
 skills/
 .baidu-cc/
 logs/
+.team/
 memory_data/
 config.yaml
 .DS_Store

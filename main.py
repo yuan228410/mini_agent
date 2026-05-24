@@ -1,19 +1,33 @@
+import threading
+
 from compactor import Compactor
-from config import PROJECT_DIR
+from config import PROJECT_DIR, COMPACTOR, MODEL_CONFIG, STREAMING
 from context import ContextBuilder
-from llm import chat
+from llm import chat, chat_stream, _get_usage
 from logger import logger
 from memory import MemoryStore
 from skills import SkillLoader
 from subagents import SubagentLoader
-from tools import handle_tool_calls, register, register_subagents, render_todos
+from team_bus import MessageBus
+from team_manager import TeammateManager
+from session import SessionManager
+from team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
+from tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, render_todos
 
 SKILL_LOADER = SkillLoader(PROJECT_DIR / "skills")
 SUBAGENT_LOADER = SubagentLoader(PROJECT_DIR / "subagents")
 
+_LEAD_TOOLS = None
+
+
+def _lead_tool_defs() -> list[dict]:
+    global _LEAD_TOOLS
+    if _LEAD_TOOLS is None:
+        _LEAD_TOOLS = [d for d in get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
+    return _LEAD_TOOLS
+
 
 def _inject_todos(messages: list[dict]):
-    """将待办列表追加到主 system prompt 末尾"""
     todos_text = render_todos()
     base = messages[0]["content"]
     marker = "\n\n## 当前任务计划"
@@ -22,12 +36,62 @@ def _inject_todos(messages: list[dict]):
     messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
+def _run_tool_loop(messages, tools, inject_fn, max_turns=30):
+    for turn in range(max_turns):
+        if STREAMING:
+            last_chunk = None
+            for chunk in chat_stream(messages, tools=tools):
+                if chunk["type"] == "text":
+                    print(chunk["content"], end="", flush=True)
+                elif chunk["type"] == "error":
+                    logger.error(f"[LLM✗] 流式错误: {chunk['error']}")
+                    return None
+                elif chunk["type"] == "done":
+                    msg = chunk["msg"]
+            if not msg or "tool_calls" not in msg:
+                print()
+                return msg
+        else:
+            msg = chat(messages, tools=tools)
+            if not msg or "tool_calls" not in msg:
+                return msg
+        spawned = handle_tool_calls(msg, messages)
+        inject_fn(messages)
+        if spawned:
+            logger.info("[spawn] lead 退出 LLM 循环，等待队友")
+            return None
+    logger.warning(f"[lead] 工具循环达到上限 {max_turns} 轮，强制退出")
+    return None
+
+
 def main():
     register(SKILL_LOADER)
     register_subagents(SUBAGENT_LOADER)
+
+    bus = MessageBus(PROJECT_DIR / ".team" / "inbox")
+    team_mgr = TeammateManager(
+        team_dir=PROJECT_DIR / ".team",
+        bus=bus,
+        project_dir=PROJECT_DIR,
+    )
+    register_team(bus, team_mgr)
+
+    lead_event = threading.Event()
+    bus.register_wake("lead", lead_event)
+
     store = MemoryStore(PROJECT_DIR / "memory_data")
-    compactor = Compactor(store)
+    sessions = SessionManager(PROJECT_DIR / "memory_data" / "sessions")
     ctx = ContextBuilder(PROJECT_DIR)
+
+    compactor = Compactor(
+        store,
+        keep_recent=COMPACTOR["keep_recent"],
+        char_threshold=COMPACTOR["char_threshold"],
+        context_usage_threshold=COMPACTOR["context_usage_threshold"],
+        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_builder=ctx,
+        skill_loader=SKILL_LOADER,
+    )
 
     system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER)
     messages = [{"role": "system", "content": system_prompt}]
@@ -44,23 +108,44 @@ def main():
             continue
         if user_input.lower() in ("exit", "quit", "q"):
             break
+        if user_input.startswith("/save "):
+            print(sessions.save(user_input[6:], messages))
+            continue
+        if user_input.startswith("/load "):
+            loaded = sessions.load(user_input[6:])
+            if loaded:
+                messages = [messages[0]] + loaded
+                _inject_todos(messages)
+                print(f"会话 '{user_input[6:]}' 已加载（{len(loaded)} 条消息）")
+            else:
+                print(f"会话 '{user_input[6:]}' 不存在")
+            continue
+        if user_input == "/sessions":
+            print(sessions.render_list())
+            continue
 
         messages.append({"role": "user", "content": user_input})
         store.append("user", user_input)
 
-        while True:
-            msg = chat(messages)
-            if not msg or "tool_calls" not in msg:
-                break
-            handle_tool_calls(msg, messages)
-            _inject_todos(messages)
+        msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos)
 
-        if msg:
+        teammate_msg = wait_for_teammates(
+            bus, team_mgr, lead_event,
+            _run_tool_loop, messages, _lead_tool_defs(),
+            _inject_todos, store,
+        )
+        if teammate_msg:
+            msg = teammate_msg
+
+        if msg and msg.get("content"):
             print("Assistant:", msg["content"])
             messages.append({"role": "assistant", "content": msg["content"]})
             store.append("assistant", msg["content"])
 
-        if compactor.should_compact(messages):
+        shutdown_teammates(bus, team_mgr)
+        cleanup_inbox(bus)
+
+        if compactor.should_compact(_get_usage()["prompt_tokens"]):
             messages = compactor.compact(chat, messages)
             _inject_todos(messages)
 

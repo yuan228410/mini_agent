@@ -21,6 +21,8 @@ definition = {
 
 def execute(args: dict) -> str:
     command = args["command"]
-    logger.info(f"[执行] {command}")
+    logger.info(f"[执行→] {command}")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
-    return result.stdout or result.stderr
+    output = result.stdout or result.stderr
+    logger.debug(f"[执行←] exit={result.returncode} len={len(output)}")
+    return output

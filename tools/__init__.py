@@ -1,12 +1,22 @@
 """工具注册与分发"""
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from tools import dispatch_subagent, run_command, update_todos, web_fetch
+from config import TOOL
+from logger import logger
+from tools import dispatch_subagent, read_file, run_command, update_todos, web_fetch, write_file
 
-_PARALLEL_TOOLS = {"dispatch_subagent"}
+_MAX_RESULT_CHARS = TOOL["max_result_chars"]
 
-_ALL_TOOLS = [run_command, web_fetch, update_todos]
+
+def _truncate(output: str) -> str:
+    if len(output) <= _MAX_RESULT_CHARS:
+        return output
+    return output[:_MAX_RESULT_CHARS] + f"\n[已截断，原长 {len(output)} 字符]"
+
+_PARALLEL_TOOLS = {"dispatch_subagent", "spawn_teammate"}
+
+_ALL_TOOLS = [read_file, write_file, run_command, web_fetch, update_todos]
 _BY_NAME: dict[str, object] = {}
 
 
@@ -22,8 +32,8 @@ def register(skill_loader) -> None:
     """注入 skill_loader 依赖，注册技能相关工具"""
     from tools import list_skills, load_skill
 
-    list_skills._loader = skill_loader
-    load_skill._loader = skill_loader
+    list_skills.configure(loader=skill_loader)
+    load_skill.configure(loader=skill_loader)
     _ALL_TOOLS.extend([list_skills, load_skill])
     _rebuild_index()
 
@@ -31,10 +41,21 @@ def register(skill_loader) -> None:
 def register_subagents(subagent_loader) -> None:
     """注册子代理调度工具"""
     subagent_list = subagent_loader.list_specs()
-    dispatch_subagent.definition = dispatch_subagent.build_definition(subagent_list)
-    dispatch_subagent._loader = subagent_loader
+    dispatch_subagent.configure(
+        loader=subagent_loader,
+        definition=dispatch_subagent.build_definition(subagent_list),
+    )
 
     _ALL_TOOLS.append(dispatch_subagent)
+    _rebuild_index()
+
+
+def register_team(bus, manager) -> None:
+    """注册 team 协作工具"""
+    from tools import team_tools
+    team_tools.configure(bus=bus, manager=manager)
+    team_tools.set_caller("lead")
+    _ALL_TOOLS.extend(team_tools.ALL_TEAM_TOOLS)
     _rebuild_index()
 
 
@@ -49,18 +70,21 @@ def dispatch(name: str, args: dict) -> str | None:
     return mod.execute(args) if mod else None
 
 
-def handle_tool_calls(msg: dict, messages: list[dict]) -> None:
-    """处理消息中的 tool_calls，并行安全工具并发执行，其余串行"""
+def handle_tool_calls(msg: dict, messages: list[dict]) -> bool:
+    """处理消息中的 tool_calls，返回是否包含 spawn_teammate"""
     calls = msg["tool_calls"]
     messages.append({"role": "assistant", "content": None, "tool_calls": calls})
 
+    spawned = False
     i = 0
     while i < len(calls):
         tc = calls[i]
         name = tc["function"]["name"]
 
+        if name == "spawn_teammate":
+            spawned = True
+
         if name in _PARALLEL_TOOLS:
-            # 收集连续的可并行调用
             group = []
             while i < len(calls) and calls[i]["function"]["name"] in _PARALLEL_TOOLS:
                 group.append(calls[i])
@@ -70,29 +94,45 @@ def handle_tool_calls(msg: dict, messages: list[dict]) -> None:
             _execute_one(tc, messages)
             i += 1
 
+    return spawned
+
 
 def _execute_one(tc: dict, messages: list[dict]) -> None:
+    name = tc["function"]["name"]
     args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-    output = dispatch(tc["function"]["name"], args)
+    logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
+    output = dispatch(name, args)
     if output is not None:
+        output = _truncate(output)
+        logger.debug(f"[工具←] {name} len={len(output)}")
         messages.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
 
 
 def _execute_parallel(calls: list[dict], messages: list[dict]) -> None:
+    import contextvars as _cv
     results = {}
+    caller_val = _cv.copy_context()
 
     def _run(tc):
-        args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
-        return tc["id"], dispatch(tc["function"]["name"], args)
+        try:
+            name = tc["function"]["name"]
+            args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
+            logger.info(f"[并行→] {name}({json.dumps(args, ensure_ascii=False)})")
+            return tc["id"], caller_val.run(dispatch, name, args)
+        except Exception as e:
+            return tc["id"], f"执行失败: {e}"
 
     with ThreadPoolExecutor(max_workers=len(calls)) as pool:
-        for tc_id, output in pool.map(_run, calls):
+        futures = {pool.submit(_run, tc): tc for tc in calls}
+        for future in as_completed(futures):
+            tc_id, output = future.result()
             if output is not None:
                 results[tc_id] = output
 
     for tc in calls:
         if tc["id"] in results:
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": results[tc["id"]]})
+            output = _truncate(results[tc["id"]])
+            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
 
 
 def render_todos() -> str:

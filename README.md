@@ -13,7 +13,7 @@ python main.py
 
 ```
 yzx_agent/
-├── main.py              # 入口，编排主循环（保持简洁，~50行）
+├── main.py              # 入口，编排主循环
 ├── llm.py               # LLM API 通信
 ├── runner.py             # 可复用的 Agent 执行循环
 ├── config.py             # 配置加载
@@ -33,11 +33,15 @@ yzx_agent/
 │   ├── list_skills.py    #   列出可用技能
 │   ├── load_skill.py     #   加载技能内容
 │   ├── update_todos.py   #   任务规划与状态跟踪
-│   └── dispatch_subagent.py  # 子代理调度
+│   ├── dispatch_subagent.py  # 子代理调度
+│   └── team_tools.py     #   Team 协作工具（5个）
 ├── subagents/            # 子代理定义
 │   ├── __init__.py       #   SubagentLoader
 │   ├── coder.md          #   代码工程师
 │   └── researcher.md     #   信息检索员
+├── team_bus.py           # 队友消息总线（文件 JSONL 邮箱）
+├── team_manager.py       # 队友管理器（spawn、状态、线程循环）
+├── team_loop.py         # 队友轮询与回禀处理（从 main.py 抽出）
 ├── skills/               # 技能文件目录
 ├── memory_data/          # 运行时记忆数据（不入 git）
 └── logs/                 # 运行日志（不入 git）
@@ -49,9 +53,11 @@ yzx_agent/
 
 ```
 用户输入 → 检查是否需要规划(update_todos)
-         → chat(LLM) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
+         → chat(LLM, 无read_inbox) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
                                      ↓ 无
-                               输出回复 → 存储 → 检查压缩
+                               有活跃队友? → wait_for_teammates 轮询等待 → 收到回禀 → 注入对话 → 再次 chat
+                               ↓ 无
+                          输出回复 → 存储 → 检查压缩
 ```
 
 ### 任务规划 (update_todos)
@@ -88,10 +94,30 @@ max_turns: 10
 你是一个...（system prompt）
 ```
 
+### Team 协作系统 (team_bus.py + team_manager.py + team_loop.py + tools/team_tools.py)
+
+召入持久队友组成 agent team，通过文件 JSONL 邮箱（inbox）收发消息协同工作：
+
+| 工具 | 用途 |
+|------|------|
+| spawn_teammate | 召入/唤醒队友，指定名字、职司、首项任务 |
+| list_teammates | 列出所有队友及状态（idle/working/offline） |
+| send_message | 给队友或 lead 发 inbox 消息 |
+| read_inbox | 读取并清空自己的 inbox（仅队友内部使用，lead 不暴露此工具） |
+| broadcast | 向所有队友广播消息 |
+
+**特点：**
+- 持久队友：每个队友有独立 daemon 线程，spawn 后持续运行直到 shutdown
+- 文件邮箱：队友间通过 `.team/inbox/{name}.jsonl` 通信，进程重启不丢消息
+- 工具白名单：队友只能使用 `run_command`、`web_fetch`、`load_skill`、`send_message`
+- 回禀机制：lead 不手动轮询 inbox，`team_loop.py` 的 `wait_for_teammates` 自动等待并注入队友回禀
+- contextvars 身份识别：队友线程自动标记身份，工具调用时使用正确的发送者
+- 并行 spawn：`spawn_teammate` 标记为可并行，模型可一次召入多个队友
+
 ### 日志系统 (logger.py)
 
-- 终端：仅显示聊天内容和 WARNING+ 级别消息
-- 文件 `logs/YYYYMMDD.log`：DEBUG 级别，记录工具调用、任务计划、子代理派遣、压缩归档等所有系统事件
+- 终端：仅显示 WARNING+ 级别消息和 `print` 输出（回禀通知、Assistant 回复等）
+- 文件 `logs/YYYYMMDD.log`：DEBUG 级别全量记录，格式含进程/线程 ID（`[PID/TID]`），记录 LLM 请求响应、工具调用与返回、MSG 通信、队友状态等所有事件
 
 ### 记忆系统 (memory.py + compactor.py)
 
@@ -104,11 +130,15 @@ max_turns: 10
 | 长期层 | `MEMORY.md` | 持久 | 核心目标、重要决策、项目背景 |
 
 **压缩触发条件：**
-- 非系统消息数 > 10 条
-- 且总字符数 > 8000
+- `prompt_tokens > context_length × context_usage_threshold`
+- 即上下文使用量超过模型上下文窗口的指定比例（默认 80%）
+
+**压缩后保留：**
+- 最近 `keep_recent` 条消息（默认 100 条）
+- 且保留消息总字符数不超过 `char_threshold`（超出则从头部继续裁剪）
 
 **压缩流程：**
-1. 保留最近 10 条消息
+1. 根据上述条件确定归档区间和保留区间
 2. 旧消息发送给模型，提取三个维度的结构化输出：
    - `<episode>` — 写入今日情景记忆
    - `<updated_memory>` — 更新长期记忆
@@ -133,9 +163,10 @@ RULES.md (行为规范)
 
 ### 工具系统 (tools/)
 
-每个工具是一个独立模块，导出两个接口：
+每个工具是一个独立模块，导出三个接口：
 - `definition` — OpenAI Function Calling 的工具定义
 - `execute(args)` — 工具执行函数
+- `configure(**kwargs)` — （可选）注入外部依赖，避免模块级可变赋值
 
 添加新工具：创建 `tools/新工具.py`，在 `tools/__init__.py` 的 `_ALL_TOOLS` 中注册。
 
@@ -159,10 +190,37 @@ tags: tag1,tag2
 编辑 `config.yaml`：
 
 ```yaml
+timeouts:
+  llm: 120              # LLM API 请求超时（秒）
+  teammate_recv: 5      # 队友等待 inbox 超时（秒）
+  lead_wait: 300        # lead 等待队友回禀上限（秒）
+  lead_poll_interval: 2 # lead 轮询 inbox 间隔（秒）
+  web_fetch: 10         # 网页抓取超时（秒）
+
+compactor:
+  context_usage_threshold: 0.8 # 压缩触发：prompt_tokens 超过上下文长度的比例
+  keep_recent: 100              # 压缩后保留最近消息数
+  char_threshold: 50000         # 压缩后保留消息的最大字符数
+
+teammate:
+  max_teammates: 10     # 最大队友数量
+  max_turns: 20         # 队友每轮最大 LLM 调用次数
+  base_tools:           # 队友基础工具白名单
+    - run_command
+    - web_fetch
+    - load_skill
+
+tool:
+  max_result_chars: 3000  # 工具返回值截断
+
+runner:
+  context_usage_limit: 0.88  # 子代理/队友上下文安全阀
+
 model:
   api_url: "https://your-api.com/v1/chat/completions"
   api_key: "your-api-key"
   model: "your-model-name"
+  context_length: 128000  # 模型上下文窗口大小（token 数）
 ```
 
 ## 自定义 Agent 人设
