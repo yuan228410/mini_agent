@@ -3,6 +3,7 @@ __pycache__/
 *.pyo
 skills/
 .baidu-cc/
+logs/
 memory_data/
 config.yaml
 .DS_Store

@@ -1,4 +1,6 @@
 """技能加载工具"""
+from logger import logger
+
 _loader = None
 
 definition = {
@@ -19,5 +21,5 @@ definition = {
 
 def execute(args: dict) -> str:
     name = args["name"]
-    print(f"[加载技能] {name}")
+    logger.info(f"[加载技能] {name}")
     return _loader.get_content(name)

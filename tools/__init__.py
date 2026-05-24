@@ -1,9 +1,9 @@
 """工具注册与分发"""
 import json
 
-from tools import run_command, web_fetch
+from tools import run_command, update_todos, web_fetch
 
-_ALL_TOOLS = [run_command, web_fetch]
+_ALL_TOOLS = [run_command, web_fetch, update_todos]
 _BY_NAME: dict[str, object] = {
     m.definition["function"]["name"]: m for m in _ALL_TOOLS
 }
@@ -44,3 +44,8 @@ def handle_tool_calls(msg: dict, messages: list[dict]) -> None:
 
         messages.append({"role": "assistant", "content": None, "tool_calls": [tool_call]})
         messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": output})
+
+
+def render_todos() -> str:
+    """返回当前待办列表的文本表示"""
+    return update_todos._store.render()

@@ -6,7 +6,7 @@ definition = {
     "function": {
         "name": "list_skills",
         "description": "列出所有可用的技能(skill)，返回技能名称和描述",
-        "parameters": {"type": "object", "properties": {}}
+        "parameters": {"type": "object", "properties": {}, "required": []}
     }
 }
 

@@ -2,11 +2,22 @@ from compactor import Compactor
 from config import PROJECT_DIR
 from context import ContextBuilder
 from llm import chat
+from logger import logger
 from memory import MemoryStore
 from skills import SkillLoader
-from tools import handle_tool_calls, register
+from tools import handle_tool_calls, register, render_todos
 
 SKILL_LOADER = SkillLoader(PROJECT_DIR / "skills")
+
+
+def _inject_todos(messages: list[dict]):
+    """将待办列表追加到主 system prompt 末尾"""
+    todos_text = render_todos()
+    base = messages[0]["content"]
+    marker = "\n\n## 当前任务计划"
+    if marker in base:
+        base = base[: base.index(marker)]
+    messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
 def main():
@@ -17,11 +28,12 @@ def main():
 
     system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER)
     messages = [{"role": "system", "content": system_prompt}]
+    _inject_todos(messages)
 
     unarchived = store.load_unarchived()
     if unarchived:
         messages.extend(unarchived)
-        print(f"[恢复] {len(unarchived)} 条历史消息")
+        logger.info(f"[恢复] {len(unarchived)} 条历史消息")
 
     while True:
         user_input = input("You: ").strip()
@@ -38,6 +50,7 @@ def main():
             if not msg or "tool_calls" not in msg:
                 break
             handle_tool_calls(msg, messages)
+            _inject_todos(messages)
 
         if msg:
             print("Assistant:", msg["content"])
@@ -46,6 +59,7 @@ def main():
 
         if compactor.should_compact(messages):
             messages = compactor.compact(chat, messages)
+            _inject_todos(messages)
 
 
 if __name__ == "__main__":

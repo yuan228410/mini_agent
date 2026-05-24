@@ -2,6 +2,7 @@
 import re
 from datetime import datetime, timezone, timedelta
 
+from logger import logger
 from memory import COMPACT_PROMPT, MemoryStore
 
 _UTC8 = timezone(timedelta(hours=8))
@@ -38,15 +39,8 @@ class Compactor:
     def compact(self, chat_fn, messages: list[dict]) -> list[dict]:
         """压缩旧消息，返回精简后的消息列表"""
         non_system = [m for m in messages if m["role"] != "system"]
-        if len(non_system) <= self.keep_recent:
-            return messages
-
         old = non_system[: -self.keep_recent]
         recent = non_system[-self.keep_recent :]
-
-        total_chars = sum(len(m.get("content") or "") for m in non_system)
-        if total_chars <= self.char_threshold:
-            return messages
 
         prompt = COMPACT_PROMPT.format(
             old_conversation=self._messages_to_text(old),
@@ -58,7 +52,7 @@ class Compactor:
 
         result = chat_fn([{"role": "user", "content": prompt}], tools=None)
         if not result:
-            print("[压缩失败] 模型未返回结果")
+            logger.warning("[压缩失败] 模型未返回结果")
             self.memory.mark_compacted()
             return [messages[0]] + recent
 
@@ -76,14 +70,16 @@ class Compactor:
 
         self.memory.mark_compacted()
 
-        head = [messages[0]]  # system prompt
+        # 将长期记忆/用户画像合并到主 system prompt 中
+        parts = [messages[0]["content"]]
         if self.memory.has_memory():
-            head.append({"role": "system", "content": f"[长期记忆]\n{self.memory.read_memory()}"})
+            parts.append(f"## 长期记忆\n\n{self.memory.read_memory()}")
         if self.memory.has_user():
-            head.append({"role": "system", "content": f"[用户画像]\n{self.memory.read_user()}"})
+            parts.append(f"## 用户画像\n\n{self.memory.read_user()}")
+        messages[0]["content"] = "\n\n---\n\n".join(parts)
 
-        print(f"[压缩完成] {len(old)} 条消息归档 → 情景记忆/长期记忆已更新")
-        return head + recent
+        logger.info(f"[压缩完成] {len(old)} 条消息归档")
+        return [messages[0]] + recent
 
     @staticmethod
     def _messages_to_text(messages: list[dict]) -> str:

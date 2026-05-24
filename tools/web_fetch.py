@@ -2,6 +2,8 @@
 import urllib.request
 from html.parser import HTMLParser
 
+from logger import logger
+
 definition = {
     "type": "function",
     "function": {
@@ -37,7 +39,7 @@ def execute(args: dict) -> str:
     extract_mode = args.get("extract_mode", "text")
     max_chars = args.get("max_chars", 8000)
 
-    print(f"[抓取] {url}")
+    logger.info(f"[抓取] {url}")
 
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:

@@ -1,6 +1,8 @@
 """Shell 命令执行工具"""
 import subprocess
 
+from logger import logger
+
 definition = {
     "type": "function",
     "function": {
@@ -19,6 +21,6 @@ definition = {
 
 def execute(args: dict) -> str:
     command = args["command"]
-    print(f"[执行] {command}")
+    logger.info(f"[执行] {command}")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     return result.stdout or result.stderr
