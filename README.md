@@ -13,31 +13,34 @@ python main.py
 
 ```
 yzx_agent/
-├── main.py              # 入口，编排主循环
+├── main.py              # 入口，编排主循环（保持简洁，~50行）
 ├── llm.py               # LLM API 通信
+├── runner.py             # 可复用的 Agent 执行循环
 ├── config.py             # 配置加载
 ├── config.yaml           # 模型与服务配置
+├── logger.py             # 日志模块（双输出：终端+文件）
 ├── context.py            # 系统提示词组装
 ├── memory.py             # 三层记忆存储
 ├── compactor.py          # 对话压缩归档
 ├── skills.py             # 技能加载器
 ├── character/            # Agent 人设定义
-│   ├── SOUL.md           #   核心身份与能力
-│   └── RULES.md          #   行为规范
-├── tools/                # 工具系统
-│   ├── __init__.py       #   注册、分发、执行
+│   ├── SOUL.md           #   核心身份、能力、工作流程
+│   └── RULES.md          #   行为规范、任务规划要求
+├── tools/                # 工具系统（每个工具一个py文件）
+│   ├── __init__.py       #   注册、分发、并行执行
 │   ├── run_command.py    #   Shell 命令执行
 │   ├── web_fetch.py      #   网页抓取
 │   ├── list_skills.py    #   列出可用技能
-│   └── load_skill.py     #   加载技能内容
+│   ├── load_skill.py     #   加载技能内容
+│   ├── update_todos.py   #   任务规划与状态跟踪
+│   └── dispatch_subagent.py  # 子代理调度
+├── subagents/            # 子代理定义
+│   ├── __init__.py       #   SubagentLoader
+│   ├── coder.md          #   代码工程师
+│   └── researcher.md     #   信息检索员
 ├── skills/               # 技能文件目录
-│   └── code-review/      #   示例：代码审查技能
-│       └── SKILL.md
-└── memory_data/          # 运行时生成的记忆数据
-    ├── history.jsonl     #   原始对话日志
-    ├── YYYY-MM-DD.md     #   每日情景记忆
-    ├── MEMORY.md         #   长期记忆
-    └── USER.md           #   用户画像
+├── memory_data/          # 运行时记忆数据（不入 git）
+└── logs/                 # 运行日志（不入 git）
 ```
 
 ## 架构设计
@@ -45,10 +48,50 @@ yzx_agent/
 ### 主循环 (main.py)
 
 ```
-用户输入 → chat(LLM) → 有 tool_calls? → 执行工具 → 再次 chat
-                                    ↓ 无
-                              输出回复 → 存储 → 检查压缩
+用户输入 → 检查是否需要规划(update_todos)
+         → chat(LLM) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
+                                     ↓ 无
+                               输出回复 → 存储 → 检查压缩
 ```
+
+### 任务规划 (update_todos)
+
+模型收到复杂任务后自动拆解为待办列表：
+- `pending` → `in_progress` → `completed` 三态推进
+- 同一时间最多一个 in_progress
+- 每次全量覆盖更新
+- 状态持久化在内存中，压缩不会丢失
+
+### 子代理系统 (subagents/ + dispatch_subagent)
+
+派遣独立子代理执行并行任务，隔离上下文：
+
+| 子代理 | 工具 | 用途 |
+|--------|------|------|
+| researcher | run_command, web_fetch, load_skill | 信息搜索与分析 |
+| coder | run_command, load_skill | 代码编写与修改 |
+
+**特点：**
+- 工具白名单：子代理只能使用指定工具
+- 轮次限制：每个子代理有 max_turns 上限
+- 并行执行：多个 dispatch_subagent 通过 ThreadPoolExecutor 并行运行
+- 上下文隔离：子代理内部历史不回传，只返回最终结果
+
+新增子代理：在 `subagents/` 下创建 `xxx.md` 文件即可。
+```markdown
+---
+name: my-agent
+description: 我的子代理
+tools: run_command, web_fetch
+max_turns: 10
+---
+你是一个...（system prompt）
+```
+
+### 日志系统 (logger.py)
+
+- 终端：仅显示聊天内容和 WARNING+ 级别消息
+- 文件 `logs/YYYYMMDD.log`：DEBUG 级别，记录工具调用、任务计划、子代理派遣、压缩归档等所有系统事件
 
 ### 记忆系统 (memory.py + compactor.py)
 

@@ -5,9 +5,11 @@ from llm import chat
 from logger import logger
 from memory import MemoryStore
 from skills import SkillLoader
-from tools import handle_tool_calls, register, render_todos
+from subagents import SubagentLoader
+from tools import handle_tool_calls, register, register_subagents, render_todos
 
 SKILL_LOADER = SkillLoader(PROJECT_DIR / "skills")
+SUBAGENT_LOADER = SubagentLoader(PROJECT_DIR / "subagents")
 
 
 def _inject_todos(messages: list[dict]):
@@ -22,6 +24,7 @@ def _inject_todos(messages: list[dict]):
 
 def main():
     register(SKILL_LOADER)
+    register_subagents(SUBAGENT_LOADER)
     store = MemoryStore(PROJECT_DIR / "memory_data")
     compactor = Compactor(store)
     ctx = ContextBuilder(PROJECT_DIR)
