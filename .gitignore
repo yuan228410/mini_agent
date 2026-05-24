@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.pyo
+skills/
+.baidu-cc/
+memory_data/
+config.yaml
+.DS_Store
