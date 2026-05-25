@@ -3,9 +3,9 @@ import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config import TOOL
-from logger import logger
-from tools import dispatch_subagent, read_file, run_command, update_todos, web_fetch, write_file
+from ..config import TOOL
+from ..logger import logger
+from . import dispatch_subagent, read_file, run_command, update_todos, web_fetch, write_file
 
 _MAX_RESULT_CHARS = TOOL["max_result_chars"]
 _display = None
@@ -32,7 +32,7 @@ _rebuild_index()
 
 def register(skill_loader) -> None:
     """注入 skill_loader 依赖，注册技能相关工具"""
-    from tools import list_skills, load_skill
+    from . import list_skills, load_skill
 
     list_skills.configure(loader=skill_loader)
     load_skill.configure(loader=skill_loader)
@@ -54,7 +54,7 @@ def register_subagents(subagent_loader) -> None:
 
 def register_team(bus, manager) -> None:
     """注册 team 协作工具"""
-    from tools import team_tools
+    from . import team_tools
     team_tools.configure(bus=bus, manager=manager)
     team_tools.set_caller("lead")
     _ALL_TOOLS.extend(team_tools.ALL_TEAM_TOOLS)

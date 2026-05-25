@@ -3,7 +3,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from logger import logger
+from .logger import logger
 
 _UTC8 = timezone(timedelta(hours=8))
 

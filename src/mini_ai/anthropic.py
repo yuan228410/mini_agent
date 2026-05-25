@@ -5,8 +5,8 @@ import time
 
 import requests
 
-from config import MODEL_CONFIG, TIMEOUTS, THINKING
-from logger import logger
+from .config import MODEL_CONFIG, TIMEOUTS, THINKING
+from .logger import logger
 
 API_URL = MODEL_CONFIG["api_url"]
 API_KEY = MODEL_CONFIG["api_key"]
@@ -120,7 +120,7 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
 
 def chat(messages, tools=True):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
-    from tools import get_definitions
+    from .tools import get_definitions
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
@@ -172,7 +172,7 @@ def chat(messages, tools=True):
 
 def chat_stream(messages, tools=True):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
-    from tools import get_definitions
+    from .tools import get_definitions
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 

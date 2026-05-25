@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
-from logger import logger
+from .logger import logger
 
 _IS_TTY = sys.stdout.isatty()
 
@@ -37,12 +37,15 @@ class Display:
         self._had_thinking = False
 
     def user_input(self) -> str:
-        if _IS_TTY:
+        if _IS_TTY and sys.stdin.isatty():
             return self._prompt_input()
         try:
-            return input("You: ")
+            line = input("You: ")
         except EOFError:
-            return ""
+            return "exit"
+        if not line and not sys.stdin.isatty():
+            return "exit"
+        return line
 
     def _prompt_input(self) -> str:
         from prompt_toolkit import PromptSession
@@ -75,7 +78,7 @@ class Display:
         try:
             return self._session.prompt()
         except (EOFError, KeyboardInterrupt):
-            return ""
+            return "exit"
 
     def text_chunk(self, text: str):
         self._stream_buf += text

@@ -1,7 +1,7 @@
 """Shell 命令执行工具"""
 import subprocess
 
-from logger import logger
+from ..logger import logger
 
 definition = {
     "type": "function",

@@ -1,22 +1,24 @@
+import argparse
 import threading
 
-from compactor import Compactor
-from config import PROJECT_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY
-from context import ContextBuilder
-from llm import chat, chat_stream, _get_usage
-from logger import logger
-from memory import MemoryStore
-from skills import SkillLoader
-from subagents import SubagentLoader
-from team_bus import MessageBus
-from team_manager import TeammateManager
-from session import SessionManager
-from team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
-from display import Display
-from tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, register_display, render_todos
+from . import __version__
+from .compactor import Compactor
+from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY
+from .context import ContextBuilder
+from .llm import chat, chat_stream, _get_usage
+from .logger import logger
+from .memory import MemoryStore
+from .skills import SkillLoader
+from .subagents import SubagentLoader
+from .team_bus import MessageBus
+from .team_manager import TeammateManager
+from .session import SessionManager
+from .team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
+from .display import Display
+from .tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, register_display, render_todos
 
-SKILL_LOADER = SkillLoader(PROJECT_DIR / "skills")
-SUBAGENT_LOADER = SubagentLoader(PROJECT_DIR / "subagents")
+SKILL_LOADER = SkillLoader(DATA_DIR / "skills")
+SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
 _LEAD_TOOLS = None
 
@@ -83,6 +85,9 @@ def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30):
 
 
 def main():
+    parser = argparse.ArgumentParser(prog="mini-ai", description="智能对话 Agent")
+    parser.add_argument("-v", "--version", action="version", version=f"mini-ai {__version__}")
+    parser.parse_args()
     disp = Display(
         thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
         tool_detail=DISPLAY.get("tool_detail", "summary"),
@@ -91,11 +96,11 @@ def main():
     register(SKILL_LOADER)
     register_subagents(SUBAGENT_LOADER)
 
-    bus = MessageBus(PROJECT_DIR / ".team" / "inbox")
+    bus = MessageBus(DATA_DIR / ".team" / "inbox")
     team_mgr = TeammateManager(
-        team_dir=PROJECT_DIR / ".team",
+        team_dir=DATA_DIR / ".team",
         bus=bus,
-        project_dir=PROJECT_DIR,
+        project_dir=DATA_DIR,
     )
     register_team(bus, team_mgr)
     register_display(disp)
@@ -103,9 +108,9 @@ def main():
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
 
-    store = MemoryStore(PROJECT_DIR / "memory_data")
-    sessions = SessionManager(PROJECT_DIR / "memory_data" / "sessions")
-    ctx = ContextBuilder(PROJECT_DIR)
+    store = MemoryStore(DATA_DIR / "memory_data")
+    sessions = SessionManager(DATA_DIR / "memory_data" / "sessions")
+    ctx = ContextBuilder(DATA_DIR)
 
     compactor = Compactor(
         store,

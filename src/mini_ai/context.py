@@ -15,7 +15,8 @@ class ContextBuilder:
 
     def __init__(self, project_dir: Path):
         self.project_dir = Path(project_dir)
-        self.character_dir = self.project_dir / "character"
+        from .config import PACKAGE_DIR
+        self.character_dir = PACKAGE_DIR / "character"
 
     def build(self, memory_store=None, skill_loader=None) -> str:
         parts = []

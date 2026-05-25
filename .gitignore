@@ -8,3 +8,7 @@ logs/
 memory_data/
 config.yaml
 .DS_Store
+dist/
+*.egg-info/
+.venv/
+uv.lock

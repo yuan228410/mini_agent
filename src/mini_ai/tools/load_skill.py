@@ -1,5 +1,5 @@
 """技能加载工具"""
-from logger import logger
+from ..logger import logger
 
 _loader = None
 

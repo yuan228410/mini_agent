@@ -4,11 +4,11 @@ import time
 
 import requests
 
-from config import MODEL_CONFIG, TIMEOUTS
+from .config import MODEL_CONFIG, TIMEOUTS
 
 API_MODE = MODEL_CONFIG.get("api_mode", "openai")
-from logger import logger
-from tools import get_definitions
+from .logger import logger
+from .tools import get_definitions
 
 API_URL = MODEL_CONFIG["api_url"]
 API_KEY = MODEL_CONFIG["api_key"]
@@ -50,7 +50,7 @@ def _msg_summary(m: dict) -> str:
 
 def chat(messages, tools=True):
     if API_MODE == "anthropic":
-        from anthropic import chat as anth_chat
+        from .anthropic import chat as anth_chat
         return anth_chat(messages, tools)
     """发送请求，tools=True=全部工具，tools=list=自定义工具列表，tools=False=无工具"""
     payload = {"model": MODEL, "messages": messages}
@@ -136,7 +136,7 @@ def chat(messages, tools=True):
 
 def chat_stream(messages, tools=True):
     if API_MODE == "anthropic":
-        from anthropic import chat_stream as anth_stream
+        from .anthropic import chat_stream as anth_stream
         yield from anth_stream(messages, tools)
         return
     """流式发送请求，yield delta chunks，最后 yield 完整 msg。

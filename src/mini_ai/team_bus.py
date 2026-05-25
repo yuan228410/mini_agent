@@ -7,7 +7,7 @@ import threading
 import time
 from pathlib import Path
 
-from logger import logger
+from .logger import logger
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _VALID_TYPES = {"message", "broadcast", "shutdown_request", "shutdown_response"}

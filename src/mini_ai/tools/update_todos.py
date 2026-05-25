@@ -1,5 +1,5 @@
 """待办列表工具 — 跨压缩存活的计划管理"""
-from logger import logger
+from ..logger import logger
 _VALID_STATUS = ("pending", "in_progress", "completed")
 _ICONS = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
 

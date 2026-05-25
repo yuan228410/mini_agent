@@ -4,7 +4,7 @@
 import contextvars
 import json
 
-from logger import logger
+from ..logger import logger
 
 _bus = None
 _manager = None

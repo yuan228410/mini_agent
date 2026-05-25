@@ -1,11 +1,21 @@
 """配置加载"""
+import os
 from pathlib import Path
 
 import yaml
 
-PROJECT_DIR = Path(__file__).parent
+PACKAGE_DIR = Path(__file__).parent
+DATA_DIR = Path(os.environ.get("MINI_AI_DATA", Path.home() / ".mini_ai"))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-with open(PROJECT_DIR / "config.yaml", encoding="utf-8") as f:
+_config_path = DATA_DIR / "config.yaml"
+if not _config_path.exists():
+    _example = PACKAGE_DIR / "config.example.yaml"
+    if _example.exists():
+        import shutil
+        shutil.copy2(_example, _config_path)
+
+with open(_config_path, encoding="utf-8") as f:
     _raw = yaml.safe_load(f)
 
 MODEL_CONFIG = _raw["models"][_raw["active_model"]]

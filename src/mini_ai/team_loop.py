@@ -1,8 +1,8 @@
 """队友轮询与回禀处理"""
 import time
 
-from config import TIMEOUTS
-from logger import logger
+from .config import TIMEOUTS
+from .logger import logger
 
 
 def poll_inbox(bus, name="lead"):

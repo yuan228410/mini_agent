@@ -1,7 +1,7 @@
 """文件读取工具"""
 from pathlib import Path
 
-from logger import logger
+from ..logger import logger
 
 definition = {
     "type": "function",

@@ -6,8 +6,8 @@ import re
 import threading
 from pathlib import Path
 
-from config import PROJECT_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
-from logger import logger
+from .config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
+from .logger import logger
 
 _BASE_TOOL_NAMES = tuple(TEAMMATE["base_tools"])
 _MAX_TEAMMATES = TEAMMATE["max_teammates"]
@@ -109,7 +109,7 @@ class TeammateManager:
             ev.set()
 
     def _teammate_loop(self, name: str, role: str, prompt: str):
-        from runner import run_agent
+        from .runner import run_agent
         from tools.team_tools import set_caller
 
         set_caller(name)

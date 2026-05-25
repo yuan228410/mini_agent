@@ -2,8 +2,8 @@
 import re
 from datetime import datetime, timezone, timedelta
 
-from logger import logger
-from memory import COMPACT_PROMPT, MemoryStore
+from .logger import logger
+from .memory import COMPACT_PROMPT, MemoryStore
 
 _UTC8 = timezone(timedelta(hours=8))
 

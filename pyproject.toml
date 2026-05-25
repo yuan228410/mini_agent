@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mini-ai"
+version = "0.1.0"
+description = "基于 OpenAI / Anthropic Chat API 的智能对话 Agent"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+dependencies = [
+    "requests>=2.28",
+    "pyyaml>=6.0",
+    "rich>=13.0",
+    "prompt-toolkit>=3.0",
+]
+
+[project.scripts]
+mini-ai = "mini_ai.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mini_ai"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/mini_ai"]

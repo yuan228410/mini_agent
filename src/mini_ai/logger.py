@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR = Path.home() / ".mini_ai" / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d')}.log"

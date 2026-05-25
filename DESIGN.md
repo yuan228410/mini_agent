@@ -1,8 +1,8 @@
-# yzx_agent 设计文档
+# mini_ai 设计文档
 
 ## 概述
 
-yzx_agent 是一个基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持多模型切换、流式输出、工具调用、三层记忆压缩、子代理派遣、Team 协作、会话管理。
+mini_ai 是一个基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持多模型切换、流式输出、工具调用、三层记忆压缩、子代理派遣、Team 协作、会话管理。
 
 ## 架构全景
 
@@ -118,7 +118,7 @@ main.py
 dispatch_subagent.execute(type, task)
   → 查找 subagent spec
   → 构建 [system(spec.prompt), user(task)]
-  → run_agent(messages, max_turns, tool_names=whitelist, context_length=...)
+  → rumini_ai(messages, max_turns, tool_names=whitelist, context_length=...)
   → 返回最终文本结果
 ```
 
@@ -160,7 +160,7 @@ Lead (主循环)                          Teammate (独立线程)
     │                         └─→ Event.set() (唤醒收件人)
     │                                        │
     │                                        ├─ loop top: bus.read_inbox(name)
-    │                                        ├─ run_agent (执行任务)
+    │                                        ├─ rumini_ai (执行任务)
     │                                        └─ send_message → lead inbox
     │                                               └─→ lead_event.set()
     │                                        │
@@ -365,7 +365,7 @@ models:
 **可复用的对话循环：** 被主循环、子代理、队友三者复用。
 
 ```python
-def run_agent(messages, max_turns=10, tool_names=None, context_length=None) -> str | None
+def rumini_ai(messages, max_turns=10, tool_names=None, context_length=None) -> str | None
     for _ in range(max_turns):
         if prompt_tokens > context_length * context_usage_limit:
             logger.warning("[上下文] 接近上限，提前退出")

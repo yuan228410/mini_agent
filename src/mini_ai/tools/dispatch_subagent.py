@@ -1,7 +1,7 @@
 """子代理调度工具"""
 import copy
 
-from logger import logger
+from ..logger import logger
 
 _loader = None
 _definition = None
@@ -48,7 +48,7 @@ def build_definition(subagent_list: str) -> dict:
 
 
 def execute(args: dict) -> str:
-    from runner import run_agent
+    from ..runner import run_agent
 
     spec = _loader.get(args["type"])
     if not spec:

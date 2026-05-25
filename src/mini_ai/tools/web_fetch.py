@@ -3,8 +3,8 @@ import re
 import urllib.request
 from html.parser import HTMLParser
 
-from config import TIMEOUTS
-from logger import logger
+from ..config import TIMEOUTS
+from ..logger import logger
 
 definition = {
     "type": "function",

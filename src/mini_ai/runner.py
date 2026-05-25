@@ -1,12 +1,12 @@
 """Agent 执行器 — 可复用的 LLM 对话循环"""
-from config import RUNNER
-from logger import logger
+from .config import RUNNER
+from .logger import logger
 
 _CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.85)
 
 
 def _filter_tools(tool_names: list[str]) -> list[dict]:
-    from tools import get_definitions
+    from .tools import get_definitions
     return [d for d in get_definitions() if d["function"]["name"] in tool_names]
 
 
@@ -24,8 +24,8 @@ def run_agent(messages: list[dict], *, max_turns: int = 10,
     Returns:
         最终的文本回复，或 None（超出轮次/出错/上下文将满）
     """
-    from llm import chat as llm_chat, _get_usage
-    from tools import handle_tool_calls
+    from .llm import chat as llm_chat, _get_usage
+    from .tools import handle_tool_calls
 
     tools = _filter_tools(tool_names) if tool_names else True
 

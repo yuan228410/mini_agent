@@ -1,55 +1,109 @@
-# yzx_agent
+# mini_ai
+
+> 🎓 一个学习型 AI Agent 项目 — 在探索 Agent 开发过程中逐步构建，用于学习研究与实践。
 
 基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持工具调用、技能系统、记忆压缩、子代理派遣、Team 协作、流式输出、多模型切换。
 
+项目从零手写，不依赖任何 Agent 框架，旨在深入理解 Agent 的核心机制：工具调用、记忆管理、上下文压缩、多模型适配、子代理协作等。代码结构清晰，模块职责单一，适合阅读和学习。
+
+**适合人群：** 对 AI Agent 原理感兴趣的开发者，希望了解 Agent 内部工作机制而非仅调用框架的人。
+
 ## 快速开始
 
+### 安装
+
 ```bash
-pip install requests pyyaml rich prompt_toolkit
-python main.py
+# 创建虚拟环境
+uv venv
+
+# 安装到 .venv（开发模式，可编辑）
+uv pip install -e . --python .venv/bin/python
+
+# 激活虚拟环境后直接运行
+source .venv/bin/activate
+mini-ai
 ```
+
+### 配置
+
+首次运行自动在 `~/.mini_ai/` 创建数据目录，并从包内拷贝 `config.example.yaml` 为 `config.yaml`。
+
+```bash
+# 编辑配置，填入真实 API 密钥和模型地址
+vi ~/.mini_ai/config.yaml
+
+# 也可通过环境变量指定数据目录（默认 ~/.mini_ai/）
+export MINI_AI_DATA=/path/to/custom/data
+```
+
+### 运行
+
+```bash
+# 源码库中开发调试
+uv run mini-ai
+
+# 或手动激活 .venv
+source .venv/bin/activate
+mini-ai
+```
+
+### 依赖
+
+| 依赖 | 用途 |
+|------|------|
+| requests | HTTP 请求（LLM API 通信） |
+| pyyaml | 配置文件解析 |
+| rich | 终端 Markdown 渲染、思维链/工具调用展示 |
+| prompt-toolkit | 输入框 / 命令补全交互 |
 
 ## 项目结构
 
 ```
-yzx_agent/
-├── main.py              # 入口，编排主循环
-├── llm.py               # LLM API 通信（OpenAI 兼容）
-├── anthropic.py          # Anthropic Claude 适配层
-├── runner.py             # 可复用的 Agent 执行循环
-├── config.py             # 配置加载（支持多模型切换）
-├── config.yaml           # 模型与服务配置
-├── logger.py             # 日志模块（双输出：终端+文件）
-├── context.py            # 系统提示词组装
-├── memory.py             # 三层记忆存储
-├── compactor.py          # 对话压缩归档
-├── session.py            # 会话管理（命名保存/恢复）
-├── skills.py             # 技能加载器
-├── display.py            # 终端 UI 渲染（Markdown/思维链/工具调用）
-├── character/            # Agent 人设定义
-│   ├── SOUL.md           #   核心身份、能力、工作流程
-│   └── RULES.md          #   行为规范、任务规划要求
-├── tools/                # 工具系统（每个工具一个py文件）
-│   ├── __init__.py       #   注册、分发、并行执行、结果截断
-│   ├── run_command.py    #   Shell 命令执行
-│   ├── web_fetch.py      #   网页抓取（智能 HTML 清洗）
-│   ├── read_file.py      #   文件读取（支持行号范围）
-│   ├── write_file.py     #   文件写入（自动创建目录）
-│   ├── list_skills.py    #   列出可用技能
-│   ├── load_skill.py     #   加载技能内容
-│   ├── update_todos.py   #   任务规划与状态跟踪
-│   ├── dispatch_subagent.py  # 子代理调度
-│   └── team_tools.py     #   Team 协作工具（5个）
-├── subagents/            # 子代理定义
-│   ├── __init__.py       #   SubagentLoader
-│   ├── coder.md          #   代码工程师
-│   └── researcher.md     #   信息检索员
-├── team_bus.py           # 队友消息总线（文件 JSONL + Event 唤醒）
-├── team_manager.py       # 队友管理器（spawn、状态、线程循环）
-├── team_loop.py          # 队友轮询、回禀处理、自动 shutdown
-├── skills/               # 技能文件目录
-├── memory_data/          # 运行时记忆数据（不入 git）
-└── logs/                 # 运行日志（不入 git）
+mini_ai/
+├── pyproject.toml             # 项目配置（uv/pip 安装，入口 mini-ai）
+├── config.example.yaml        # 配置模板
+├── src/mini_ai/             # 包源码
+│   ├── __init__.py            #   包定义
+│   ├── __main__.py            #   python -m mini_ai 入口
+│   ├── main.py                #   主循环编排
+│   ├── config.py              #   配置加载（DATA_DIR / PACKAGE_DIR 分离）
+│   ├── llm.py                 #   LLM API 通信（OpenAI 协议）
+│   ├── anthropic.py           #   Anthropic Claude 适配层
+│   ├── display.py             #   终端 UI 渲染（Markdown/思维链/工具调用）
+│   ├── runner.py              #   可复用的 Agent 执行循环
+│   ├── context.py             #   系统提示词组装
+│   ├── memory.py              #   三层记忆存储
+│   ├── compactor.py           #   对话压缩归档
+│   ├── session.py             #   会话管理
+│   ├── skills.py              #   技能加载器
+│   ├── logger.py              #   日志模块
+│   ├── team_bus.py            #   队友消息总线
+│   ├── team_manager.py        #   队友管理器
+│   ├── team_loop.py           #   回禀等待/清理
+│   ├── character/             #   Agent 人设
+│   │   ├── SOUL.md            #     核心身份、能力、工作流程
+│   │   └── RULES.md           #     行为规范
+│   ├── tools/                 #   工具系统
+│   │   ├── __init__.py        #     注册、分发、并行执行、结果截断
+│   │   ├── run_command.py     #     Shell 命令执行
+│   │   ├── web_fetch.py       #     网页抓取
+│   │   ├── read_file.py       #     文件读取
+│   │   ├── write_file.py      #     文件写入
+│   │   ├── list_skills.py     #     列出可用技能
+│   │   ├── load_skill.py      #     加载技能内容
+│   │   ├── update_todos.py    #     任务规划与状态跟踪
+│   │   ├── dispatch_subagent.py #    子代理调度
+│   │   └── team_tools.py      #     Team 协作工具（5个）
+│   └── subagents/             #   子代理定义
+│       ├── __init__.py        #     SubagentLoader
+│       ├── coder.md           #     代码工程师
+│       └── researcher.md      #     信息检索员
+└── ~/.mini_ai/  # 运行时数据目录（自动创建）
+    ├── config.yaml            #   用户配置（含 API 密钥）
+    ├── skills/                #   用户技能
+    ├── memory_data/           #   记忆数据
+    ├── logs/                  #   运行日志
+    └── .team/                 #   Team 协作数据
 ```
 
 ## 架构设计
@@ -286,7 +340,7 @@ tags: tag1,tag2
 
 ## 配置
 
-编辑 `config.yaml`：
+编辑 `~/.mini_ai/config.yaml`：
 
 ```yaml
 streaming: true              # 流式输出
