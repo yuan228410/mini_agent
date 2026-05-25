@@ -171,6 +171,34 @@ def main():
             disp.info(f"压缩完成：{before} → {after} 条消息（归档 {before - after} 条）")
             continue
 
+        if user_input.startswith("/genskill "):
+            skill_name = user_input[7:].strip()
+            if not skill_name:
+                disp.error("用法: /genskill <技能名称>")
+                continue
+            prompt = f"请将当前对话中的关键方法论、步骤和经验总结为一个名为 '{skill_name}' 的技能。要求：1) 用 YAML frontmatter 定义 name 和 description；2) 正文用 Markdown 格式，结构清晰，步骤明确；3) 调用 install_skill 工具安装，使用 content 参数传入技能内容。"
+            messages.append({"role": "user", "content": prompt})
+            store.append("user", prompt)
+            msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp)
+            if msg and msg.get("content"):
+                messages.append({"role": "assistant", "content": msg["content"]})
+                store.append("assistant", msg["content"])
+            continue
+
+        if user_input.startswith("/skill "):
+            skill_name = user_input[7:].strip()
+            if not skill_name:
+                disp.error("用法: /skill <技能名称>")
+                continue
+            prompt = f"请加载并使用技能 '{skill_name}' 来完成用户后续的任务。先调用 load_skill 了解该技能的详细内容和使用方式，然后严格按照技能指引执行。"
+            messages.append({"role": "user", "content": prompt})
+            store.append("user", prompt)
+            msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp)
+            if msg and msg.get("content"):
+                messages.append({"role": "assistant", "content": msg["content"]})
+                store.append("assistant", msg["content"])
+            continue
+
         messages.append({"role": "user", "content": user_input})
         store.append("user", user_input)
 

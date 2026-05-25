@@ -15,6 +15,8 @@ _SLASH_COMMANDS = [
     ("/load", "加载已保存的会话"),
     ("/sessions", "列出所有已保存的会话"),
     ("/compact", "手动触发对话压缩"),
+    ("/genskill", "从对话中总结生成技能"),
+    ("/skill", "使用指定技能执行任务"),
     ("/thinking", "查看最近思考过程"),
     ("/thinking collapsed", "折叠模式（仅摘要）"),
     ("/thinking expanded", "展开模式（实时显示）"),
