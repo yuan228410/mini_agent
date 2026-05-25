@@ -2,7 +2,6 @@
 
 ## 功能
 
-- [ ] **流式输出** — `chat()` 改为 streaming 模式，先吐思考过程再出最终答案。涉及返回值形态改变，需同步改 `main.py` / `runner.py` / `team_manager.py`
 - [ ] **工具结果缓存** — 同一轮对话中同参数工具调用走 LRU 缓存，减少重复 LLM 往返
 - [ ] **危险操作拦截** — `rm -rf` / `git push -f` 等操作在 RULES 中约束提示，或在 `run_command` 中加黑名单检测
 - [ ] **会话导出** — `/export` 命令将会话导出为 Markdown

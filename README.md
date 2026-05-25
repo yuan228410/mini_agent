@@ -1,6 +1,6 @@
 # yzx_agent
 
-基于 OpenAI Chat Completions API 的智能对话 Agent，支持工具调用、技能系统、记忆压缩。
+基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持工具调用、技能系统、记忆压缩、子代理派遣、Team 协作、流式输出、多模型切换。
 
 ## 快速开始
 
@@ -14,22 +14,26 @@ python main.py
 ```
 yzx_agent/
 ├── main.py              # 入口，编排主循环
-├── llm.py               # LLM API 通信
+├── llm.py               # LLM API 通信（OpenAI 兼容）
+├── anthropic.py          # Anthropic Claude 适配层
 ├── runner.py             # 可复用的 Agent 执行循环
-├── config.py             # 配置加载
+├── config.py             # 配置加载（支持多模型切换）
 ├── config.yaml           # 模型与服务配置
 ├── logger.py             # 日志模块（双输出：终端+文件）
 ├── context.py            # 系统提示词组装
 ├── memory.py             # 三层记忆存储
 ├── compactor.py          # 对话压缩归档
+├── session.py            # 会话管理（命名保存/恢复）
 ├── skills.py             # 技能加载器
 ├── character/            # Agent 人设定义
 │   ├── SOUL.md           #   核心身份、能力、工作流程
 │   └── RULES.md          #   行为规范、任务规划要求
 ├── tools/                # 工具系统（每个工具一个py文件）
-│   ├── __init__.py       #   注册、分发、并行执行
+│   ├── __init__.py       #   注册、分发、并行执行、结果截断
 │   ├── run_command.py    #   Shell 命令执行
-│   ├── web_fetch.py      #   网页抓取
+│   ├── web_fetch.py      #   网页抓取（智能 HTML 清洗）
+│   ├── read_file.py      #   文件读取（支持行号范围）
+│   ├── write_file.py     #   文件写入（自动创建目录）
 │   ├── list_skills.py    #   列出可用技能
 │   ├── load_skill.py     #   加载技能内容
 │   ├── update_todos.py   #   任务规划与状态跟踪
@@ -39,9 +43,9 @@ yzx_agent/
 │   ├── __init__.py       #   SubagentLoader
 │   ├── coder.md          #   代码工程师
 │   └── researcher.md     #   信息检索员
-├── team_bus.py           # 队友消息总线（文件 JSONL 邮箱）
+├── team_bus.py           # 队友消息总线（文件 JSONL + Event 唤醒）
 ├── team_manager.py       # 队友管理器（spawn、状态、线程循环）
-├── team_loop.py         # 队友轮询与回禀处理（从 main.py 抽出）
+├── team_loop.py          # 队友轮询、回禀处理、自动 shutdown
 ├── skills/               # 技能文件目录
 ├── memory_data/          # 运行时记忆数据（不入 git）
 └── logs/                 # 运行日志（不入 git）
@@ -52,13 +56,47 @@ yzx_agent/
 ### 主循环 (main.py)
 
 ```
-用户输入 → 检查是否需要规划(update_todos)
-         → chat(LLM, 无read_inbox) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
-                                     ↓ 无
-                               有活跃队友? → wait_for_teammates 轮询等待 → 收到回禀 → 注入对话 → 再次 chat
-                               ↓ 无
-                          输出回复 → 存储 → 检查压缩
+用户输入 → /save /load /sessions? → 处理会话命令
+         → _run_tool_loop(LLM, 过滤后工具) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
+                                          ↓ 无
+                                    wait_for_teammates? → Event 等待队友回禀 → 收到 → 注入对话 → 再次 chat
+                                    ↓ 无活跃队友
+                               输出回复 → 存储 → 自动 shutdown 队友 → 检查压缩
 ```
+
+### 多模型支持 (config.yaml)
+
+通过 `active_model` 切换模型，每个模型独立配置 API 地址、密钥、上下文长度和协议模式：
+
+```yaml
+active_model: claude        # 切换为 glm 即可用另一个模型
+models:
+  claude:
+    api_mode: anthropic     # 支持 openai / anthropic 两种协议
+    api_url: https://...
+    api_key: sk-...
+    model: Claude Opus 4.7
+    context_length: 200000
+  glm:
+    api_mode: openai
+    api_url: https://...
+    model: glm-5.1
+    context_length: 200000
+```
+
+### 流式输出
+
+配置 `streaming: true` 后，LLM 文本回复逐字输出到终端，工具调用仍走批量模式。Anthropic 和 OpenAI 协议均支持流式。
+
+### 会话管理 (session.py)
+
+在对话中使用命令管理会话：
+
+| 命令 | 说明 |
+|------|------|
+| `/save <名称>` | 保存当前对话为命名会话 |
+| `/load <名称>` | 加载已保存的会话，恢复上下文 |
+| `/sessions` | 列出所有已保存的会话 |
 
 ### 任务规划 (update_todos)
 
@@ -66,7 +104,7 @@ yzx_agent/
 - `pending` → `in_progress` → `completed` 三态推进
 - 同一时间最多一个 in_progress
 - 每次全量覆盖更新
-- 状态持久化在内存中，压缩不会丢失
+- 状态注入系统提示词，压缩不会丢失
 
 ### 子代理系统 (subagents/ + dispatch_subagent)
 
@@ -82,6 +120,7 @@ yzx_agent/
 - 轮次限制：每个子代理有 max_turns 上限
 - 并行执行：多个 dispatch_subagent 通过 ThreadPoolExecutor 并行运行
 - 上下文隔离：子代理内部历史不回传，只返回最终结果
+- 安全阀：prompt_tokens 超过 context_length × 88% 时自动终止
 
 新增子代理：在 `subagents/` 下创建 `xxx.md` 文件即可。
 ```markdown
@@ -96,7 +135,7 @@ max_turns: 10
 
 ### Team 协作系统 (team_bus.py + team_manager.py + team_loop.py + tools/team_tools.py)
 
-召入持久队友组成 agent team，通过文件 JSONL 邮箱（inbox）收发消息协同工作：
+召入持久队友组成 agent team，通过文件 JSONL 邮箱 + Event 唤醒协同工作：
 
 | 工具 | 用途 |
 |------|------|
@@ -109,15 +148,52 @@ max_turns: 10
 **特点：**
 - 持久队友：每个队友有独立 daemon 线程，spawn 后持续运行直到 shutdown
 - 文件邮箱：队友间通过 `.team/inbox/{name}.jsonl` 通信，进程重启不丢消息
-- 工具白名单：队友只能使用 `run_command`、`web_fetch`、`load_skill`、`send_message`
-- 回禀机制：lead 不手动轮询 inbox，`team_loop.py` 的 `wait_for_teammates` 自动等待并注入队友回禀
-- contextvars 身份识别：队友线程自动标记身份，工具调用时使用正确的发送者
+- Event 唤醒：lead 使用 `threading.Event` 等待回禀， teammate 发消息即唤醒，零延迟响应
+- 工具白名单：队友只能使用 `run_command`、`web_fetch`、`load_skill`、`send_message`、`read_inbox`
+- 回禀机制：`team_loop.py` 的 `wait_for_teammates` 自动等待并注入队友回禀，lead 无需手动轮询
+- 消息过滤：shutdown_response 自动忽略，短消息（<30字符且无关键词）静默丢弃
+- 自动 shutdown：每轮对话结束自动 shutdown 所有 idle/working 队友，清理残留 inbox
+- inbox 容量限制：单个 inbox 上限 100KB，防止无限膨胀
+- contextvars 身份识别：队友线程自动标记身份，工具调用时使用正确的发送者；并行执行时使用 `copy_context()` 保持上下文
+- 上下文安全阀：队友 prompt_tokens 超过 context_length × 88% 时自动终止并回禀
 - 并行 spawn：`spawn_teammate` 标记为可并行，模型可一次召入多个队友
+- 线程安全 token 统计：使用 `threading.local()` 隔离各线程的 token 用量，避免竞态
+
+### 工具系统 (tools/)
+
+每个工具是一个独立模块，导出三个接口：
+- `definition` — OpenAI Function Calling 的工具定义
+- `execute(args)` — 工具执行函数
+- `configure(**kwargs)` — （可选）注入外部依赖，避免模块级可变赋值
+
+**内置工具：**
+
+| 工具 | 说明 |
+|------|------|
+| run_command | 执行 Shell 命令，返回 stdout/stderr |
+| web_fetch | 抓取网页内容，自动清洗 HTML（跳过 style/script/svg/head，压缩空白） |
+| read_file | 读取文件内容，支持行号范围筛选 |
+| write_file | 写入文件，自动创建父目录 |
+| update_todos | 任务规划与状态跟踪 |
+| list_skills | 列出可用技能 |
+| load_skill | 加载技能内容 |
+| dispatch_subagent | 派遣子代理执行任务 |
+| spawn_teammate | 召入持久队友 |
+| send_message | 发 inbox 消息给队友/lead |
+| broadcast | 向所有队友广播消息 |
+
+**关键机制：**
+- 结果截断：工具输出超过 `max_result_chars` 时自动截断，防止上下文膨胀
+- 并行执行：无依赖的工具调用通过 ThreadPoolExecutor 并行运行
+- contextvars 传递：并行线程中通过 `copy_context()` 保持 `team_caller` 身份
+
+添加新工具：创建 `tools/新工具.py`，在 `tools/__init__.py` 的 `_ALL_TOOLS` 中注册。
 
 ### 日志系统 (logger.py)
 
 - 终端：仅显示 WARNING+ 级别消息和 `print` 输出（回禀通知、Assistant 回复等）
 - 文件 `logs/YYYYMMDD.log`：DEBUG 级别全量记录，格式含进程/线程 ID（`[PID/TID]`），记录 LLM 请求响应、工具调用与返回、MSG 通信、队友状态等所有事件
+- 工具结果只记录名称和长度，不打印内容，避免日志膨胀
 
 ### 记忆系统 (memory.py + compactor.py)
 
@@ -134,7 +210,7 @@ max_turns: 10
 - 即上下文使用量超过模型上下文窗口的指定比例（默认 80%）
 
 **压缩后保留：**
-- 最近 `keep_recent` 条消息（默认 100 条）
+- 最近 `keep_recent` 条消息（默认 50 条）
 - 且保留消息总字符数不超过 `char_threshold`（超出则从头部继续裁剪）
 
 **压缩流程：**
@@ -161,15 +237,6 @@ SOUL.md (核心身份)
 RULES.md (行为规范)
 ```
 
-### 工具系统 (tools/)
-
-每个工具是一个独立模块，导出三个接口：
-- `definition` — OpenAI Function Calling 的工具定义
-- `execute(args)` — 工具执行函数
-- `configure(**kwargs)` — （可选）注入外部依赖，避免模块级可变赋值
-
-添加新工具：创建 `tools/新工具.py`，在 `tools/__init__.py` 的 `_ALL_TOOLS` 中注册。
-
 ### 技能系统 (skills.py)
 
 技能存放在 `skills/<名称>/SKILL.md`，使用 YAML frontmatter 定义元数据：
@@ -190,37 +257,50 @@ tags: tag1,tag2
 编辑 `config.yaml`：
 
 ```yaml
+streaming: true              # 流式输出
+active_model: claude         # 当前使用的模型（对应 models 下的 key）
+
+models:
+  claude:
+    api_mode: anthropic       # 协议模式：openai / anthropic
+    api_url: "https://your-api.com/v1/messages"
+    api_key: "your-api-key"
+    model: "Claude Opus 4.7"
+    context_length: 200000    # 模型上下文窗口大小（token 数）
+  glm:
+    api_mode: openai
+    api_url: "https://your-api.com/v1/chat/completions"
+    api_key: "your-api-key"
+    model: "glm-5.1"
+    context_length: 200000
+
 timeouts:
-  llm: 120              # LLM API 请求超时（秒）
-  teammate_recv: 5      # 队友等待 inbox 超时（秒）
-  lead_wait: 300        # lead 等待队友回禀上限（秒）
-  lead_poll_interval: 2 # lead 轮询 inbox 间隔（秒）
-  web_fetch: 10         # 网页抓取超时（秒）
+  llm: 120                    # LLM API 请求超时（秒）
+  llm_retries: 3              # LLM 请求失败重试次数
+  llm_retry_delay: 2          # 重试间隔（秒）
+  teammate_recv: 5            # 队友等待 inbox 超时（秒）
+  lead_wait: 1800             # lead 等待队友回禀上限（秒）
+  lead_poll_interval: 2       # lead 轮询 inbox 间隔（秒）
+  web_fetch: 30               # 网页抓取超时（秒）
 
 compactor:
-  context_usage_threshold: 0.8 # 压缩触发：prompt_tokens 超过上下文长度的比例
-  keep_recent: 100              # 压缩后保留最近消息数
-  char_threshold: 50000         # 压缩后保留消息的最大字符数
+  context_usage_threshold: 0.8  # 压缩触发：prompt_tokens 超过上下文长度的比例
+  keep_recent: 50                # 压缩后保留最近消息数
+  char_threshold: 20000          # 压缩后保留消息的最大字符数
 
 teammate:
-  max_teammates: 10     # 最大队友数量
-  max_turns: 20         # 队友每轮最大 LLM 调用次数
-  base_tools:           # 队友基础工具白名单
+  max_teammates: 10       # 最大队友数量
+  max_turns: 20            # 队友每轮最大 LLM 调用次数
+  base_tools:              # 队友基础工具白名单
     - run_command
     - web_fetch
     - load_skill
 
 tool:
-  max_result_chars: 3000  # 工具返回值截断
+  max_result_chars: 8000   # 工具返回值截断长度
 
 runner:
   context_usage_limit: 0.88  # 子代理/队友上下文安全阀
-
-model:
-  api_url: "https://your-api.com/v1/chat/completions"
-  api_key: "your-api-key"
-  model: "your-model-name"
-  context_length: 128000  # 模型上下文窗口大小（token 数）
 ```
 
 ## 自定义 Agent 人设
