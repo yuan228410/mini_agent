@@ -16,6 +16,7 @@ _SLASH_COMMANDS = [
     ("/sessions", "列出所有已保存的会话"),
     ("/compact", "手动触发对话压缩"),
     ("/clear", "清空历史消息"),
+    ("/model", "切换模型"),
     ("/history", "查看历史消息"),
     ("/genskill", "从对话中总结生成技能"),
     ("/skill", "使用指定技能执行任务"),
@@ -37,7 +38,22 @@ def _build_completions():
             items.append((f"/skill {name}", desc))
     except Exception:
         pass
+    try:
+        from .config import AVAILABLE_MODELS, MODEL_CONFIG
+        for name in AVAILABLE_MODELS:
+            model_id = MODEL_CONFIG.get("model", "") if name == _raw_active() else _models_raw().get(name, {}).get("model", "")
+            items.append((f"/model {name}", model_id))
+    except Exception:
+        pass
     return items
+
+def _raw_active():
+    from .config import _raw
+    return _raw.get("active_model", "")
+
+def _models_raw():
+    from .config import _raw
+    return _raw.get("models", {})
 
 _ALL_COMPLETIONS = _build_completions()
 

@@ -138,6 +138,15 @@ def main():
         messages.extend(unarchived)
         logger.info(f"[恢复] {len(unarchived)} 条历史消息")
 
+    disp.status_bar(
+        model=MODEL_CONFIG.get("model", "?"),
+        context_length=MODEL_CONFIG.get("context_length", 128000),
+        prompt_tokens=0,
+        completion_tokens=0,
+        system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+        history_count=len(unarchived),
+    )
+
     while True:
         user_input = disp.user_input().strip()
         if not user_input:

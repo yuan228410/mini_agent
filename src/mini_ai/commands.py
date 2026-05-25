@@ -75,6 +75,30 @@ class CommandHandler:
                 self.disp.info(f"  [{i}] {role}: {text}")
             return "continue"
 
+        if user_input == "/model":
+            from .config import AVAILABLE_MODELS, MODEL_CONFIG
+            current_model = MODEL_CONFIG.get("model", "?")
+            self.disp.info(f"当前: {current_model}")
+            for name in AVAILABLE_MODELS:
+                self.disp.info(f"  {name}")
+            return "continue"
+
+        if user_input.startswith("/model "):
+            model_name = user_input[7:].strip()
+            if not model_name:
+                self.disp.error("用法: /model <模型名称>")
+                return "continue"
+            from .config import AVAILABLE_MODELS, switch_model, MODEL_CONFIG
+            if model_name not in AVAILABLE_MODELS:
+                self.disp.error(f"未知模型: {model_name}，可选: {', '.join(AVAILABLE_MODELS)}")
+                return "continue"
+            err = switch_model(model_name)
+            if err:
+                self.disp.error(err)
+                return "continue"
+            self.disp.info(f"已切换到模型: {model_name} ({MODEL_CONFIG.get('model', '?')})")
+            return "continue"
+
         if user_input == "/clear":
             non_system = [m for m in messages if m["role"] != "system"]
             if not non_system:

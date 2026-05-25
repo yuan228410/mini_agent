@@ -5,15 +5,27 @@ import time
 import requests
 
 from .config import MODEL_CONFIG, TIMEOUTS
-
-API_MODE = MODEL_CONFIG.get("api_mode", "openai")
 from .logger import logger
 from .tools import get_definitions
 
-API_URL = MODEL_CONFIG["api_url"]
-API_KEY = MODEL_CONFIG["api_key"]
-MODEL = MODEL_CONFIG["model"]
-CONTEXT_LENGTH = MODEL_CONFIG.get("context_length", 128000)
+
+def _cfg():
+    return MODEL_CONFIG
+
+def _api_mode():
+    return MODEL_CONFIG.get("api_mode", "openai")
+
+def _api_url():
+    return MODEL_CONFIG["api_url"]
+
+def _api_key():
+    return MODEL_CONFIG["api_key"]
+
+def _model():
+    return MODEL_CONFIG["model"]
+
+def _context_length():
+    return MODEL_CONFIG.get("context_length", 128000)
 
 _local = threading.local()
 _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -25,11 +37,14 @@ def _get_usage() -> dict:
     return _local.last_usage
 
 _session = requests.Session()
-_session.headers.update({
-    "Authorization": f"Bearer {API_KEY}",
-    "Content-Type": "application/json",
-    "comate_custom_header": '{"username":"yuanzhixiang","source":"openclaw"}'
-})
+
+def _ensure_session():
+    key = _api_key()
+    if _session.headers.get("Authorization") != f"Bearer {key}":
+        _session.headers.update({
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        })
 
 
 def _msg_summary(m: dict) -> str:
@@ -49,11 +64,12 @@ def _msg_summary(m: dict) -> str:
 
 
 def chat(messages, tools=True):
-    if API_MODE == "anthropic":
+    _ensure_session()
+    if _api_mode() == "anthropic":
         from .anthropic import chat as anth_chat
         return anth_chat(messages, tools)
     """发送请求，tools=True=全部工具，tools=list=自定义工具列表，tools=False=无工具"""
-    payload = {"model": MODEL, "messages": messages}
+    payload = {"model": _model(), "messages": messages}
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -65,7 +81,7 @@ def chat(messages, tools=True):
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
 
-    logger.info(f"[LLM→] model={MODEL} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
+    logger.info(f"[LLM→] model={_model()} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
     if len(messages) <= 3:
         for m in messages:
             if m["role"] != "tool":
@@ -85,7 +101,7 @@ def chat(messages, tools=True):
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            response = _session.post(API_URL, json=payload, timeout=TIMEOUTS["llm"])
+            response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"])
             break
         except requests.RequestException as e:
             last_error = e
@@ -135,7 +151,8 @@ def chat(messages, tools=True):
 
 
 def chat_stream(messages, tools=True):
-    if API_MODE == "anthropic":
+    _ensure_session()
+    if _api_mode() == "anthropic":
         from .anthropic import chat_stream as anth_stream
         yield from anth_stream(messages, tools)
         return
@@ -148,7 +165,7 @@ def chat_stream(messages, tools=True):
             elif chunk["type"] == "done":
                 msg = chunk["msg"]  # 完整消息，等价于 chat() 返回值
     """
-    payload = {"model": MODEL, "messages": messages, "stream": True}
+    payload = {"model": _model(), "messages": messages, "stream": True}
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -160,13 +177,13 @@ def chat_stream(messages, tools=True):
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
 
-    logger.info(f"[LLM→] model={MODEL} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
+    logger.info(f"[LLM→] model={_model()} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
     if tool_names:
         logger.debug(f"  tool_list={tool_names}")
 
     t0 = time.monotonic()
     try:
-        response = _session.post(API_URL, json=payload, timeout=TIMEOUTS["llm"], stream=True)
+        response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"], stream=True)
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"[LLM✗] 流式请求异常: {e}")

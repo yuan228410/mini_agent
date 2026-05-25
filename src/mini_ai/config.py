@@ -32,7 +32,8 @@ if _active_model not in _models:
     print(f"Error: active_model '{_active_model}' 不在 models 中，可选: {available}", file=sys.stderr)
     sys.exit(1)
 
-MODEL_CONFIG = _models[_active_model]
+import copy
+MODEL_CONFIG = copy.deepcopy(_models[_active_model])
 _required_model_keys = ("api_url", "api_key", "model")
 _missing = [k for k in _required_model_keys if k not in MODEL_CONFIG]
 if _missing:
@@ -49,3 +50,24 @@ RUNNER = _raw.get("runner", {"context_usage_limit": 0.88})
 THINKING = _raw.get("thinking", {"enabled": False, "budget_tokens": 10000})
 DISPLAY = _raw.get("display", {"thinking_mode": "collapsed", "tool_detail": "summary"})
 SKILL_PATHS = [Path(p) for p in _raw.get("skill_paths", [])]
+
+
+AVAILABLE_MODELS = list(_models.keys())
+
+
+def switch_model(name: str) -> str | None:
+    global API_MODE
+    if name not in _models:
+        return None
+    model_cfg = _models[name]
+    required = ("api_url", "api_key", "model")
+    missing = [k for k in required if k not in model_cfg]
+    if missing:
+        return f"模型 '{name}' 缺少字段: {', '.join(missing)}"
+    _raw["active_model"] = name
+    with open(_config_path, "w", encoding="utf-8") as f:
+        yaml.dump(_raw, f, default_flow_style=False, allow_unicode=True)
+    MODEL_CONFIG.clear()
+    MODEL_CONFIG.update(model_cfg)
+    API_MODE = MODEL_CONFIG.get("api_mode", "openai")
+    return None

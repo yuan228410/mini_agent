@@ -8,9 +8,15 @@ import requests
 from .config import MODEL_CONFIG, TIMEOUTS, THINKING
 from .logger import logger
 
-API_URL = MODEL_CONFIG["api_url"]
-API_KEY = MODEL_CONFIG["api_key"]
-MODEL = MODEL_CONFIG["model"]
+
+def _api_url():
+    return MODEL_CONFIG["api_url"]
+
+def _api_key():
+    return MODEL_CONFIG["api_key"]
+
+def _model():
+    return MODEL_CONFIG["model"]
 
 _local = threading.local()
 _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -22,11 +28,15 @@ def _get_usage() -> dict:
     return _local.last_usage
 
 _session = requests.Session()
-_session.headers.update({
-    "x-api-key": API_KEY,
-    "anthropic-version": "2023-06-01",
-    "Content-Type": "application/json",
-})
+
+def _ensure_session():
+    key = _api_key()
+    if _session.headers.get("x-api-key") != key:
+        _session.headers.update({
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        })
 
 
 def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -124,7 +134,7 @@ def chat(messages, tools=True):
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
-    payload = {"model": MODEL, "messages": ant_msgs, "max_tokens": 4096}
+    payload = {"model": _model(), "messages": ant_msgs, "max_tokens": 4096}
     if system_text:
         payload["system"] = system_text
 
@@ -138,11 +148,12 @@ def chat(messages, tools=True):
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
-    logger.info(f"[Anth→] model={MODEL} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))}")
+    logger.info(f"[Anth→] model={_model()} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))}")
 
     t0 = time.monotonic()
     try:
-        response = _session.post(API_URL, json=payload, timeout=TIMEOUTS["llm"])
+        _ensure_session()
+        response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"])
     except requests.RequestException as e:
         logger.error(f"[Anth✗] 请求异常: {e}")
         return None
@@ -176,7 +187,7 @@ def chat_stream(messages, tools=True):
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
-    payload = {"model": MODEL, "messages": ant_msgs, "max_tokens": 4096, "stream": True}
+    payload = {"model": _model(), "messages": ant_msgs, "max_tokens": 4096, "stream": True}
     if system_text:
         payload["system"] = system_text
 
@@ -190,11 +201,12 @@ def chat_stream(messages, tools=True):
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
-    logger.info(f"[Anth→] model={MODEL} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} [stream]")
+    logger.info(f"[Anth→] model={_model()} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} [stream]")
 
     t0 = time.monotonic()
     try:
-        response = _session.post(API_URL, json=payload, timeout=TIMEOUTS["llm"], stream=True)
+        _ensure_session()
+        response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"], stream=True)
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"[Anth✗] 流式请求异常: {e}")
