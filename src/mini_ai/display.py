@@ -16,6 +16,7 @@ _SLASH_COMMANDS = [
     ("/sessions", "列出所有已保存的会话"),
     ("/compact", "手动触发对话压缩"),
     ("/clear", "清空历史消息"),
+    ("/history", "查看历史消息"),
     ("/genskill", "从对话中总结生成技能"),
     ("/skill", "使用指定技能执行任务"),
     ("/thinking", "查看最近思考过程"),
@@ -235,6 +236,27 @@ class Display:
 
     def error(self, text: str):
         self.console.print(Text(f"✗ {text}", style="bold red"))
+
+    def status_bar(self, model: str, context_length: int, prompt_tokens: int,
+                    completion_tokens: int, system_prompt_chars: int,
+                    history_count: int = 0):
+        if not _IS_TTY:
+            return
+        usage_pct = (prompt_tokens / context_length * 100) if context_length else 0
+        ctx_style = "cyan" if usage_pct < 70 else "yellow" if usage_pct < 85 else "bold red"
+        info = Text()
+        info.append("⚙ ", style="bold")
+        info.append(model, style="bold blue")
+        info.append(" │ ")
+        info.append(f"{usage_pct:.0f}%", style=ctx_style)
+        info.append(f" ({prompt_tokens}/{context_length})", style="dim")
+        info.append(" │ ")
+        info.append(f"↑{prompt_tokens} ↓{completion_tokens}", style="dim")
+        info.append(" │ ")
+        info.append(f"sys {system_prompt_chars}", style="dim")
+        info.append(" │ ")
+        info.append(f"msg {history_count}", style="dim")
+        self.console.print(info, justify="right")
 
     def _reset_stream(self):
         self._stream_buf = ""

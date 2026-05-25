@@ -64,6 +64,17 @@ class CommandHandler:
             self.disp.info(f"压缩完成：{before} → {after} 条消息（归档 {before - after} 条）")
             return "continue"
 
+        if user_input == "/history":
+            unarchived = self.store.load_unarchived()
+            if not unarchived:
+                self.disp.info("暂无历史消息")
+                return "continue"
+            for i, msg in enumerate(unarchived, 1):
+                role = msg.get("role", "?")
+                text = (msg.get("content") or "")[:100]
+                self.disp.info(f"  [{i}] {role}: {text}")
+            return "continue"
+
         if user_input == "/clear":
             non_system = [m for m in messages if m["role"] != "system"]
             if not non_system:

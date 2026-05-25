@@ -169,7 +169,17 @@ def main():
         shutdown_teammates(bus, team_mgr)
         cleanup_inbox(bus)
 
-        if compactor.should_compact(_get_usage()["prompt_tokens"]):
+        usage = _get_usage()
+        disp.status_bar(
+            model=MODEL_CONFIG.get("model", "?"),
+            context_length=MODEL_CONFIG.get("context_length", 128000),
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+            history_count=len(store.load_unarchived()),
+        )
+
+        if compactor.should_compact(usage["prompt_tokens"]):
             messages = compactor.compact(chat, messages)
             _inject_todos(messages)
 
