@@ -2,6 +2,7 @@ import argparse
 import threading
 
 from . import __version__
+from .commands import CommandHandler
 from .compactor import Compactor
 from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY
 from .context import ContextBuilder
@@ -122,6 +123,12 @@ def main():
         skill_loader=SKILL_LOADER,
     )
 
+    cmd = CommandHandler(
+        disp=disp, store=store, sessions=sessions, compactor=compactor,
+        inject_fn=_inject_todos, run_tool_fn=_run_tool_loop,
+        lead_tools=_lead_tool_defs(),
+    )
+
     system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER)
     messages = [{"role": "system", "content": system_prompt}]
     _inject_todos(messages)
@@ -135,68 +142,11 @@ def main():
         user_input = disp.user_input().strip()
         if not user_input:
             continue
-        if user_input.lower() in ("exit", "quit", "q"):
+
+        result = cmd.handle(user_input, messages)
+        if result == "break":
             break
-        if user_input.startswith("/save "):
-            disp.info(sessions.save(user_input[6:], messages))
-            continue
-        if user_input.startswith("/load "):
-            loaded = sessions.load(user_input[6:])
-            if loaded:
-                messages = [messages[0]] + loaded
-                _inject_todos(messages)
-                disp.info(f"会话 '{user_input[6:]}' 已加载（{len(loaded)} 条消息）")
-            else:
-                disp.error(f"会话 '{user_input[6:]}' 不存在")
-            continue
-        if user_input == "/sessions":
-            disp.info(sessions.render_list())
-            continue
-        if user_input == "/thinking":
-            disp.show_thinking()
-            continue
-        if user_input.startswith("/thinking "):
-            disp.set_thinking_mode(user_input[10:].strip())
-            continue
-
-        if user_input == "/compact":
-            non_system = [m for m in messages if m["role"] != "system"]
-            if len(non_system) <= compactor.keep_recent:
-                disp.info(f"消息数({len(non_system)})未超过保留阈值({compactor.keep_recent})，无需压缩")
-                continue
-            before = len(non_system)
-            messages = compactor.compact(chat, messages)
-            _inject_todos(messages)
-            after = len([m for m in messages if m["role"] != "system"])
-            disp.info(f"压缩完成：{before} → {after} 条消息（归档 {before - after} 条）")
-            continue
-
-        if user_input.startswith("/genskill "):
-            skill_name = user_input[7:].strip()
-            if not skill_name:
-                disp.error("用法: /genskill <技能名称>")
-                continue
-            prompt = f"请将当前对话中的关键方法论、步骤和经验总结为一个名为 '{skill_name}' 的技能。要求：1) 用 YAML frontmatter 定义 name 和 description；2) 正文用 Markdown 格式，结构清晰，步骤明确；3) 调用 install_skill 工具安装，使用 content 参数传入技能内容。"
-            messages.append({"role": "user", "content": prompt})
-            store.append("user", prompt)
-            msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp)
-            if msg and msg.get("content"):
-                messages.append({"role": "assistant", "content": msg["content"]})
-                store.append("assistant", msg["content"])
-            continue
-
-        if user_input.startswith("/skill "):
-            skill_name = user_input[7:].strip()
-            if not skill_name:
-                disp.error("用法: /skill <技能名称>")
-                continue
-            prompt = f"请加载并使用技能 '{skill_name}' 来完成用户后续的任务。先调用 load_skill 了解该技能的详细内容和使用方式，然后严格按照技能指引执行。"
-            messages.append({"role": "user", "content": prompt})
-            store.append("user", prompt)
-            msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp)
-            if msg and msg.get("content"):
-                messages.append({"role": "assistant", "content": msg["content"]})
-                store.append("assistant", msg["content"])
+        if result == "continue":
             continue
 
         messages.append({"role": "user", "content": user_input})
