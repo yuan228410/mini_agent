@@ -32,11 +32,12 @@ _rebuild_index()
 
 def register(skill_loader) -> None:
     """注入 skill_loader 依赖，注册技能相关工具"""
-    from . import list_skills, load_skill
+    from . import list_skills, load_skill, install_skill
 
     list_skills.configure(loader=skill_loader)
     load_skill.configure(loader=skill_loader)
-    _ALL_TOOLS.extend([list_skills, load_skill])
+    install_skill.configure(loader=skill_loader)
+    _ALL_TOOLS.extend([list_skills, load_skill, install_skill])
     _rebuild_index()
 
 

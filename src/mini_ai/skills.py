@@ -61,4 +61,10 @@ class SkillLoader:
         skill = self.skills.get(name)
         if not skill:
             return f"Error: Unknown skill '{name}'. Available: {', '.join(self.skills.keys())}"
-        return f'<skill name="{name}">\n{skill["body"]}\n</skill>'
+        meta = skill["meta"]
+        header = f'技能: {name}'
+        if meta.get("description"):
+            header += f'\n描述: {meta["description"]}'
+        if meta.get("tags"):
+            header += f'\n标签: {meta["tags"]}'
+        return f'<skill name="{name}">\n{header}\n\n{skill["body"]}\n</skill>'
