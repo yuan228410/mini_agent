@@ -4,7 +4,7 @@ import threading
 from . import __version__
 from .commands import CommandHandler
 from .compactor import Compactor
-from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY
+from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS
 from .context import ContextBuilder
 from .llm import chat, chat_stream, _get_usage
 from .logger import logger
@@ -18,7 +18,7 @@ from .team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
 from .display import Display
 from .tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, register_display, render_todos
 
-SKILL_LOADER = SkillLoader(DATA_DIR / "skills")
+SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
 _LEAD_TOOLS = None

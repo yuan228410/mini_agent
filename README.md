@@ -75,7 +75,8 @@ mini_ai/
 │   ├── memory.py              #   三层记忆存储
 │   ├── compactor.py           #   对话压缩归档
 │   ├── session.py             #   会话管理
-│   ├── skills.py              #   技能加载器
+│   ├── skills.py              #   技能加载器（多路径搜索）
+│   ├── commands.py            #   斜杠命令处理
 │   ├── logger.py              #   日志模块
 │   ├── team_bus.py            #   队友消息总线
 │   ├── team_manager.py        #   队友管理器
@@ -91,6 +92,7 @@ mini_ai/
 │   │   ├── write_file.py      #     文件写入
 │   │   ├── list_skills.py     #     列出可用技能
 │   │   ├── load_skill.py      #     加载技能内容
+│   │   ├── install_skill.py   #     安装技能
 │   │   ├── update_todos.py    #     任务规划与状态跟踪
 │   │   ├── dispatch_subagent.py #    子代理调度
 │   │   └── team_tools.py      #     Team 协作工具（5个）
@@ -263,6 +265,7 @@ max_turns: 10
 | update_todos | 任务规划与状态跟踪 |
 | list_skills | 列出可用技能 |
 | load_skill | 加载技能内容 |
+| install_skill | 安装技能（压缩包 URL/本地路径 或 内联内容） |
 | dispatch_subagent | 派遣子代理执行任务 |
 | spawn_teammate | 召入持久队友 |
 | send_message | 发 inbox 消息给队友/lead |
@@ -336,7 +339,11 @@ tags: tag1,tag2
 技能正文（Markdown 格式）
 ```
 
-模型通过 `load_skill` 工具按需加载技能内容。
+模型通过 `load_skill` 工具按需加载技能内容，通过 `install_skill` 安装新技能。
+
+**技能搜索路径：** 默认扫描 `~/.mini_ai/skills/`，可在 `config.yaml` 中配置额外搜索路径（只读），安装的技能始终存入主目录。同名技能主目录优先。
+
+**技能生成：** 用户可通过 `/genskill <名称>` 从当前对话总结生成技能；LLM 也会在对话中产生可复用经验时主动建议保存。
 
 ## 配置
 
@@ -395,6 +402,10 @@ display:
 
 runner:
   context_usage_limit: 0.88  # 子代理/队友上下文安全阀
+
+skill_paths:                  # 额外技能搜索路径（只读，安装仍存主目录）
+  #  - /opt/shared/skills
+  #  - ~/my-skills
 ```
 
 ## 自定义 Agent 人设

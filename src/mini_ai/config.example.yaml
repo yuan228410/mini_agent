@@ -27,6 +27,11 @@ display:
   tool_detail: summary
 runner:
   context_usage_limit: 0.88
+
+# 额外技能搜索路径（只读），安装的技能仍存放到 ~/.mini_ai/skills/
+skill_paths:
+  #  - /opt/shared/skills
+  #  - ~/my-skills
 streaming: true
 active_model: deepseek
 models:

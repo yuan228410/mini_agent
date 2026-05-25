@@ -22,7 +22,8 @@ src/mini_ai/            # 包源码
   memory.py               #   三层记忆存储（MemoryStore）
   compactor.py            #   对话压缩归档（Compactor）
   session.py              #   会话管理
-  skills.py               #   技能加载器
+  skills.py               #   技能加载器（多路径搜索）
+  commands.py             #   斜杠命令处理
   logger.py               #   日志模块
   team_bus.py             #   队友消息总线
   team_manager.py         #   队友管理器
@@ -44,7 +45,8 @@ src/mini_ai/            # 包源码
 - **模块化**：一个文件一个职责，不要把所有逻辑堆在 main.py
 - **工具系统**：新工具 = `tools/xxx.py`（导出 `definition` + `execute(args)` + 可选 `configure(**kwargs)`），在 `tools/__init__.py` 注册。需要外部依赖的工具通过 `configure()` 注入，避免模块级可变赋值
 - **结果截断**：工具输出超过 `max_result_chars` 自动截断，防止上下文膨胀
-- **配置分离**：所有运行时参数走 `DATA_DIR/config.yaml`，通过 `config.py` 加载，不硬编码。`PACKAGE_DIR` 存放只读包数据，`DATA_DIR`（默认 `~/.mini_ai/`）存放可写运行时数据
+- **配置分离**：所有运行时参数走 `DATA_DIR/config.yaml`，通过 `config.py` 加载，不硬编码。`PACKAGE_DIR` 存放只读包数据，`DATA_DIR`（默认 `~/.mini_ai/`）存放可写运行时数据。可选字段有默认值防护，配置文件缺失不崩溃
+- **技能多路径**：`SkillLoader` 支持主目录 + `skill_paths` 额外搜索路径，同名技能主目录优先；安装技能写入主目录
 - **记忆系统**：MemoryStore（存储）+ Compactor（压缩），触发条件：`prompt_tokens > context_length × context_usage_threshold`
 - **Event 驱动**：lead 用 `threading.Event` 等待队友回禀，`bus.send()` 即唤醒，0ms 响应
 - **线程安全**：`threading.local()` 隔离各线程 token 统计；`copy_context()` 保持并行 contextvars

@@ -1,4 +1,4 @@
-"""技能加载器：扫描 skills/ 目录，加载 SKILL.md 文件"""
+"""技能加载器：扫描多个路径下的 SKILL.md 技能文件"""
 import re
 from pathlib import Path
 
@@ -6,31 +6,40 @@ import yaml
 
 
 class SkillLoader:
-    """加载并管理 skills/ 目录下所有 SKILL.md 技能文件。
+    """加载并管理多个路径下的 SKILL.md 技能文件。
 
     每个技能目录结构：
-        skills/<name>/SKILL.md
+        <path>/skills/<name>/SKILL.md
             ---
             name: skill-name
             description: 简短描述
             tags: tag1,tag2
             ---
             技能正文...
+
+    skills_dir: 技能安装主目录（install_skill 安装到此）
+    extra_paths: 额外的技能搜索路径列表（只读）
     """
 
-    def __init__(self, skills_dir: Path):
+    def __init__(self, skills_dir: Path, extra_paths: list[Path] | None = None):
         self.skills_dir = Path(skills_dir)
+        self.extra_paths = [Path(p) for p in (extra_paths or [])]
         self.skills: dict[str, dict] = {}
         self._load_all()
 
     def _load_all(self):
-        if not self.skills_dir.exists():
-            return
-        for f in sorted(self.skills_dir.rglob("SKILL.md")):
-            text = f.read_text(encoding="utf-8")
-            meta, body = self._parse_frontmatter(text)
-            name = meta.get("name", f.parent.name)
-            self.skills[name] = {"meta": meta, "body": body, "path": str(f)}
+        self.skills.clear()
+        paths = [self.skills_dir] + self.extra_paths
+        for path in paths:
+            if not path.exists():
+                continue
+            for f in sorted(path.rglob("SKILL.md")):
+                text = f.read_text(encoding="utf-8")
+                meta, body = self._parse_frontmatter(text)
+                name = meta.get("name", f.parent.name)
+                if name in self.skills:
+                    continue
+                self.skills[name] = {"meta": meta, "body": body, "path": str(f)}
 
     def _parse_frontmatter(self, text: str) -> tuple[dict, str]:
         match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
