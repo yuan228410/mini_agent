@@ -109,6 +109,9 @@ def chat(messages, tools=True):
 
     elapsed = time.monotonic() - t0
     msg = result["choices"][0]["message"]
+    reasoning = msg.pop("reasoning_content", None)
+    if reasoning:
+        msg["thinking"] = reasoning
     usage = result.get("usage", {})
     p_tok = usage.get("prompt_tokens", 0)
     c_tok = usage.get("completion_tokens", 0)
@@ -171,6 +174,8 @@ def chat_stream(messages, tools=True):
         return
 
     collected_content = ""
+    collected_thinking = ""
+    in_thinking = False
     tool_call_buf: dict[int, dict] = {}  # index -> {"id","name","arguments"}
 
     for line in response.iter_lines(decode_unicode=True):
@@ -186,7 +191,18 @@ def chat_stream(messages, tools=True):
 
         delta = data.get("choices", [{}])[0].get("delta", {})
 
+        reasoning = delta.get("reasoning_content")
+        if reasoning:
+            if not in_thinking:
+                in_thinking = True
+                yield {"type": "thinking_start"}
+            collected_thinking += reasoning
+            yield {"type": "thinking", "content": reasoning}
+
         if "content" in delta and delta["content"]:
+            if in_thinking:
+                yield {"type": "thinking_end"}
+                in_thinking = False
             collected_content += delta["content"]
             yield {"type": "text", "content": delta["content"]}
 
@@ -218,6 +234,8 @@ def chat_stream(messages, tools=True):
     msg = {"role": "assistant", "content": collected_content or None}
     if tool_calls:
         msg["tool_calls"] = tool_calls
+    if collected_thinking:
+        msg["thinking"] = collected_thinking
 
     usage_store = _get_usage()
     p_tok = usage_store["prompt_tokens"]

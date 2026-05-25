@@ -16,3 +16,5 @@ TOOL = _raw["tool"]
 API_MODE = MODEL_CONFIG.get("api_mode", "openai")
 STREAMING = _raw.get("streaming", False)
 RUNNER = _raw.get("runner", {"context_usage_limit": 0.88})
+THINKING = _raw.get("thinking", {"enabled": False, "budget_tokens": 10000})
+DISPLAY = _raw.get("display", {"thinking_mode": "collapsed", "tool_detail": "summary"})

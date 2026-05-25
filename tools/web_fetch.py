@@ -64,7 +64,9 @@ def _strip_html(raw: str) -> str:
 
 
 def execute(args: dict) -> str:
-    url = args["url"]
+    url = args.get("url")
+    if not url:
+        return "错误：缺少 url 参数"
     extract_mode = args.get("extract_mode", "text")
     max_chars = args.get("max_chars", 8000)
 

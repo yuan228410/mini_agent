@@ -1,7 +1,7 @@
 import threading
 
 from compactor import Compactor
-from config import PROJECT_DIR, COMPACTOR, MODEL_CONFIG, STREAMING
+from config import PROJECT_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY
 from context import ContextBuilder
 from llm import chat, chat_stream, _get_usage
 from logger import logger
@@ -12,7 +12,8 @@ from team_bus import MessageBus
 from team_manager import TeammateManager
 from session import SessionManager
 from team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
-from tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, render_todos
+from display import Display
+from tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, register_display, render_todos
 
 SKILL_LOADER = SkillLoader(PROJECT_DIR / "skills")
 SUBAGENT_LOADER = SubagentLoader(PROJECT_DIR / "subagents")
@@ -36,24 +37,41 @@ def _inject_todos(messages: list[dict]):
     messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
-def _run_tool_loop(messages, tools, inject_fn, max_turns=30):
+def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30):
     for turn in range(max_turns):
+        msg = None
         if STREAMING:
-            last_chunk = None
+            thinking_seen = False
             for chunk in chat_stream(messages, tools=tools):
-                if chunk["type"] == "text":
-                    print(chunk["content"], end="", flush=True)
+                if chunk["type"] == "thinking_start":
+                    disp.thinking_start()
+                    thinking_seen = True
+                elif chunk["type"] == "thinking":
+                    disp.thinking_chunk(chunk["content"])
+                elif chunk["type"] == "thinking_end":
+                    disp.thinking_end()
+                    thinking_seen = False
+                elif chunk["type"] == "text":
+                    disp.text_chunk(chunk["content"])
                 elif chunk["type"] == "error":
                     logger.error(f"[LLM✗] 流式错误: {chunk['error']}")
                     return None
                 elif chunk["type"] == "done":
                     msg = chunk["msg"]
+            if thinking_seen:
+                disp.thinking_end()
             if not msg or "tool_calls" not in msg:
-                print()
+                disp.text_end()
                 return msg
         else:
             msg = chat(messages, tools=tools)
+            if msg and msg.get("thinking"):
+                disp.thinking_start()
+                disp._thinking_buf = msg["thinking"]
+                disp.thinking_end()
             if not msg or "tool_calls" not in msg:
+                if msg and msg.get("content"):
+                    disp.text_end(msg["content"])
                 return msg
         spawned = handle_tool_calls(msg, messages)
         inject_fn(messages)
@@ -65,6 +83,11 @@ def _run_tool_loop(messages, tools, inject_fn, max_turns=30):
 
 
 def main():
+    disp = Display(
+        thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
+        tool_detail=DISPLAY.get("tool_detail", "summary"),
+    )
+
     register(SKILL_LOADER)
     register_subagents(SUBAGENT_LOADER)
 
@@ -75,6 +98,7 @@ def main():
         project_dir=PROJECT_DIR,
     )
     register_team(bus, team_mgr)
+    register_display(disp)
 
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
@@ -103,42 +127,59 @@ def main():
         logger.info(f"[恢复] {len(unarchived)} 条历史消息")
 
     while True:
-        user_input = input("You: ").strip()
+        user_input = disp.user_input().strip()
         if not user_input:
             continue
         if user_input.lower() in ("exit", "quit", "q"):
             break
         if user_input.startswith("/save "):
-            print(sessions.save(user_input[6:], messages))
+            disp.info(sessions.save(user_input[6:], messages))
             continue
         if user_input.startswith("/load "):
             loaded = sessions.load(user_input[6:])
             if loaded:
                 messages = [messages[0]] + loaded
                 _inject_todos(messages)
-                print(f"会话 '{user_input[6:]}' 已加载（{len(loaded)} 条消息）")
+                disp.info(f"会话 '{user_input[6:]}' 已加载（{len(loaded)} 条消息）")
             else:
-                print(f"会话 '{user_input[6:]}' 不存在")
+                disp.error(f"会话 '{user_input[6:]}' 不存在")
             continue
         if user_input == "/sessions":
-            print(sessions.render_list())
+            disp.info(sessions.render_list())
+            continue
+        if user_input == "/thinking":
+            disp.show_thinking()
+            continue
+        if user_input.startswith("/thinking "):
+            disp.set_thinking_mode(user_input[10:].strip())
+            continue
+
+        if user_input == "/compact":
+            non_system = [m for m in messages if m["role"] != "system"]
+            if len(non_system) <= compactor.keep_recent:
+                disp.info(f"消息数({len(non_system)})未超过保留阈值({compactor.keep_recent})，无需压缩")
+                continue
+            before = len(non_system)
+            messages = compactor.compact(chat, messages)
+            _inject_todos(messages)
+            after = len([m for m in messages if m["role"] != "system"])
+            disp.info(f"压缩完成：{before} → {after} 条消息（归档 {before - after} 条）")
             continue
 
         messages.append({"role": "user", "content": user_input})
         store.append("user", user_input)
 
-        msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos)
+        msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp)
 
         teammate_msg = wait_for_teammates(
             bus, team_mgr, lead_event,
             _run_tool_loop, messages, _lead_tool_defs(),
-            _inject_todos, store,
+            _inject_todos, disp, store,
         )
         if teammate_msg:
             msg = teammate_msg
 
         if msg and msg.get("content"):
-            print("Assistant:", msg["content"])
             messages.append({"role": "assistant", "content": msg["content"]})
             store.append("assistant", msg["content"])
 

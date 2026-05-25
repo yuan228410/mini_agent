@@ -1,0 +1,50 @@
+timeouts:
+  llm: 120
+  llm_retries: 3
+  llm_retry_delay: 2
+  teammate_recv: 5
+  lead_wait: 1800
+  lead_poll_interval: 2
+  web_fetch: 30
+compactor:
+  context_usage_threshold: 0.8
+  keep_recent: 50
+  char_threshold: 20000
+teammate:
+  max_teammates: 10
+  max_turns: 20
+  base_tools:
+  - run_command
+  - web_fetch
+  - load_skill
+tool:
+  max_result_chars: 8000
+thinking:
+  enabled: true
+  budget_tokens: 10000
+display:
+  thinking_mode: collapsed
+  tool_detail: summary
+runner:
+  context_usage_limit: 0.88
+streaming: true
+active_model: deepseek
+models:
+  claude:
+    api_url: https://your-api.com/v1/messages
+    api_key: your-api-key
+    model: Claude Opus 4.7
+    context_length: 200000
+    api_mode: anthropic
+  glm:
+    api_mode: openai
+    api_url: https://your-api.com/v1/chat/completions
+    api_key: your-api-key
+    model: glm-5.1
+    context_length: 200000
+  deepseek:
+    api_mode: openai
+    api_url: https://your-api.com/v1/chat/completions
+    api_key: your-api-key
+    model: deepseek-v4-pro
+    context_length: 128000

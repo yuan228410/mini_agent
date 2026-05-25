@@ -5,7 +5,7 @@ import time
 
 import requests
 
-from config import MODEL_CONFIG, TIMEOUTS
+from config import MODEL_CONFIG, TIMEOUTS, THINKING
 from logger import logger
 
 API_URL = MODEL_CONFIG["api_url"]
@@ -91,11 +91,15 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
     """Anthropic 响应 content 数组 → OpenAI 格式 msg dict"""
     text_parts = []
     tool_calls = []
+    thinking_parts = []
 
     for block in ant_content:
-        if block["type"] == "text":
+        btype = block.get("type", "")
+        if btype == "thinking":
+            thinking_parts.append(block.get("thinking", ""))
+        elif btype == "text":
             text_parts.append(block["text"])
-        elif block["type"] == "tool_use":
+        elif btype == "tool_use":
             tool_calls.append({
                 "id": block["id"],
                 "type": "function",
@@ -109,6 +113,8 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
     msg = {"role": "assistant", "content": content}
     if tool_calls:
         msg["tool_calls"] = tool_calls
+    if thinking_parts:
+        msg["thinking"] = "\n".join(thinking_parts)
     return msg
 
 
@@ -121,6 +127,11 @@ def chat(messages, tools=True):
     payload = {"model": MODEL, "messages": ant_msgs, "max_tokens": 4096}
     if system_text:
         payload["system"] = system_text
+
+    if THINKING.get("enabled"):
+        budget = THINKING.get("budget_tokens", 10000)
+        payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        payload["max_tokens"] = budget + 4096
 
     if tools is True:
         payload["tools"] = _tools_openai_to_anthropic(get_definitions())
@@ -169,6 +180,11 @@ def chat_stream(messages, tools=True):
     if system_text:
         payload["system"] = system_text
 
+    if THINKING.get("enabled"):
+        budget = THINKING.get("budget_tokens", 10000)
+        payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+        payload["max_tokens"] = budget + 4096
+
     if tools is True:
         payload["tools"] = _tools_openai_to_anthropic(get_definitions())
     elif tools:
@@ -214,6 +230,9 @@ def chat_stream(messages, tools=True):
             current_block = {"type": cb["type"], "index": data.get("index", 0)}
             if cb["type"] == "text":
                 current_block["text"] = ""
+            elif cb["type"] == "thinking":
+                current_block["thinking"] = ""
+                yield {"type": "thinking_start"}
             elif cb["type"] == "tool_use":
                 current_block["id"] = cb.get("id", "")
                 current_block["name"] = cb.get("name", "")
@@ -222,15 +241,22 @@ def chat_stream(messages, tools=True):
 
         elif evt_type == "content_block_delta":
             delta = data.get("delta", {})
-            if delta["type"] == "text_delta":
+            dtype = delta.get("type", "")
+            if dtype == "thinking_delta":
+                chunk_text = delta.get("thinking", "")
+                current_block["thinking"] += chunk_text
+                yield {"type": "thinking", "content": chunk_text}
+            elif dtype == "text_delta":
                 text = delta["text"]
                 current_block["text"] += text
                 yield {"type": "text", "content": text}
-            elif delta["type"] == "input_json_delta":
+            elif dtype == "input_json_delta":
                 current_block["input_json"] += delta.get("partial_json", "")
 
         elif evt_type == "content_block_stop":
             if current_block:
+                if current_block["type"] == "thinking":
+                    yield {"type": "thinking_end"}
                 if current_block["type"] == "tool_use" and current_block["input_json"]:
                     try:
                         current_block["input"] = json.loads(current_block["input_json"])

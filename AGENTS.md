@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持多模型切换、流式输出、工具调用、技能系统、三层记忆压缩、子代理派遣、Team 协作、会话管理。
+基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持多模型切换、流式输出、工具调用、技能系统、三层记忆压缩、子代理派遣、Team 协作、会话管理、终端 UI 渲染。
 
 ## 目录结构
 
@@ -19,6 +19,7 @@ memory.py            # 三层记忆存储（MemoryStore）
 compactor.py         # 对话压缩归档（Compactor）
 session.py           # 会话管理（命名保存/恢复）
 skills.py            # 技能加载器（SkillLoader）
+display.py           # 终端 UI 渲染（Markdown/思维链/工具调用）
 team_bus.py          # 队友消息总线（文件 JSONL + Event 唤醒）
 team_manager.py      # 队友管理器（spawn、状态、线程循环）
 team_loop.py         # 回禀等待、消息过滤、自动 shutdown、清理
@@ -42,6 +43,7 @@ logs/                # 运行日志（不入 git）
 - **线程安全**：`threading.local()` 隔离各线程 token 统计；`copy_context()` 保持并行 contextvars
 - **上下文安全阀**：子代理/队友 `prompt_tokens > context_length × 88%` 时自动终止
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
+- **终端 UI**：`display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理
 
 ## 行为规则
 

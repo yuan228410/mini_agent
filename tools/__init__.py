@@ -1,5 +1,6 @@
 """工具注册与分发"""
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import TOOL
@@ -7,6 +8,7 @@ from logger import logger
 from tools import dispatch_subagent, read_file, run_command, update_todos, web_fetch, write_file
 
 _MAX_RESULT_CHARS = TOOL["max_result_chars"]
+_display = None
 
 
 def _truncate(output: str) -> str:
@@ -58,6 +60,11 @@ def register_team(bus, manager) -> None:
     _ALL_TOOLS.extend(team_tools.ALL_TEAM_TOOLS)
     _rebuild_index()
 
+def register_display(display) -> None:
+    """注入 display 实例"""
+    global _display
+    _display = display
+
 
 def get_definitions() -> list[dict]:
     """返回所有工具的 OpenAI 定义列表"""
@@ -101,11 +108,18 @@ def _execute_one(tc: dict, messages: list[dict]) -> None:
     name = tc["function"]["name"]
     args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
     logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
+    args_summary = json.dumps(args, ensure_ascii=False)
+    if _display:
+        _display.tool_call_start(name, args_summary)
+    t0 = time.monotonic()
     output = dispatch(name, args)
+    elapsed = time.monotonic() - t0
     if output is not None:
         output = _truncate(output)
         logger.debug(f"[工具←] {name} len={len(output)}")
         messages.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
+    if _display:
+        _display.tool_result(name, output or "", elapsed)
 
 
 def _execute_parallel(calls: list[dict], messages: list[dict]) -> None:
@@ -118,7 +132,14 @@ def _execute_parallel(calls: list[dict], messages: list[dict]) -> None:
             name = tc["function"]["name"]
             args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
             logger.info(f"[并行→] {name}({json.dumps(args, ensure_ascii=False)})")
-            return tc["id"], caller_val.run(dispatch, name, args)
+            if _display:
+                _display.tool_call_start(name, json.dumps(args, ensure_ascii=False))
+            t0 = time.monotonic()
+            result = caller_val.run(dispatch, name, args)
+            elapsed = time.monotonic() - t0
+            if _display and result is not None:
+                _display.tool_result(name, result, elapsed)
+            return tc["id"], result
         except Exception as e:
             return tc["id"], f"执行失败: {e}"
 

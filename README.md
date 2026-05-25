@@ -5,7 +5,7 @@
 ## 快速开始
 
 ```bash
-pip install requests pyyaml
+pip install requests pyyaml rich prompt_toolkit
 python main.py
 ```
 
@@ -25,6 +25,7 @@ yzx_agent/
 ├── compactor.py          # 对话压缩归档
 ├── session.py            # 会话管理（命名保存/恢复）
 ├── skills.py             # 技能加载器
+├── display.py            # 终端 UI 渲染（Markdown/思维链/工具调用）
 ├── character/            # Agent 人设定义
 │   ├── SOUL.md           #   核心身份、能力、工作流程
 │   └── RULES.md          #   行为规范、任务规划要求
@@ -88,6 +89,34 @@ models:
 
 配置 `streaming: true` 后，LLM 文本回复逐字输出到终端，工具调用仍走批量模式。Anthropic 和 OpenAI 协议均支持流式。
 
+### 终端 UI (display.py)
+
+基于 Rich + prompt_toolkit 的终端渲染层，统一管理所有用户可见输出：
+
+**Markdown 渲染**：流式输出时逐字打印纯文本，完成后清除并重渲为 Rich Markdown（标题、列表、代码块、粗体等）。
+
+**思维链展示**：支持三种模式（`/thinking <mode>` 切换）：
+
+| 模式 | 终端显示 | 查看详情 |
+|------|----------|----------|
+| collapsed（默认） | `💭 已思考 N 字 (Xs)` | `/thinking` 展开查看 |
+| expanded | 实时输出思考内容 + `💭 思考完毕 (Xs)` | 直接可见 |
+| hidden | 不显示 | `/thinking` 仍可查看 |
+
+**工具调用展示**：三种粒度（`display.tool_detail` 配置）：
+
+| 粒度 | 显示内容 |
+|------|----------|
+| summary（默认） | 工具名 + 参数摘要(80字) + 结果预览(200字) + 耗时 |
+| minimal | 工具名 + 耗时 |
+| full | 工具名 + 完整参数 + 完整结果 + 耗时 |
+
+**命令补全**：输入 `/` 自动弹出命令菜单，方向键选择，Tab 确认。
+
+**多协议思维链**：
+- Anthropic 协议：`thinking` content block + `thinking_delta` 流式块
+- OpenAI 协议（DeepSeek 等）：`reasoning_content` 字段 + 流式 `delta.reasoning_content`
+
 ### 会话管理 (session.py)
 
 在对话中使用命令管理会话：
@@ -97,6 +126,9 @@ models:
 | `/save <名称>` | 保存当前对话为命名会话 |
 | `/load <名称>` | 加载已保存的会话，恢复上下文 |
 | `/sessions` | 列出所有已保存的会话 |
+| `/compact` | 手动触发对话压缩，归档旧消息 |
+| `/thinking` | 查看最近一次思考过程 |
+| `/thinking <mode>` | 切换思考展示：collapsed / expanded / hidden |
 
 ### 任务规划 (update_todos)
 
@@ -298,6 +330,14 @@ teammate:
 
 tool:
   max_result_chars: 8000   # 工具返回值截断长度
+
+thinking:
+  enabled: true             # 启用思维链（Anthropic 协议自动加 thinking 参数）
+  budget_tokens: 10000     # Anthropic thinking 预算 token 数
+
+display:
+  thinking_mode: collapsed  # 思考展示：collapsed / expanded / hidden
+  tool_detail: summary      # 工具展示：summary / minimal / full
 
 runner:
   context_usage_limit: 0.88  # 子代理/队友上下文安全阀
