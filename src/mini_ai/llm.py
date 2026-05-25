@@ -45,6 +45,9 @@ def _ensure_session():
             "Authorization": f"Bearer {key}",
             "Content-Type": "application/json",
         })
+        custom_headers = MODEL_CONFIG.get("headers", {})
+        if custom_headers:
+            _session.headers.update(custom_headers)
 
 
 def _msg_summary(m: dict) -> str:

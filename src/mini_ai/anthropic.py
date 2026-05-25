@@ -37,6 +37,9 @@ def _ensure_session():
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         })
+        custom_headers = MODEL_CONFIG.get("headers", {})
+        if custom_headers:
+            _session.headers.update(custom_headers)
 
 
 def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:

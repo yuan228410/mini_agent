@@ -188,16 +188,22 @@ models:
 | `/genskill <名称>` | 从当前对话总结生成技能 |
 | `/skill` | 列出所有可用技能 |
 | `/skill <名称>` | 加载并使用指定技能 |
+| `/model` | 列出所有可用模型 |
+| `/model <名称>` | 切换模型（立即生效，持久化） |
 | `/thinking` | 查看最近一次思考过程 |
 | `/thinking <mode>` | 切换思考展示：collapsed / expanded / hidden |
 
 ### 终端 UI
 
-启动时显示 `mini ai` ASCII banner（bold green + bold yellow），输入提示符为 `mini-ai>`。
+启动时显示 `mini ai` ASCII banner（bold green + bold yellow），输入提示符为 `mini-ai> `。首次启动和每轮对话后显示状态栏。
+
+**命令补全：** 输入 `/` 弹出命令列表，`/skill ` 弹出技能名，`/model ` 弹出模型名，按 Tab 选择。
 
 **状态栏：** 每轮对话结束后右对齐显示 `⚙ 模型 │ 上下文用量% │ ↑输入 ↓输出 token │ 系统提示词大小 │ 消息数`，上下文用量超过 70% 变黄、85% 变红。
 
 **自动加载项目规范：** 如果当前工作目录存在 `CLAUDE.md` 或 `AGENTS.md`，自动读取并加入系统提示词作为项目规范（优先加载 CLAUDE.md）。
+
+**模型切换：** 通过 `/model <名称>` 运行时切换模型，立即生效并持久化到 `config.yaml`。补全列表包含 `/model <模型名>` 选项。
 
 ### 任务规划 (update_todos)
 
@@ -336,6 +342,8 @@ SOUL.md (核心身份)
 ---
 可用技能 (SkillLoader)
 ---
+CLAUDE.md / AGENTS.md (项目规范，自动读取当前目录)
+---
 RULES.md (行为规范)
 ```
 
@@ -379,6 +387,8 @@ models:
     api_key: "your-api-key"
     model: "glm-5.1"
     context_length: 200000
+    headers:                    # 可选自定义请求头
+      X-Custom-Header: value
 
 timeouts:
   llm: 120                    # LLM API 请求超时（秒）
