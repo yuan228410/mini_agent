@@ -183,8 +183,21 @@ models:
 | `/load <名称>` | 加载已保存的会话，恢复上下文 |
 | `/sessions` | 列出所有已保存的会话 |
 | `/compact` | 手动触发对话压缩，归档旧消息 |
+| `/clear` | 清空当前会话的历史消息 |
+| `/history` | 查看历史消息列表 |
+| `/genskill <名称>` | 从当前对话总结生成技能 |
+| `/skill` | 列出所有可用技能 |
+| `/skill <名称>` | 加载并使用指定技能 |
 | `/thinking` | 查看最近一次思考过程 |
 | `/thinking <mode>` | 切换思考展示：collapsed / expanded / hidden |
+
+### 终端 UI
+
+启动时显示 `mini ai` ASCII banner（bold green + bold yellow），输入提示符为 `mini-ai>`。
+
+**状态栏：** 每轮对话结束后右对齐显示 `⚙ 模型 │ 上下文用量% │ ↑输入 ↓输出 token │ 系统提示词大小 │ 消息数`，上下文用量超过 70% 变黄、85% 变红。
+
+**自动加载项目规范：** 如果当前工作目录存在 `CLAUDE.md` 或 `AGENTS.md`，自动读取并加入系统提示词作为项目规范（优先加载 CLAUDE.md）。
 
 ### 任务规划 (update_todos)
 

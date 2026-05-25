@@ -23,7 +23,7 @@ src/mini_ai/            # 包源码
   compactor.py            #   对话压缩归档（Compactor）
   session.py              #   会话管理
   skills.py               #   技能加载器（多路径搜索）
-  commands.py             #   斜杠命令处理
+  commands.py             #   斜杠命令处理（/save /load /compact /clear /history /genskill /skill /thinking）
   logger.py               #   日志模块
   team_bus.py             #   队友消息总线
   team_manager.py         #   队友管理器
@@ -52,7 +52,8 @@ src/mini_ai/            # 包源码
 - **线程安全**：`threading.local()` 隔离各线程 token 统计；`copy_context()` 保持并行 contextvars
 - **上下文安全阀**：子代理/队友 `prompt_tokens > context_length × 88%` 时自动终止
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
-- **终端 UI**：`display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理
+- **终端 UI**：`display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理；状态栏每轮对话后右对齐显示模型/上下文/token 信息
+- **项目规范自动加载**：`context.py` 自动读取当前目录的 `CLAUDE.md` 或 `AGENTS.md`（优先前者），注入系统提示词
 
 ## 行为规则
 
