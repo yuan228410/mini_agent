@@ -10,7 +10,8 @@ class ContextBuilder:
       2. 长期记忆 (MemoryStore)
       3. 用户画像 (MemoryStore)
       4. 技能列表 (SkillLoader)
-      5. 系统指令 (SYSTEM_PROMPT 模板)
+      5. 项目规范 (CLAUDE.md / AGENTS.md)
+      6. 系统指令 (SYSTEM_PROMPT 模板)
     """
 
     def __init__(self, project_dir: Path):
@@ -37,12 +38,28 @@ class ContextBuilder:
             if skills_text and skills_text != "(no skills available)":
                 parts.append(f"## 可用技能\n\n{skills_text}")
 
+        # 当前目录项目规范（CLAUDE.md / AGENTS.md）
+        cwd_docs = self._read_cwd_docs()
+        if cwd_docs:
+            parts.append(cwd_docs)
+
         # 系统运行指令放最后，优先级最低
         rules = self._read_doc("RULES.md")
         if rules:
             parts.append(rules)
 
         return "\n\n---\n\n".join(parts) if parts else ""
+
+    def _read_cwd_docs(self) -> str | None:
+        import os
+        cwd = Path(os.getcwd())
+        for name in ("CLAUDE.md", "AGENTS.md"):
+            path = cwd / name
+            if path.exists():
+                text = path.read_text(encoding="utf-8").strip()
+                if text:
+                    return f"## {name}\n\n{text}"
+        return None
 
     def _read_doc(self, name: str) -> str | None:
         path = self.character_dir / name
