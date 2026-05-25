@@ -15,6 +15,7 @@ _SLASH_COMMANDS = [
     ("/load", "加载已保存的会话"),
     ("/sessions", "列出所有已保存的会话"),
     ("/compact", "手动触发对话压缩"),
+    ("/clear", "清空历史消息"),
     ("/genskill", "从对话中总结生成技能"),
     ("/skill", "使用指定技能执行任务"),
     ("/thinking", "查看最近思考过程"),
@@ -23,6 +24,21 @@ _SLASH_COMMANDS = [
     ("/thinking hidden", "隐藏思考过程"),
     ("/exit", "退出"),
 ]
+
+def _build_completions():
+    items = list(_SLASH_COMMANDS)
+    try:
+        from .skills import SkillLoader
+        from .config import DATA_DIR, SKILL_PATHS
+        loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
+        for name, skill in loader.skills.items():
+            desc = skill["meta"].get("description", "")
+            items.append((f"/skill {name}", desc))
+    except Exception:
+        pass
+    return items
+
+_ALL_COMPLETIONS = _build_completions()
 
 
 class Display:
@@ -86,7 +102,7 @@ class Display:
                 text = document.text_before_cursor
                 if not text.startswith("/"):
                     return
-                for cmd, desc in _SLASH_COMMANDS:
+                for cmd, desc in _ALL_COMPLETIONS:
                     if cmd.startswith(text):
                         yield Completion(cmd, start_position=-len(text), display_meta=desc)
 

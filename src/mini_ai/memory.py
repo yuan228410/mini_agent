@@ -132,6 +132,10 @@ class MemoryStore:
     def write_user(self, content: str) -> None:
         self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
 
+    # ── 清空历史 ──
+    def clear_history(self) -> None:
+        self.history_file.write_text("", encoding="utf-8")
+
     # ── 归档标记 ──
     def mark_compacted(self) -> None:
         row = {"ts": datetime.now(_UTC8).isoformat(timespec="seconds"), "type": "compact_event"}

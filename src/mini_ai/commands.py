@@ -17,8 +17,16 @@ class CommandHandler:
         if user_input.lower() in ("exit", "quit", "q"):
             return "break"
 
+        if user_input == "/save":
+            self.disp.error("用法: /save <会话名称>")
+            return "continue"
+
         if user_input.startswith("/save "):
             self.disp.info(self.sessions.save(user_input[6:], messages))
+            return "continue"
+
+        if user_input == "/load":
+            self.disp.error("用法: /load <会话名称>")
             return "continue"
 
         if user_input.startswith("/load "):
@@ -56,6 +64,21 @@ class CommandHandler:
             self.disp.info(f"压缩完成：{before} → {after} 条消息（归档 {before - after} 条）")
             return "continue"
 
+        if user_input == "/clear":
+            non_system = [m for m in messages if m["role"] != "system"]
+            if not non_system:
+                self.disp.info("没有会话消息需要清空")
+                return "continue"
+            messages[:] = [messages[0]]
+            self.inject_fn(messages)
+            self.store.clear_history()
+            self.disp.info(f"已清空 {len(non_system)} 条会话消息")
+            return "continue"
+
+        if user_input == "/genskill":
+            self.disp.error("用法: /genskill <技能名称>")
+            return "continue"
+
         if user_input.startswith("/genskill "):
             skill_name = user_input[10:].strip()
             if not skill_name:
@@ -68,6 +91,15 @@ class CommandHandler:
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
                 self.store.append("assistant", msg["content"])
+            return "continue"
+
+        if user_input == "/skill":
+            from .tools import dispatch
+            self.disp.info(dispatch("list_skills", {}))
+            return "continue"
+
+        if user_input.startswith("/skill ") and user_input[7:].strip() == "":
+            self.disp.error("用法: /skill <技能名称>")
             return "continue"
 
         if user_input.startswith("/skill "):
