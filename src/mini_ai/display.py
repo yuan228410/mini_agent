@@ -57,8 +57,8 @@ class Display:
         for line in art_lines:
             if banner:
                 banner.append("\n")
-            banner.append(line[:mini_len], style="bold cyan")
-            banner.append(line[mini_len:], style="bold magenta")
+            banner.append(line[:mini_len], style="bold green")
+            banner.append(line[mini_len:], style="bold yellow")
         subtitle = Text(f"v{__version__}  |  智能对话 Agent", style="dim")
         panel = Panel(banner, subtitle=subtitle, box=box.SIMPLE, padding=(0, 2), expand=False)
         self.console.print(panel)
@@ -68,7 +68,7 @@ class Display:
         if _IS_TTY and sys.stdin.isatty():
             return self._prompt_input()
         try:
-            line = input("You: ")
+            line = input("mini-ai> ")
         except EOFError:
             return "exit"
         if not line and not sys.stdin.isatty():
@@ -92,7 +92,7 @@ class Display:
 
         if not hasattr(self, "_session"):
             self._session = PromptSession(
-                message=FormattedText([("class:prompt", "You: ")]),
+                message=FormattedText([("class:prompt", "mini-ai> ")]),
                 completer=SlashCompleter(),
                 complete_while_typing=True,
                 style=Style.from_dict({
