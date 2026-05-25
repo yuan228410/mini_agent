@@ -37,6 +37,32 @@ class Display:
         self._tool_start_time = 0.0
         self._last_thinking = ""
         self._had_thinking = False
+        self.show_banner()
+
+    def show_banner(self):
+        if not _IS_TTY:
+            return
+        from rich.panel import Panel
+        from rich import box
+        from . import __version__
+        art_lines = [
+            r" __  __ _       _    ___ _ ",
+            r"|  \/  (_)_ __ | |_ / __| |",
+            r"| |\/| | | '_ \| __/ /  | |",
+            r"| |  | | | | | | |_ / /| |",
+            r"|_|  |_|_|_| |_|\__|___|_|",
+        ]
+        mini_len = len(r" __  __ _       _ ")
+        banner = Text()
+        for line in art_lines:
+            if banner:
+                banner.append("\n")
+            banner.append(line[:mini_len], style="bold cyan")
+            banner.append(line[mini_len:], style="bold magenta")
+        subtitle = Text(f"v{__version__}  |  智能对话 Agent", style="dim")
+        panel = Panel(banner, subtitle=subtitle, box=box.SIMPLE, padding=(0, 2), expand=False)
+        self.console.print(panel)
+        self.console.print()
 
     def user_input(self) -> str:
         if _IS_TTY and sys.stdin.isatty():
