@@ -2,7 +2,7 @@
 
 > 🎓 一个学习型 AI Agent 项目 — 在探索 Agent 开发过程中逐步构建，用于学习研究与实践。
 
-基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持工具调用、技能系统、记忆压缩、子代理派遣、Team 协作、流式输出、多模型切换。
+基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持工具调用、技能系统、记忆压缩、子代理派遣、Team 协作、流式输出、多模型切换、Web 界面。
 
 项目从零手写，不依赖任何 Agent 框架，旨在深入理解 Agent 的核心机制：工具调用、记忆管理、上下文压缩、多模型适配、子代理协作等。代码结构清晰，模块职责单一，适合阅读和学习。
 
@@ -39,12 +39,17 @@ export MINI_AI_DATA=/path/to/custom/data
 ### 运行
 
 ```bash
-# 源码库中开发调试
+# CLI 模式
 uv run mini-ai
+
+# Web 模式
+uv run mini-ai --web              # 默认 http://localhost:8765
+uv run mini-ai --web --port 3000  # 自定义端口
 
 # 或手动激活 .venv
 source .venv/bin/activate
 mini-ai
+mini-ai --web
 ```
 
 ### 依赖
@@ -55,6 +60,8 @@ mini-ai
 | pyyaml | 配置文件解析 |
 | rich | 终端 Markdown 渲染、思维链/工具调用展示 |
 | prompt-toolkit | 输入框 / 命令补全交互 |
+| fastapi | Web 后端框架（API + SSE 流式） |
+| uvicorn | ASGI 服务器（Web 模式运行） |
 
 ## 项目结构
 
@@ -430,6 +437,18 @@ skill_paths:                  # 额外技能搜索路径（只读，安装仍存
   #  - /opt/shared/skills
   #  - ~/my-skills
 ```
+
+
+## Web 界面
+
+通过 `mini-ai --web` 启动 Web 对话界面（默认 `http://localhost:8765`），支持流式输出、思维链/工具调用展示、亮暗主题切换。Editorial 杂志编辑风设计，Markdown + 代码高亮渲染。
+
+```bash
+mini-ai --web                    # 启动 Web 模式
+mini-ai --web --port 3000        # 自定义端口
+```
+
+详细设计、API 接口、前端组件、开发模式等见 [WEB.md](WEB.md)。
 
 ## 自定义 Agent 人设
 

@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持多模型切换、流式输出、工具调用、技能系统、三层记忆压缩、子代理派遣、Team 协作、会话管理、终端 UI 渲染。
+基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持多模型切换、流式输出、工具调用、技能系统、三层记忆压缩、子代理派遣、Team 协作、会话管理、终端 UI 渲染、Web 界面。
 
 ## 目录结构
 
@@ -54,6 +54,7 @@ src/mini_ai/            # 包源码
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
 - **终端 UI**：`display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理；状态栏每轮对话后右对齐显示模型/上下文/token 信息
 - **项目规范自动加载**：`context.py` 自动读取当前目录的 `CLAUDE.md` 或 `AGENTS.md`（优先前者），注入系统提示词
+- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，SSE 流式推送，WebDisplay 适配器将 Display 事件线程安全推入 asyncio.Queue，同步工具循环在线程池执行不阻塞事件循环。前端 Editorial 杂志编辑风，亮暗主题切换，Markdown + highlight.js 渲染。多会话隔离（`_SESSIONS` 字典，每连接独立 session_id），模型切换下拉框，斜杠命令补全（`/api/commands`），技能面板抽屉，会话持久化（localStorage + `/api/chat/history`）
 
 ## 行为规则
 

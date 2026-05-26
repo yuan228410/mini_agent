@@ -394,6 +394,17 @@ def rumini_ai(messages, max_turns=10, tool_names=None, context_length=None) -> s
 - `_collapse_ws()` 将连续空白压缩为单个空格
 - 效果：典型网页从数万字符压缩到几千字符
 
+### 13. Web 界面 (web/)
+
+FastAPI + SSE 后端，Vue 3 + Vite 前端，`mini-ai --web` 启动。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
+
+**关键设计：**
+- WebDisplay 适配器实现与 CLI Display 相同接口，通过 `loop.call_soon_threadsafe()` 线程安全推入 asyncio.Queue
+- 同步工具循环在 `run_in_executor()` 中执行，不阻塞事件循环
+- 前端 Editorial 杂志编辑风，亮暗主题切换，Markdown + highlight.js 渲染
+
+详细设计、组件架构、API 接口、SSE 协议等见 [WEB.md](WEB.md)。
+
 ---
 
 ## 关键设计原则
@@ -408,3 +419,4 @@ def rumini_ai(messages, max_turns=10, tool_names=None, context_length=None) -> s
 8. **零浪费轮询：** inbox 读取由代码层自动处理，不暴露给 LLM 避免空轮询消耗 token
 9. **Event 驱动唤醒：** 用 `threading.Event` 替代 sleep 轮询，有消息 0ms 响应，无消息低功耗等待
 10. **多模型可插拔：** `active_model` 一键切换，`api_mode` 适配不同协议，零代码改动
+11. **Web/CLI 双模式：** `--web` 参数切换，同一套 LLM/工具/记忆逻辑，仅 Display 层不同；Web 模式同步代码在线程池运行，通过 `call_soon_threadsafe` 线程安全推送 SSE 事件

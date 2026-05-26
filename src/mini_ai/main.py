@@ -88,7 +88,21 @@ def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30):
 def main():
     parser = argparse.ArgumentParser(prog="mini-ai", description="智能对话 Agent")
     parser.add_argument("-v", "--version", action="version", version=f"mini-ai {__version__}")
-    parser.parse_args()
+    parser.add_argument("--web", action="store_true", help="启动 Web 界面")
+    parser.add_argument("--port", type=int, default=8765, help="Web 端口 (默认 8765)")
+    args = parser.parse_args()
+
+    if args.web:
+        from .web.app import create_app
+        import uvicorn
+        dist_dir = __import__("pathlib").Path(__file__).parent.parent.parent / "web" / "dist"
+        if not dist_dir.exists():
+            print(f"提示: 前端未构建，请先执行: cd web && pnpm install && pnpm build")
+            print(f"      开发模式可分别启动后端和前端 (pnpm dev)")
+        print(f"mini_ai Web 界面启动: http://localhost:{args.port}")
+        app = create_app()
+        uvicorn.run(app, host="0.0.0.0", port=args.port)
+        return
     disp = Display(
         thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
         tool_detail=DISPLAY.get("tool_detail", "summary"),
