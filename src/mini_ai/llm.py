@@ -1,60 +1,17 @@
 """LLM API 通信"""
-import threading
 import time
 
 import requests
 
-from .config import MODEL_CONFIG, TIMEOUTS
+from .config import TIMEOUTS
+from .llm_base import (
+    get_config, get_api_url, get_api_key, get_model, get_api_mode,
+    get_usage, get_session, ensure_session_openai,
+)
 from .logger import logger
 from .tools import get_definitions
 
-
-def _cfg(ctx=None):
-    return ctx.model_config if ctx else MODEL_CONFIG
-
-def _api_mode(ctx=None):
-    return _cfg(ctx).get("api_mode", "openai")
-
-def _api_url(ctx=None):
-    return _cfg(ctx)["api_url"]
-
-def _api_key(ctx=None):
-    return _cfg(ctx)["api_key"]
-
-def _model(ctx=None):
-    return _cfg(ctx)["model"]
-
-def _context_length(ctx=None):
-    return _cfg(ctx).get("context_length", 128000)
-
-_local = threading.local()
-_local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-
-
-def _get_usage() -> dict:
-    if not hasattr(_local, "last_usage"):
-        _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-    return _local.last_usage
-
-_session = requests.Session()
-
-def _ensure_session(ctx=None):
-    cfg = _cfg(ctx)
-    sess = ctx.http_session if ctx else _session
-    key = cfg["api_key"]
-    auth_header = "x-api-key" if _api_mode(ctx) == "anthropic" else "Authorization"
-    auth_value = key if _api_mode(ctx) == "anthropic" else f"Bearer {key}"
-    if sess.headers.get(auth_header) != auth_value:
-        headers = {
-            "Authorization" if auth_header == "Authorization" else "x-api-key": auth_value,
-            "Content-Type": "application/json",
-        }
-        if _api_mode(ctx) == "anthropic":
-            headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
-        sess.headers.update(headers)
-        custom_headers = cfg.get("headers", {})
-        if custom_headers:
-            sess.headers.update(custom_headers)
+_get_usage = get_usage
 
 
 def _msg_summary(m: dict) -> str:
@@ -74,12 +31,11 @@ def _msg_summary(m: dict) -> str:
 
 
 def chat(messages, tools=True, ctx=None):
-    _ensure_session(ctx)
-    if _api_mode(ctx) == "anthropic":
+    ensure_session_openai(ctx)
+    if get_api_mode(ctx) == "anthropic":
         from .anthropic import chat as anth_chat
         return anth_chat(messages, tools, ctx=ctx)
-    """发送请求，tools=True=全部工具，tools=list=自定义工具列表，tools=False=无工具"""
-    payload = {"model": _model(ctx), "messages": messages}
+    payload = {"model": get_model(ctx), "messages": messages}
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -91,7 +47,7 @@ def chat(messages, tools=True, ctx=None):
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
 
-    logger.info(f"[LLM→] model={_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
+    logger.info(f"[LLM→] model={get_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
     if len(messages) <= 3:
         for m in messages:
             if m["role"] != "tool":
@@ -107,12 +63,12 @@ def chat(messages, tools=True, ctx=None):
     max_retries = TIMEOUTS.get("llm_retries", 3)
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
 
-    sess = ctx.http_session if ctx else _session
+    sess = get_session(ctx)
     t0 = time.monotonic()
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            response = sess.post(_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
+            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
             break
         except requests.RequestException as e:
             last_error = e
@@ -142,7 +98,7 @@ def chat(messages, tools=True, ctx=None):
     usage = result.get("usage", {})
     p_tok = usage.get("prompt_tokens", 0)
     c_tok = usage.get("completion_tokens", 0)
-    usage_store = _get_usage()
+    usage_store = get_usage()
     usage_store["prompt_tokens"] = p_tok
     usage_store["completion_tokens"] = c_tok
 
@@ -162,13 +118,12 @@ def chat(messages, tools=True, ctx=None):
 
 
 def chat_stream(messages, tools=True, ctx=None):
-    _ensure_session(ctx)
-    if _api_mode(ctx) == "anthropic":
+    ensure_session_openai(ctx)
+    if get_api_mode(ctx) == "anthropic":
         from .anthropic import chat_stream as anth_stream
         yield from anth_stream(messages, tools, ctx=ctx)
         return
-    """流式发送请求，yield delta chunks，最后 yield 完整 msg。"""
-    payload = {"model": _model(ctx), "messages": messages, "stream": True}
+    payload = {"model": get_model(ctx), "messages": messages, "stream": True}
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -180,14 +135,14 @@ def chat_stream(messages, tools=True, ctx=None):
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
 
-    logger.info(f"[LLM→] model={_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
+    logger.info(f"[LLM→] model={get_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
     if tool_names:
         logger.debug(f"  tool_list={tool_names}")
 
-    sess = ctx.http_session if ctx else _session
+    sess = get_session(ctx)
     t0 = time.monotonic()
     try:
-        response = sess.post(_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+        response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"[LLM✗] 流式请求异常: {e}")
@@ -243,7 +198,7 @@ def chat_stream(messages, tools=True, ctx=None):
 
         usage = data.get("usage")
         if usage:
-            usage_store = _get_usage()
+            usage_store = get_usage()
             usage_store["prompt_tokens"] = usage.get("prompt_tokens", 0)
             usage_store["completion_tokens"] = usage.get("completion_tokens", 0)
 
@@ -258,7 +213,7 @@ def chat_stream(messages, tools=True, ctx=None):
     if collected_thinking:
         msg["thinking"] = collected_thinking
 
-    usage_store = _get_usage()
+    usage_store = get_usage()
     p_tok = usage_store["prompt_tokens"]
     c_tok = usage_store["completion_tokens"]
 

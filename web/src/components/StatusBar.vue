@@ -11,8 +11,10 @@ const props = defineProps<{
 }>()
 
 const usagePct = computed(() => {
-  if (!props.context_length) return 0
-  return Math.round((props.prompt_tokens / props.context_length) * 100)
+  if (!props.context_length) return '0'
+  const pct = (props.prompt_tokens / props.context_length) * 100
+  if (pct < 1 && pct > 0) return pct.toFixed(1)
+  return Math.round(pct).toString()
 })
 </script>
 
@@ -20,7 +22,7 @@ const usagePct = computed(() => {
   <div class="status-bar">
     <span class="status-item">⚙ {{ model }}</span>
     <span class="status-sep">│</span>
-    <span class="status-item">ctx {{ usagePct }}%</span>
+    <span class="status-item">ctx {{ usagePct }}% ({{ prompt_tokens }}/{{ context_length }})</span>
     <span class="status-sep">│</span>
     <span class="status-item">↑{{ prompt_tokens }} ↓{{ completion_tokens }}</span>
     <span class="status-sep">│</span>

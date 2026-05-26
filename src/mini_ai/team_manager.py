@@ -110,7 +110,7 @@ class TeammateManager:
 
     def _teammate_loop(self, name: str, role: str, prompt: str):
         from .runner import run_agent
-        from tools.team_tools import set_caller
+        from .tools.team_tools import set_caller
 
         set_caller(name)
 

@@ -6,9 +6,10 @@ from .commands import CommandHandler
 from .compactor import Compactor
 from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, RequestContext
 from .context import ContextBuilder
-from .llm import chat, chat_stream, _get_usage
+from .llm_base import get_usage
 from .logger import logger
 from .memory import MemoryStore
+from .runner import run_tool_loop
 from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team_bus import MessageBus
@@ -16,7 +17,7 @@ from .team_manager import TeammateManager
 from .session import SessionManager
 from .team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
 from .display import Display
-from .tools import get_definitions, handle_tool_calls, register, register_subagents, register_team, register_display, render_todos
+from .tools import get_definitions, register, register_subagents, register_team, register_display, render_todos
 
 SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
@@ -40,50 +41,16 @@ def _inject_todos(messages: list[dict]):
     messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
-def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30, ctx=None):
-    for turn in range(max_turns):
-        msg = None
-        if STREAMING:
-            thinking_seen = False
-            for chunk in chat_stream(messages, tools=tools, ctx=ctx):
-                if chunk["type"] == "thinking_start":
-                    disp.thinking_start()
-                    thinking_seen = True
-                elif chunk["type"] == "thinking":
-                    disp.thinking_chunk(chunk["content"])
-                elif chunk["type"] == "thinking_end":
-                    disp.thinking_end()
-                    thinking_seen = False
-                elif chunk["type"] == "text":
-                    disp.text_chunk(chunk["content"])
-                elif chunk["type"] == "error":
-                    logger.error(f"[LLM✗] 流式错误: {chunk['error']}")
-                    return None
-                elif chunk["type"] == "done":
-                    msg = chunk["msg"]
-            if thinking_seen:
-                disp.thinking_end()
-            if not msg or "tool_calls" not in msg:
-                disp.text_end()
-                return msg
-        else:
-            msg = chat(messages, tools=tools, ctx=ctx)
-            if msg and msg.get("thinking"):
-                disp.thinking_start()
-                disp._thinking_buf = msg["thinking"]
-                disp.thinking_end()
-            if not msg or "tool_calls" not in msg:
-                if msg and msg.get("content"):
-                    disp.text_end(msg["content"])
-                return msg
-        _disp = ctx.display if ctx else disp
-        spawned = handle_tool_calls(msg, messages, display=_disp)
-        inject_fn(messages)
-        if spawned:
-            logger.info("[spawn] lead 退出 LLM 循环，等待队友")
-            return None
-    logger.warning(f"[lead] 工具循环达到上限 {max_turns} 轮，强制退出")
-    return None
+def _run_loop_compat(messages, tools, inject_fn, disp, ctx=None):
+    """兼容包装：保持 CommandHandler 和 wait_for_teammates 的调用签名。"""
+    msg, _ = run_tool_loop(
+        messages, tools,
+        streaming=STREAMING,
+        display=disp,
+        inject_fn=inject_fn,
+        ctx=ctx,
+    )
+    return msg
 
 
 def main():
@@ -142,7 +109,7 @@ def main():
 
     cmd = CommandHandler(
         disp=disp, store=store, sessions=sessions, compactor=compactor,
-        inject_fn=_inject_todos, run_tool_fn=_run_tool_loop,
+        inject_fn=_inject_todos, run_tool_fn=_run_loop_compat,
         lead_tools=_lead_tool_defs(), ctx=req_ctx,
     )
 
@@ -178,11 +145,17 @@ def main():
         messages.append({"role": "user", "content": user_input})
         store.append("user", user_input)
 
-        msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp, ctx=req_ctx)
+        msg, _ = run_tool_loop(
+            messages, _lead_tool_defs(),
+            streaming=STREAMING,
+            display=disp,
+            inject_fn=_inject_todos,
+            ctx=req_ctx,
+        )
 
         teammate_msg = wait_for_teammates(
             bus, team_mgr, lead_event,
-            _run_tool_loop, messages, _lead_tool_defs(),
+            _run_loop_compat, messages, _lead_tool_defs(),
             _inject_todos, disp, store, ctx=req_ctx,
         )
         if teammate_msg:
@@ -195,7 +168,7 @@ def main():
         shutdown_teammates(bus, team_mgr)
         cleanup_inbox(bus)
 
-        usage = _get_usage()
+        usage = get_usage()
         disp.status_bar(
             model=MODEL_CONFIG.get("model", "?"),
             context_length=MODEL_CONFIG.get("context_length", 128000),
@@ -206,6 +179,7 @@ def main():
         )
 
         if compactor.should_compact(usage["prompt_tokens"]):
+            from .llm import chat
             messages = compactor.compact(chat, messages)
             _inject_todos(messages)
 
