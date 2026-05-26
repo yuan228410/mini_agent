@@ -7,7 +7,7 @@ from ..memory import MemoryStore, Compactor, SessionManager
 from ..skills import SkillLoader
 from ..subagents import SubagentLoader
 from ..team import Blackboard, MessageBus, TeammateManager
-from ..tools import register, register_subagents, register_team, register_blackboard
+from ..tools import register, register_subagents, register_team, register_blackboard, register_memory_tools
 
 SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
@@ -30,6 +30,7 @@ def init_components():
 
     store = MemoryStore(DATA_DIR / "memory_data")
     sessions = SessionManager(DATA_DIR / "memory_data" / "sessions")
+    register_memory_tools(store)
     ctx = ContextBuilder(DATA_DIR)
 
     compactor = Compactor(

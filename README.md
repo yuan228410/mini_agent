@@ -342,6 +342,9 @@ max_turns: 10
 | run_workflow | 提交 DAG 工作流 |
 | workflow_status | 查看工作流状态 |
 | load_workflow | 加载 YAML 工作流模板 |
+| remember | 主动写入长期记忆 |
+| recall | 检索长期记忆 |
+| forget | 删除过期记忆 |
 
 **关键机制：**
 - 结果截断：工具输出超过 `max_result_chars` 时自动截断，防止上下文膨胀
@@ -367,20 +370,25 @@ max_turns: 10
 | 长期层 | `MEMORY.md` | 持久 | 核心目标、重要决策、项目背景 |
 
 **压缩触发条件：**
-- `prompt_tokens > context_length × context_usage_threshold`
-- 即上下文使用量超过模型上下文窗口的指定比例（默认 80%）
+- `prompt_tokens > context_length × context_usage_threshold`（API 返回值）
+- 或本地 token 预估超阈值（字符数 / 2.5，提前预防）
 
-**压缩后保留：**
-- 最近 `keep_recent` 条消息（默认 50 条）
-- 且保留消息总字符数不超过 `char_threshold`（超出则从头部继续裁剪）
+**压缩策略（按轮次摘要）：**
+- 保留所有 user 消息（用户意图不丢失）
+- 每轮 assistant+tool 执行过程独立摘要
+- **闲聊过滤**：短消息 + 无工具调用 + 匹配寒暄关键词的轮次直接丢弃，不占 token
+- 最近 N 轮保持完整（按字符阈值动态决定保留多少轮）
+- 压缩后结构：`system → user1 → summary1 → user2 → summary2 → ... → 最近完整轮次`
 
-**压缩流程：**
-1. 根据上述条件确定归档区间和保留区间
-2. 旧消息发送给模型，提取三个维度的结构化输出：
-   - `<episode>` — 写入今日情景记忆
-   - `<updated_memory>` — 更新长期记忆
-   - `<updated_user>` — 更新用户画像
-3. 写入 compact_event 标记，注入更新后的长期记忆到上下文
+**压缩产出（三层记忆更新）：**
+1. `<episode>` — 写入今日情景记忆
+2. `<updated_memory>` — 更新长期记忆
+3. `<updated_user>` — 更新用户画像
+
+**主动记忆工具：**
+- `remember(content, category)` — Agent 随时主动写入长期记忆
+- `recall(keyword?)` — 检索长期记忆
+- `forget(keyword)` — 删除过期记忆
 
 ### 上下文组装 (context.py)
 

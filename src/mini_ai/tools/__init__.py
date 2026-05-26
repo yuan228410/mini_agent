@@ -157,6 +157,11 @@ class ToolRegistry:
         workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs)
         self.add_tools(*workflow_tools.ALL_WORKFLOW_TOOLS)
 
+    def register_memory_tools(self, memory_store):
+        from . import memory_tools
+        memory_tools.configure(memory_store=memory_store)
+        self.add_tools(*memory_tools.ALL_MEMORY_TOOLS)
+
 
 # ── 模块级默认实例 ──
 
@@ -184,6 +189,10 @@ def register_display(display) -> None:
 
 def register_blackboard(blackboard, workflow_dirs=None) -> None:
     _registry.register_blackboard(blackboard, workflow_dirs)
+
+
+def register_memory_tools(memory_store) -> None:
+    _registry.register_memory_tools(memory_store)
 
 
 def get_definitions() -> list[dict]:

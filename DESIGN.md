@@ -248,21 +248,21 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
 | 长期层 | `MEMORY.md` | Markdown | 压缩时模型提取 `<updated_memory>` |
 | 用户画像 | `USER.md` | Markdown | 压缩时模型提取 `<updated_user>` |
 
-**压缩触发条件：**
+**压缩触发条件（双重检查）：**
+- API 返回的 `prompt_tokens > context_length × context_usage_threshold`
+- 或本地预估 token（字符数 / 2.5）超阈值
 
-`prompt_tokens > context_length × context_usage_threshold`
+**压缩策略（按轮次摘要 + 闲聊过滤）：**
+1. 按 user 消息分割对话为"轮次"
+2. 闲聊轮次（短消息 + 无工具 + 匹配寒暄关键词）直接丢弃，不摘要不保留
+3. 有价值轮次：保留 user 消息，执行过程独立 LLM 摘要
+4. 最近 N 轮保持完整（按字符阈值动态决定）
+5. 摘要完成后更新三层记忆
 
-即：当 LLM 请求的 prompt_tokens 超过模型上下文窗口的指定比例时触发。由 `_get_usage()` 获取当前线程的最近一次请求 token 用量。
-
-**压缩后保留：**
-- 最近 `keep_recent` 条消息（默认 50 条）
-- 且保留消息总字符数不超过 `char_threshold`（超出则从头部继续裁剪）
-
-**压缩流程：**
-1. 根据上述条件确定归档区间和保留区间
-2. 旧消息 + 当前记忆/画像/情景 → 发送给 LLM 提取结构化输出
-3. 更新三层存储 + 在 history.jsonl 写入 compact_event 标记
-4. 合并最新长期记忆/用户画像到 system prompt
+**主动记忆工具：**
+- `remember(content, category)` — Agent 实时写入长期记忆
+- `recall(keyword?)` — 检索长期记忆
+- `forget(keyword)` — 删除过期记忆
 
 **历史恢复：**
 - `load_unarchived` 从最后一个 compact_event 之后读取未归档消息

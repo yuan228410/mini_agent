@@ -1,31 +1,101 @@
-"""压缩器：将旧对话归档为情景记忆 + 更新长期记忆/用户画像"""
+"""压缩器：按轮次摘要 + 三层记忆更新"""
 import re
 from datetime import datetime, timezone, timedelta
 
 from ..logger import logger
-from .store import COMPACT_PROMPT, MemoryStore
+from .store import MemoryStore
 
 _UTC8 = timezone(timedelta(hours=8))
+
+COMPACT_PROMPT = """根据以下对话轮次摘要，更新长期记忆和用户画像：
+
+<episode>
+本次对话的关键记录（事实、结论、待办），用于每日回顾。保持简洁，只记录有价值的信息。
+</episode>
+
+<updated_memory>
+如果产生了值得长期记住的信息（用户目标、重要决策、关键偏好、项目背景），更新长期记忆。格式：先写保留的旧记忆要点，再写新增/更新的内容。若无需更新则写"(无需更新)"。
+</updated_memory>
+
+<updated_user>
+如果本次对话让你更了解用户的偏好、习惯、知识背景，更新用户画像。若无需更新则写"(无需更新)"。
+</updated_user>
+
+当前长期记忆：
+{current_memory}
+
+当前用户画像：
+{current_user}
+
+今天的已有记录：
+{today_episode}
+
+各轮次摘要：
+{round_summaries}"""
+
+ROUND_SUMMARY_PROMPT = """请简洁总结以下 Agent 执行过程（1000字以内）：
+- 完成了什么任务
+- 调用了哪些工具
+- 关键结果和发现
+
+执行过程：
+{execution_content}"""
+
+
+_CHITCHAT_KEYWORDS = frozenset([
+    "你好", "谢谢", "嗯", "哈哈", "ok", "好的", "再见", "hello", "hi", "thanks",
+    "thank you", "bye", "嗯嗯", "哦", "啊", "呢", "吧", "了解", "明白",
+    "good", "nice", "cool", "great", "👍", "🙏",
+])
+
+
+def _is_chitchat_round(rnd: dict) -> bool:
+    user_content = (rnd["user_msg"].get("content") or "").strip()
+    execution = rnd["execution"]
+
+    if len(user_content) > 30:
+        return False
+
+    has_tool_calls = any(msg.get("tool_calls") for msg in execution)
+    if has_tool_calls:
+        return False
+
+    assistant_content = ""
+    for msg in execution:
+        if msg.get("role") == "assistant":
+            assistant_content += msg.get("content") or ""
+    if len(assistant_content) > 100:
+        return False
+
+    if any(kw in user_content.lower() for kw in _CHITCHAT_KEYWORDS):
+        return True
+
+    if len(user_content) < 10 and not execution:
+        return True
+
+    return False
 
 
 def _extract(tag: str, text: str) -> str | None:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
     return m.group(1).strip() if m else None
+    m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
+    return m.group(1).strip() if m else None
 
 
 class Compactor:
-    """智能压缩器。
+    """智能压缩器 — 按轮次摘要，保留用户意图。
 
-    触发时机：prompt_tokens > context_length * context_usage_threshold
-    压缩后保留：最近 keep_recent 条消息，且总字符不超过 char_threshold
-    旧消息归档为三类产出：
-      - episode: 写入今天的情景记忆文件
-      - updated_memory: 更新 MEMORY.md（长期记忆）
-      - updated_user: 更新 USER.md（用户画像）
+    压缩策略：
+    1. 保留所有 user 消息（用户意图不能丢失）
+    2. 每轮 user→(assistant+tool 执行过程)→下一个 user 之间的消息独立摘要
+    3. 压缩后结构：system → user1 → summary1 → user2 → summary2 → ...
+    4. 最近 keep_recent_rounds 轮不压缩（保持完整上下文）
+    5. 摘要完成后更新三层记忆
     """
 
     def __init__(self, memory_store: MemoryStore, *,
-                 keep_recent: int = 100, char_threshold: int = 50000,
+                 keep_recent: int = 50, char_threshold: int = 20000,
                  context_usage_threshold: float = 0.8, context_length: int = 128000,
                  context_builder=None, skill_loader=None):
         self.memory = memory_store
@@ -41,34 +111,144 @@ class Compactor:
             return False
         threshold = self.context_length * self.context_usage_threshold
         if prompt_tokens > threshold:
-            logger.info(f"[压缩→] prompt_tokens={prompt_tokens} > {int(threshold)} ({self.context_usage_threshold*100:.0f}% of {self.context_length})")
+            logger.info(f"[压缩→] prompt_tokens={prompt_tokens} > {int(threshold)}")
             return True
         return False
 
+    def estimate_tokens(self, messages: list[dict]) -> int:
+        total_chars = 0
+        for msg in messages:
+            content = msg.get("content") or ""
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                total_chars += len(str(content))
+        return int(total_chars / 2.5)
+
+    def should_compact_local(self, messages: list[dict]) -> bool:
+        estimated = self.estimate_tokens(messages)
+        threshold = self.context_length * self.context_usage_threshold
+        return estimated > threshold
+
     def compact(self, chat_fn, messages: list[dict], ctx=None) -> list[dict]:
         non_system = [m for m in messages if m["role"] != "system"]
-        recent = non_system[-self.keep_recent:]
 
-        total_chars = sum(len(m.get("content") or "") for m in recent)
-        while len(recent) > 1 and total_chars > self.char_threshold:
-            removed = recent.pop(0)
-            total_chars -= len(removed.get("content") or "")
+        rounds = self._split_rounds(non_system)
 
-        old = non_system[:len(non_system) - len(recent)]
+        if len(rounds) <= 1:
+            logger.info("[压缩] 轮次不足，跳过")
+            return messages
+
+        keep_rounds = self._determine_keep_rounds(rounds)
+        old_rounds = rounds[:len(rounds) - keep_rounds]
+        recent_rounds = rounds[len(rounds) - keep_rounds:]
+
+        new_messages = [messages[0]]
+        round_summaries = []
+        skipped_chitchat = 0
+
+        for i, rnd in enumerate(old_rounds):
+            if _is_chitchat_round(rnd):
+                skipped_chitchat += 1
+                continue
+            new_messages.append(rnd["user_msg"])
+            execution = rnd["execution"]
+            if execution:
+                summary = self._summarize_round(chat_fn, execution, i + 1, ctx)
+                if summary:
+                    new_messages.append({
+                        "role": "user",
+                        "content": f"[第{i+1}轮执行摘要]\n{summary}",
+                    })
+                    round_summaries.append(f"第{i+1}轮: {summary[:200]}")
+
+        if skipped_chitchat > 0:
+            logger.info(f"[压缩] 跳过 {skipped_chitchat} 轮闲聊")
+
+        for rnd in recent_rounds:
+            new_messages.append(rnd["user_msg"])
+            new_messages.extend(rnd["execution"])
+
+        self._update_memory(chat_fn, round_summaries, ctx)
+        self.memory.mark_compacted()
+
+        if self.context_builder:
+            new_messages[0]["content"] = self.context_builder.build(
+                memory_store=self.memory,
+                skill_loader=self.skill_loader,
+            )
+
+        logger.info(f"[压缩←] {len(old_rounds)} 轮摘要，保留 {len(recent_rounds)} 轮完整")
+        return new_messages
+
+    def _split_rounds(self, non_system: list[dict]) -> list[dict]:
+        rounds = []
+        current_user = None
+        current_execution = []
+
+        for msg in non_system:
+            if msg["role"] == "user" and not (msg.get("content") or "").startswith("[第"):
+                if current_user is not None:
+                    rounds.append({"user_msg": current_user, "execution": current_execution})
+                current_user = msg
+                current_execution = []
+            else:
+                current_execution.append(msg)
+
+        if current_user is not None:
+            rounds.append({"user_msg": current_user, "execution": current_execution})
+
+        return rounds
+
+    def _determine_keep_rounds(self, rounds: list[dict]) -> int:
+        keep = 0
+        total_chars = 0
+        for rnd in reversed(rounds):
+            if _is_chitchat_round(rnd):
+                keep += 1
+                if keep >= len(rounds) - 1:
+                    break
+                continue
+            rnd_chars = len(rnd["user_msg"].get("content") or "")
+            for msg in rnd["execution"]:
+                rnd_chars += len(msg.get("content") or "")
+            if total_chars + rnd_chars > self.char_threshold:
+                break
+            total_chars += rnd_chars
+            keep += 1
+            if keep >= len(rounds) - 1:
+                break
+        return max(keep, 1)
+
+    def _summarize_round(self, chat_fn, execution: list[dict], round_num: int, ctx=None) -> str:
+        content = self._messages_to_text(execution)
+        if not content.strip():
+            return ""
+
+        if len(content) < 100:
+            return content
+
+        prompt = ROUND_SUMMARY_PROMPT.format(execution_content=content[:8000])
+        result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
+        if result and result.get("content"):
+            logger.debug(f"[压缩] 第{round_num}轮摘要生成成功")
+            return result["content"]
+        return content[:500]
+
+    def _update_memory(self, chat_fn, round_summaries: list[str], ctx=None):
+        if not round_summaries:
+            return
 
         prompt = COMPACT_PROMPT.format(
-            old_conversation=self._messages_to_text(old),
             current_memory=self.memory.read_memory() or "(空)",
             current_user=self.memory.read_user() or "(空)",
             today_episode=self.memory.read_today() or "(空)",
-            now_hhmm=datetime.now(_UTC8).strftime("%H:%M"),
+            round_summaries="\n\n".join(round_summaries),
         )
 
         result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
         if not result:
-            logger.warning("[压缩✗] 模型未返回结果")
-            self.memory.mark_compacted()
-            return [messages[0]] + recent
+            return
 
         text = result.get("content", "")
         episode = _extract("episode", text)
@@ -82,38 +262,18 @@ class Compactor:
         if new_user and new_user != "(无需更新)":
             self.memory.write_user(new_user)
 
-        self.memory.mark_compacted()
-
-        if self.context_builder:
-            messages[0]["content"] = self.context_builder.build(
-                memory_store=self.memory,
-                skill_loader=self.skill_loader,
-            )
-        else:
-            parts = [messages[0]["content"]]
-            if self.memory.has_memory():
-                parts.append(f"## 长期记忆\n\n{self.memory.read_memory()}")
-            if self.memory.has_user():
-                parts.append(f"## 用户画像\n\n{self.memory.read_user()}")
-            messages[0]["content"] = "\n\n---\n\n".join(parts)
-
-        logger.debug(f"[压缩←] {len(old)} 条消息归档，保留 {len(recent)} 条 ({total_chars} 字符)")
-        return [messages[0]] + recent
-
     @staticmethod
     def _messages_to_text(messages: list[dict]) -> str:
         parts = []
         for msg in messages:
             role = msg.get("role", "?")
             content = msg.get("content", "")
-
             if isinstance(content, str):
-                parts.append(f"[{role}] {content}")
+                if msg.get("tool_calls"):
+                    names = [tc["function"]["name"] for tc in msg["tool_calls"]]
+                    parts.append(f"[{role}] 调用工具: {', '.join(names)}")
+                elif content:
+                    parts.append(f"[{role}] {content[:500]}")
             elif isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict):
-                        if block.get("type") == "tool_use":
-                            parts.append(f"[{role}:tool] {block.get('name', '')}")
-                        elif block.get("type") == "tool_result":
-                            parts.append(f"[{role}:result] {str(block.get('content', ''))}")
+                parts.append(f"[{role}] (结构化内容)")
         return "\n".join(parts)

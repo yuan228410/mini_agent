@@ -65,7 +65,7 @@ src/mini_ai/            # 包源码
 - **结果截断**：工具输出超过 `max_result_chars` 自动截断，防止上下文膨胀
 - **配置分离**：所有运行时参数走 `DATA_DIR/config.yaml`，通过 `config.py` 加载，不硬编码。`PACKAGE_DIR` 存放只读包数据，`DATA_DIR`（默认 `~/.mini_ai/`）存放可写运行时数据。可选字段有默认值防护，配置文件缺失不崩溃。模型配置支持可选 `headers` 字段，发送请求时自动附加自定义请求头
 - **技能多路径**：`SkillLoader` 支持主目录 + `skill_paths` 额外搜索路径，同名技能主目录优先；安装技能写入主目录
-- **记忆系统**：MemoryStore（存储）+ Compactor（压缩），触发条件：`prompt_tokens > context_length × context_usage_threshold`
+- **记忆系统**：MemoryStore（三层存储）+ Compactor（按轮次摘要 + 闲聊过滤）+ remember/recall/forget 主动记忆工具。压缩触发：API prompt_tokens 或本地预估超阈值
 - **Event 驱动**：lead 用 `threading.Condition` 等待队友回禀/DAG 完成，精确唤醒零延迟
 - **多 Agent 编排**：team/ 子包提供 Blackboard（共享状态）+ TaskGraph（DAG 调度）+ Orchestrator（编排循环），支持链式/并行/条件分支/重试
 - **线程安全**：`threading.local()` 隔离各线程 token 统计；`copy_context()` 保持并行 contextvars

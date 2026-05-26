@@ -13,7 +13,7 @@ from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, cleanup_inbox
-from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, render_todos
+from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, render_todos
 
 SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
@@ -95,6 +95,7 @@ def main():
 
     store = MemoryStore(DATA_DIR / "memory_data")
     sessions = SessionManager(DATA_DIR / "memory_data" / "sessions")
+    register_memory_tools(store)
     ctx = ContextBuilder(DATA_DIR)
 
     compactor = Compactor(
@@ -177,7 +178,7 @@ def main():
             history_count=len(store.load_unarchived()),
         )
 
-        if compactor.should_compact(usage["prompt_tokens"]):
+        if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
             from .llm import chat
             messages = compactor.compact(chat, messages)
             _inject_todos(messages)
