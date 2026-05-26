@@ -12,12 +12,11 @@ from .memory import MemoryStore
 from .runner import run_tool_loop
 from .skills import SkillLoader
 from .subagents import SubagentLoader
-from .team_bus import MessageBus
-from .team_manager import TeammateManager
-from .session import SessionManager
-from .team_loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
+from .team import MessageBus, TeammateManager, Blackboard
+from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
 from .display import Display
-from .tools import get_definitions, register, register_subagents, register_team, register_display, render_todos
+from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, render_todos
+from .session import SessionManager
 
 SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
@@ -87,6 +86,10 @@ def main():
     )
     register_team(bus, team_mgr)
     register_display(disp)
+
+    bb = Blackboard(persist_path=DATA_DIR / ".team" / "blackboard.json")
+    workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
+    register_blackboard(bb, workflow_dirs=workflow_dirs)
 
     req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
 
@@ -165,7 +168,6 @@ def main():
             messages.append({"role": "assistant", "content": msg["content"]})
             store.append("assistant", msg["content"])
 
-        shutdown_teammates(bus, team_mgr)
         cleanup_inbox(bus)
 
         usage = get_usage()

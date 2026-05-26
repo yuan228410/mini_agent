@@ -142,6 +142,14 @@ class ToolRegistry:
     def render_todos(self) -> str:
         return update_todos._store.render()
 
+    def register_blackboard(self, blackboard, workflow_dirs=None):
+        from . import blackboard_tools
+        blackboard_tools.configure(blackboard=blackboard)
+        self.add_tools(*blackboard_tools.ALL_BLACKBOARD_TOOLS)
+        from . import workflow_tools
+        workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs)
+        self.add_tools(*workflow_tools.ALL_WORKFLOW_TOOLS)
+
 
 # ── 模块级默认实例 ──
 
@@ -165,6 +173,10 @@ def register_team(bus, manager) -> None:
 
 def register_display(display) -> None:
     _registry.register_display(display)
+
+
+def register_blackboard(blackboard, workflow_dirs=None) -> None:
+    _registry.register_blackboard(blackboard, workflow_dirs)
 
 
 def get_definitions() -> list[dict]:

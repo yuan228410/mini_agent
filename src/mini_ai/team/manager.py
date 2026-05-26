@@ -4,13 +4,15 @@
 import json
 import re
 import threading
+import time
 from pathlib import Path
 
-from .config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
-from .logger import logger
+from ..config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
+from ..logger import logger
 
 _BASE_TOOL_NAMES = tuple(TEAMMATE["base_tools"])
 _MAX_TEAMMATES = TEAMMATE["max_teammates"]
+_IDLE_TIMEOUT = TEAMMATE.get("idle_timeout", 300)
 
 
 class TeammateManager:
@@ -109,20 +111,25 @@ class TeammateManager:
             ev.set()
 
     def _teammate_loop(self, name: str, role: str, prompt: str):
-        from .runner import run_agent
-        from .tools.team_tools import set_caller
+        from ..runner import run_agent
+        from ..tools.team_tools import set_caller
 
         set_caller(name)
 
         system_prompt = (
             f"你是 agent team 中的固定队友，名叫 {name}，职司是 {role}。\n"
             f"工作区：{self.project_dir}。\n"
-            "可用工具：run_command、web_fetch、load_skill、send_message。\n"
+            "可用工具：run_command、web_fetch、load_skill、send_message、list_teammates、"
+            "blackboard_read、blackboard_write、blackboard_list。\n"
             "收到 inbox 任务后独立完成，完成后用 send_message 回禀 lead。\n"
-            "重要：每轮任务结束后对话历史会重置，不要依赖上一轮的上下文。\n"
+            "你可以通过 send_message 与其他队友直接通信协作。\n"
+            "用 blackboard_write 保存重要结果供其他 agent 读取，用 blackboard_read 获取他人成果。\n"
         )
 
-        tool_names = list(_BASE_TOOL_NAMES) + ["send_message"]
+        tool_names = list(_BASE_TOOL_NAMES) + [
+            "send_message", "list_teammates",
+            "blackboard_read", "blackboard_write", "blackboard_list",
+        ]
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -173,6 +180,30 @@ class TeammateManager:
             logger.info(f"[队友■] {name} 空闲，等待 inbox")
             self._set_status(name, "idle")
             has_work = False
+            idle_start = time.monotonic()
+
+            while not has_work:
+                ev.clear()
+                ev.wait(timeout=TIMEOUTS["teammate_recv"])
+                inbox = self.bus.read_inbox(name)
+                if inbox:
+                    for msg in inbox:
+                        if msg.get("type") == "shutdown_request":
+                            self.bus.send(name, msg.get("from", "lead"),
+                                          f"队友 {name} 已退出。", "shutdown_response")
+                            self._set_status(name, "shutdown")
+                            return
+                        messages.append({
+                            "role": "user",
+                            "content": "<inbox>\n" + json.dumps(msg, ensure_ascii=False, indent=2) + "\n</inbox>",
+                        })
+                        has_work = True
+                    if has_work:
+                        break
+                if _IDLE_TIMEOUT > 0 and (time.monotonic() - idle_start) > _IDLE_TIMEOUT:
+                    logger.info(f"[队友⏱] {name} 空闲超时 ({_IDLE_TIMEOUT}s)，自动退出")
+                    self._set_status(name, "shutdown")
+                    return
 
     def list_all(self) -> str:
         with self.lock:

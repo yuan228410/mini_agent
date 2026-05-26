@@ -157,7 +157,34 @@ _send_mod = _ToolMod(_send_def, _send)
 _read_mod = _ToolMod(_read_def, _read)
 _broadcast_mod = _ToolMod(_broadcast_def, _broadcast)
 
-ALL_TEAM_TOOLS = [_spawn_mod, _list_mod, _send_mod, _read_mod, _broadcast_mod]
+# ── dismiss_team ──
+
+_dismiss_def = {
+    "type": "function",
+    "function": {
+        "name": "dismiss_team",
+        "description": "解散所有队友（shutdown 全部 idle/working 状态的队友）。用于任务全部完成后释放资源。",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+
+def _dismiss(args: dict) -> str:
+    targets = []
+    with _manager.lock:
+        for m in _manager.config.get("members", []):
+            if m["status"] in ("idle", "working"):
+                targets.append(m["name"])
+    if not targets:
+        return "当前没有活跃的队友"
+    for name in targets:
+        _bus.send("lead", name, "任务结束，请退出。", "shutdown_request")
+    return f"已发送 shutdown 请求给 {len(targets)} 位队友: {', '.join(targets)}"
+
+
+_dismiss_mod = _ToolMod(_dismiss_def, _dismiss)
+
+ALL_TEAM_TOOLS = [_spawn_mod, _list_mod, _send_mod, _read_mod, _broadcast_mod, _dismiss_mod]
 
 
 def set_caller(name: str):
