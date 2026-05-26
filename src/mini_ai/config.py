@@ -40,16 +40,16 @@ if _missing:
     print(f"Error: models.{_active_model} 缺少必填字段: {', '.join(_missing)}", file=sys.stderr)
     sys.exit(1)
 
-TIMEOUTS = _raw.get("timeouts", {})
-COMPACTOR = _raw.get("compactor", {})
-TEAMMATE = _raw.get("teammate", {})
-TOOL = _raw.get("tool", {})
+TIMEOUTS = (_raw.get("timeouts") or {})
+COMPACTOR = (_raw.get("compactor") or {})
+TEAMMATE = (_raw.get("teammate") or {})
+TOOL = (_raw.get("tool") or {})
 API_MODE = MODEL_CONFIG.get("api_mode", "openai")
 STREAMING = _raw.get("streaming", False)
-RUNNER = _raw.get("runner", {"context_usage_limit": 0.88})
-THINKING = _raw.get("thinking", {"enabled": False, "budget_tokens": 10000})
-DISPLAY = _raw.get("display", {"thinking_mode": "collapsed", "tool_detail": "summary"})
-SKILL_PATHS = [Path(p) for p in _raw.get("skill_paths", [])]
+RUNNER = (_raw.get("runner") or {"context_usage_limit": 0.88})
+THINKING = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000})
+DISPLAY = (_raw.get("display") or {"thinking_mode": "collapsed", "tool_detail": "summary"})
+SKILL_PATHS = [Path(p) for p in (_raw.get("skill_paths") or [])]
 
 
 AVAILABLE_MODELS = list(_models.keys())

@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 LOG_DIR = Path.home() / ".mini_ai" / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 log_file = LOG_DIR / f"{datetime.now().strftime('%Y%m%d')}.log"
 
