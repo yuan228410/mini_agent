@@ -25,7 +25,7 @@ src/mini_ai/            # 包源码
   runner.py               #   统一 Agent 执行循环（run_tool_loop + run_agent）
   context.py              #   系统提示词组装
   memory/                 #   记忆系统
-    store.py               #     三层记忆存储（MemoryStore）
+    store.py               #     记忆存储（情景层+长期层+画像）
     compactor.py           #     对话压缩归档（Compactor）
     session.py             #     会话管理
   skills.py               #   技能加载器（多路径搜索）
@@ -67,7 +67,7 @@ src/mini_ai/            # 包源码
 - **结果截断**：工具输出超过 `max_result_chars` 自动截断，防止上下文膨胀
 - **配置分离**：所有运行时参数走 `DATA_DIR/config.yaml`，通过 `config.py` 加载，不硬编码。`PACKAGE_DIR` 存放只读包数据，`DATA_DIR`（默认 `~/.mini_ai/`）存放可写运行时数据。可选字段有默认值防护，配置文件缺失不崩溃。模型配置支持可选 `headers` 字段，发送请求时自动附加自定义请求头
 - **技能多路径**：`SkillLoader` 支持主目录 + `skill_paths` 额外搜索路径，同名技能主目录优先；安装技能写入主目录
-- **记忆系统**：MemoryStore（三层存储）+ Compactor（按轮次摘要 + 闲聊过滤）+ remember/recall/forget 主动记忆工具 + SQLite 历史检索。压缩触发：API prompt_tokens 或本地预估超阈值
+- **记忆系统**：MemoryStore（情景+长期+画像）+ HistoryDB（SQLite 对话历史+全文搜索）+ Compactor（按轮次摘要 + 闲聊过滤）+ remember/recall/forget 主动记忆工具。压缩触发：API prompt_tokens 或本地预估超阈值
 - **工作空间**：CLI 模式 CWD 即工作空间（自动绑定），Web 模式通过面板管理。每个工作空间独立记忆/会话/历史/Team 数据
 - **Event 驱动**：lead 用 `threading.Condition` 等待队友回禀/DAG 完成，精确唤醒零延迟
 - **多 Agent 编排**：team/ 子包提供 Blackboard（共享状态）+ TaskGraph（DAG 调度）+ Orchestrator（编排循环），支持链式/并行/条件分支/重试

@@ -268,7 +268,16 @@ function scrollToBottom() {
   }
 }
 
-defineExpose({ useSkill })
+async function resetSession(targetSessionId?: string) {
+  const sid = targetSessionId || 'default'
+  sessionId.value = sid
+  localStorage.setItem(SESSION_KEY, sid)
+  messages.value = []
+  await restoreHistory()
+  await fetchConfig()
+}
+
+defineExpose({ useSkill, resetSession })
 </script>
 
 <template>

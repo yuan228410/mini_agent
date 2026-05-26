@@ -121,19 +121,21 @@ def main():
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx,
         skill_loader=SKILL_LOADER,
+        history_db=history_db,
     )
 
     cmd = CommandHandler(
         disp=disp, store=store, sessions=sessions, compactor=compactor,
         inject_fn=_inject_todos, run_tool_fn=_run_loop_compat,
         lead_tools=_lead_tool_defs(), ctx=req_ctx, workspace_mgr=ws_mgr,
+        history_db=history_db,
     )
 
     system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
     messages = [{"role": "system", "content": system_prompt}]
     _inject_todos(messages)
 
-    unarchived = store.load_unarchived()
+    unarchived = history_db.load_unarchived()
     if unarchived:
         messages.extend(unarchived)
         logger.info(f"[恢复] {len(unarchived)} 条历史消息")
@@ -168,7 +170,7 @@ def main():
                 system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
                 messages = [{"role": "system", "content": system_prompt}]
                 _inject_todos(messages)
-                unarchived = store.load_unarchived()
+                unarchived = history_db.load_unarchived()
                 if unarchived:
                     messages.extend(unarchived)
                 cmd.store = store
@@ -177,7 +179,6 @@ def main():
             continue
 
         messages.append({"role": "user", "content": user_input})
-        store.append("user", user_input)
         history_db.append("user", user_input)
 
         msg, _ = run_tool_loop(
@@ -191,14 +192,13 @@ def main():
         teammate_msg = wait_for_teammates(
             bus, team_mgr, lead_event,
             _run_loop_compat, messages, _lead_tool_defs(),
-            _inject_todos, disp, store, ctx=req_ctx,
+            _inject_todos, disp, history_db=history_db, ctx=req_ctx,
         )
         if teammate_msg:
             msg = teammate_msg
 
         if msg and msg.get("content"):
             messages.append({"role": "assistant", "content": msg["content"]})
-            store.append("assistant", msg["content"])
             history_db.append("assistant", msg["content"])
 
         cleanup_inbox(bus)
@@ -210,7 +210,7 @@ def main():
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
             system_prompt_chars=len(messages[0]["content"]) if messages else 0,
-            history_count=len(store.load_unarchived()),
+            history_count=len(history_db.load_unarchived()),
         )
 
         if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):

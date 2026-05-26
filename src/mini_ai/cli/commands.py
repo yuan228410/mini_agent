@@ -3,7 +3,7 @@ from ..logger import logger
 
 
 class CommandHandler:
-    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None):
+    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None):
         self.disp = disp
         self.store = store
         self.sessions = sessions
@@ -13,6 +13,7 @@ class CommandHandler:
         self.lead_tools = lead_tools
         self.ctx = ctx
         self.workspace_mgr = workspace_mgr
+        self.history_db = history_db
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
@@ -67,7 +68,7 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/history":
-            unarchived = self.store.load_unarchived()
+            unarchived = self.history_db.load_unarchived()
             if not unarchived:
                 self.disp.info("暂无历史消息")
                 return "continue"
@@ -108,7 +109,7 @@ class CommandHandler:
                 return "continue"
             messages[:] = [messages[0]]
             self.inject_fn(messages)
-            self.store.clear_history()
+            self.history_db.mark_archived()
             self.disp.info(f"已清空 {len(non_system)} 条会话消息")
             return "continue"
 
@@ -123,11 +124,11 @@ class CommandHandler:
                 return "continue"
             prompt = f"请将当前对话中的关键方法论、步骤和经验总结为一个名为 '{skill_name}' 的技能。要求：1) 用 YAML frontmatter 定义 name 和 description；2) 正文用 Markdown 格式，结构清晰，步骤明确；3) 调用 install_skill 工具安装，使用 content 参数传入技能内容。"
             messages.append({"role": "user", "content": prompt})
-            self.store.append("user", prompt)
+            self.history_db.append("user", prompt)
             msg = self.run_tool_fn(messages, self.lead_tools, self.inject_fn, self.disp, ctx=self.ctx)
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
-                self.store.append("assistant", msg["content"])
+                self.history_db.append("assistant", msg["content"])
             return "continue"
 
         if user_input == "/skill":
@@ -146,11 +147,11 @@ class CommandHandler:
                 return "continue"
             prompt = f"请加载并使用技能 '{skill_name}' 来完成用户后续的任务。先调用 load_skill 了解该技能的详细内容和使用方式，然后严格按照技能指引执行。"
             messages.append({"role": "user", "content": prompt})
-            self.store.append("user", prompt)
+            self.history_db.append("user", prompt)
             msg = self.run_tool_fn(messages, self.lead_tools, self.inject_fn, self.disp, ctx=self.ctx)
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
-                self.store.append("assistant", msg["content"])
+                self.history_db.append("assistant", msg["content"])
             return "continue"
 
         if user_input == "/workspace":

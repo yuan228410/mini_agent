@@ -33,16 +33,15 @@ COMPACT_PROMPT = """将以下对话历史归档，输出三个部分：
 
 
 class MemoryStore:
-    """三层记忆存储。
+    """记忆存储（情景层 + 长期层 + 用户画像）。
 
-    原始层: history.jsonl — 完整对话日志，按 compact_event 标记归档状态
     情景层: YYYY-MM-DD.md — 每日情景记忆短文
     长期层: MEMORY.md — 常驻上下文的长期记忆
+    用户画像: USER.md
     """
 
     def __init__(self, memory_dir: Path):
         self.memory_dir = Path(memory_dir)
-        self.history_file = self.memory_dir / "history.jsonl"
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.user_file = self.memory_dir / "USER.md"
         self._ensure()
@@ -50,48 +49,11 @@ class MemoryStore:
     def _ensure(self):
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         for f, default in [
-            (self.history_file, ""),
             (self.memory_file, "# 长期记忆\n\n"),
             (self.user_file, "# 用户画像\n\n"),
         ]:
             if not f.exists():
                 f.write_text(default, encoding="utf-8")
-
-    # ── 原始层 ──
-    def append(self, role: str, content: str | None) -> None:
-        """写入一条对话到原始日志"""
-        row = {
-            "ts": datetime.now(_UTC8).isoformat(timespec="seconds"),
-            "role": role,
-            "content": content,
-        }
-        with self.history_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
-
-    def load_unarchived(self) -> list[dict]:
-        """读取最后一个 compact_event 之后未归档的消息"""
-        if not self.history_file.exists():
-            return []
-        rows = []
-        with self.history_file.open("r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-        last = -1
-        for i, r in enumerate(rows):
-            if r.get("type") == "compact_event":
-                last = i
-        return [
-            {"role": r["role"], "content": r["content"]}
-            for r in rows[last + 1 :]
-            if "role" in r and "content" in r
-        ]
 
     # ── 情景层 ──
     def _today_path(self) -> Path:
@@ -131,13 +93,3 @@ class MemoryStore:
 
     def write_user(self, content: str) -> None:
         self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
-
-    # ── 清空历史 ──
-    def clear_history(self) -> None:
-        self.history_file.write_text("", encoding="utf-8")
-
-    # ── 归档标记 ──
-    def mark_compacted(self) -> None:
-        row = {"ts": datetime.now(_UTC8).isoformat(timespec="seconds"), "type": "compact_event"}
-        with self.history_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")

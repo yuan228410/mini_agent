@@ -3,6 +3,7 @@ import asyncio
 import json
 import threading
 import uuid
+from datetime import datetime
 
 _sessions_lock = threading.Lock()
 from pathlib import Path
@@ -24,6 +25,24 @@ _SESSION_BASE = DATA_DIR / "web_sessions"
 _SESSION_BASE.mkdir(parents=True, exist_ok=True)
 
 _SESSIONS: dict[str, dict[str, list[dict]]] = {}
+
+
+def switch_session_base(new_base):
+    global _SESSION_BASE, _SESSIONS
+    _SESSION_BASE = new_base
+    _SESSION_BASE.mkdir(parents=True, exist_ok=True)
+    _SESSIONS.clear()
+
+
+def get_latest_session_id(username: str) -> str:
+    user_dir = _SESSION_BASE / username
+    if not user_dir.exists():
+        return _DEFAULT_SESSION
+    files = list(user_dir.glob("*.jsonl"))
+    if not files:
+        return _DEFAULT_SESSION
+    latest = max(files, key=lambda f: f.name)
+    return latest.stem
 _SESSION_MODELS: dict[str, str] = {}
 _LAST_USAGE: dict[str, dict] = {}
 _SESSION_LOCKS: dict[str, threading.Lock] = {}
@@ -146,7 +165,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 @router.post("/session")
 async def create_session(body: dict):
     username = body.get("username", "default")
-    sid = str(uuid.uuid4())[:8]
+    sid = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
     user_sessions = _ensure_user_sessions(username)
     user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
     _inject_todos(user_sessions[sid])

@@ -14,7 +14,7 @@ mini_ai 是一个基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支�
 │     ├── config.py (多模型切换 + 统一配置)                       │
 │     ├── llm/ (LLM 通信层: base + openai + anthropic)            │
 │     ├── context.py (SOUL + 记忆 + 技能 + RULES)                │
-│     ├── memory/ (三层存储 + 压缩 + 会话)                        │
+│     ├── memory/ (记忆 + 压缩 + 历史DB + 会话)                   │
 │     ├── cli/ (终端 UI + 斜杠命令)                               │
 │     ├── skills.py (技能加载)                                   │
 │     ├── subagents/ (子代理定义)                                │
@@ -239,11 +239,11 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
 
 ### 5. 记忆系统 (memory/)
 
-**三层存储模型：**
+**存储模型：**
 
 | 层级 | 文件 | 格式 | 更新方式 |
 |------|------|------|----------|
-| 原始层 | `history.jsonl` | JSONL | 每条对话实时 append |
+| 对话历史 | `history.db` | SQLite | HistoryDB 实时写入，支持全文搜索 |
 | 情景层 | `YYYY-MM-DD.md` | Markdown | 压缩时模型提取 `<episode>` |
 | 长期层 | `MEMORY.md` | Markdown | 压缩时模型提取 `<updated_memory>` |
 | 用户画像 | `USER.md` | Markdown | 压缩时模型提取 `<updated_user>` |

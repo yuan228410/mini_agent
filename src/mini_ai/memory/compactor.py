@@ -79,8 +79,6 @@ def _is_chitchat_round(rnd: dict) -> bool:
 def _extract(tag: str, text: str) -> str | None:
     m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
     return m.group(1).strip() if m else None
-    m = re.search(rf"<{tag}>(.*?)</{tag}>", text, re.DOTALL)
-    return m.group(1).strip() if m else None
 
 
 class Compactor:
@@ -97,7 +95,7 @@ class Compactor:
     def __init__(self, memory_store: MemoryStore, *,
                  keep_recent: int = 50, char_threshold: int = 20000,
                  context_usage_threshold: float = 0.8, context_length: int = 128000,
-                 context_builder=None, skill_loader=None):
+                 context_builder=None, skill_loader=None, history_db=None):
         self.memory = memory_store
         self.keep_recent = keep_recent
         self.char_threshold = char_threshold
@@ -105,6 +103,7 @@ class Compactor:
         self.context_length = context_length
         self.context_builder = context_builder
         self.skill_loader = skill_loader
+        self.history_db = history_db
 
     def should_compact(self, prompt_tokens: int) -> bool:
         if prompt_tokens <= 0:
@@ -170,7 +169,8 @@ class Compactor:
             new_messages.extend(rnd["execution"])
 
         self._update_memory(chat_fn, round_summaries, ctx)
-        self.memory.mark_compacted()
+        if self.history_db:
+            self.history_db.mark_archived()
 
         if self.context_builder:
             new_messages[0]["content"] = self.context_builder.build(

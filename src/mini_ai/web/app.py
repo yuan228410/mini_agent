@@ -6,20 +6,27 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routes import chat, models, skills, config, commands, workspaces
+from .routes import chat, models, skills, config, commands, workspaces, files
 from .deps import init_components
 from ..context import ContextBuilder
-from ..config import DATA_DIR, SKILL_PATHS
+from ..config import DATA_DIR, SKILL_PATHS, _raw
 from ..memory import MemoryStore
 from ..skills import SkillLoader
+from ..workspace import WorkspaceManager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_components()
-    store = MemoryStore(DATA_DIR / "memory_data")
+    ws_mgr = WorkspaceManager(DATA_DIR)
+    active_ws_name = _raw.get("active_workspace", "default")
+    ws = ws_mgr.get(active_ws_name) or ws_mgr.get("default")
+
+    chat.switch_session_base(ws.ws_dir / "web_sessions")
+
+    store = MemoryStore(ws.ws_dir / "memory_data")
     ctx = ContextBuilder(DATA_DIR)
     skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
-    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader)
+    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
     chat.set_system_prompt(system_prompt)
     yield
 
@@ -39,6 +46,7 @@ def create_app() -> FastAPI:
     app.include_router(commands.router, prefix="/api")
     app.include_router(config.router, prefix="/api")
     app.include_router(workspaces.router, prefix="/api")
+    app.include_router(files.router, prefix="/api")
 
     dist_dir = Path(__file__).parent.parent.parent.parent / "web" / "dist"
     if dist_dir.exists():

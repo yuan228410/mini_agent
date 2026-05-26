@@ -8,6 +8,7 @@ import StatusBar from './components/StatusBar.vue'
 import ModelSelector from './components/ModelSelector.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import WorkspacePanel from './components/WorkspacePanel.vue'
+import FileBrowserPanel from './components/FileBrowserPanel.vue'
 
 const theme = ref<Theme>('light')
 const config = ref({
@@ -23,13 +24,15 @@ const config = ref({
 })
 const showSkills = ref(false)
 const showWorkspaces = ref(false)
+const showFiles = ref(false)
+const activeWorkspace = ref('default')
 const chatViewRef = ref<InstanceType<typeof ChatView>>()
 const needUsername = ref(false)
 const usernameInput = ref('')
 const currentUsername = ref('')
 const sessionId = ref('')
 
-onMounted(() => {
+onMounted(async () => {
   theme.value = initTheme()
   if (hasUsername()) {
     currentUsername.value = getUsername()
@@ -37,6 +40,11 @@ onMounted(() => {
   } else {
     needUsername.value = true
   }
+  try {
+    const resp = await fetch('/api/workspaces')
+    const data = await resp.json()
+    if (data.active) activeWorkspace.value = data.active
+  } catch {}
 })
 
 function onToggleTheme() {
@@ -50,6 +58,11 @@ function onConfigUpdate(c: any) {
 
 function onModelSwitched() {
   config.value.model = '(switched)'
+}
+
+function onWorkspaceSwitched(name: string, sessionId?: string) {
+  activeWorkspace.value = name
+  chatViewRef.value?.resetSession(sessionId)
 }
 
 function onUseSkill(name: string) {
@@ -96,6 +109,9 @@ function submitUsername() {
         <button class="skill-btn" @click="showWorkspaces = true" title="工作空间">
           <span>📂</span>
         </button>
+        <button class="skill-btn" @click="showFiles = true" title="文件浏览">
+          <span>📄</span>
+        </button>
         <button class="skill-btn" @click="showSkills = true" title="技能面板">
           <span>🔧</span>
         </button>
@@ -105,7 +121,8 @@ function submitUsername() {
     <ChatView ref="chatViewRef" @config-update="onConfigUpdate" />
     <StatusBar v-bind="config" />
     <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
-    <WorkspacePanel :visible="showWorkspaces" @close="showWorkspaces = false" />
+    <WorkspacePanel :visible="showWorkspaces" @close="showWorkspaces = false" @switched="onWorkspaceSwitched" />
+    <FileBrowserPanel :visible="showFiles" :workspace="activeWorkspace" @close="showFiles = false" />
   </template>
 </template>
 

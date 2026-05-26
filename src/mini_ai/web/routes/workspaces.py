@@ -50,7 +50,24 @@ async def switch_workspace(body: dict):
         return {"error": f"工作空间 '{name}' 不存在"}
     _raw["active_workspace"] = name
     _config_path.write_text(yaml.dump(_raw, default_flow_style=False, allow_unicode=True), encoding="utf-8")
-    return {"status": "ok", "message": f"已切换到 '{name}'，重启后生效"}
+
+    from .chat import switch_session_base, set_system_prompt, get_latest_session_id
+    from ...context import ContextBuilder
+    from ...memory import MemoryStore
+    from ...skills import SkillLoader
+
+    switch_session_base(ws.ws_dir / "web_sessions")
+
+    store = MemoryStore(ws.ws_dir / "memory_data")
+    ctx = ContextBuilder(DATA_DIR)
+    skill_loader = SkillLoader(DATA_DIR / "skills", [])
+    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
+    set_system_prompt(system_prompt)
+
+    username = body.get("username", "default")
+    latest_sid = get_latest_session_id(username)
+
+    return {"status": "ok", "message": f"已切换到 '{name}'", "session_id": latest_sid}
 
 
 @router.delete("/workspaces/{name}")

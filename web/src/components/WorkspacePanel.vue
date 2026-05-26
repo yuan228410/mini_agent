@@ -29,13 +29,15 @@ async function refresh() {
 }
 
 async function switchTo(name: string) {
-  await fetch('/api/workspaces/switch', {
+  const username = localStorage.getItem('mini_ai_username') || 'default'
+  const resp = await fetch('/api/workspaces/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, username }),
   })
+  const data = await resp.json()
   active.value = name
-  emit('switched', name)
+  emit('switched', name, data.session_id || 'default')
 }
 
 async function create() {
