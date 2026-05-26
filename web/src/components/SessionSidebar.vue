@@ -282,7 +282,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
                 <span class="session-name">{{ s.name || s.preview || '新会话' }}</span>
               </template>
             </div>
-            <div class="session-meta">{{ s.message_count }} 条{{ s.created_at ? ' · ' + relativeTime(s.created_at) : '' }}</div>
+            <div class="session-meta">{{ s.message_count }} 条{{ s.updated_at ? ' · ' + relativeTime(s.updated_at) : '' }}</div>
           </div>
           <div v-if="!(wsSessions[ws.name] || []).length" class="session-empty-sm">暂无会话</div>
         </div>

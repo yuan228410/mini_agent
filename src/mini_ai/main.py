@@ -6,6 +6,7 @@ from . import __version__
 from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, SessionManager
 from .memory.history_db import HistoryDB
+from datetime import datetime
 from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, RequestContext, _raw
 from .context import ContextBuilder
 from .llm import get_usage
@@ -188,8 +189,10 @@ def main():
                 disp.info(f"工作空间 '{ws_name}' 已加载（{len(unarchived)} 条历史）")
             continue
 
-        messages.append({"role": "user", "content": user_input})
+        ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        messages.append({"role": "user", "content": user_input, "timestamp": ts})
         history_db.append("user", user_input)
+        disp.user_label(ts)
 
         msg, _ = run_tool_loop(
             messages, _lead_tool_defs(),
@@ -208,7 +211,8 @@ def main():
             msg = teammate_msg
 
         if msg and msg.get("content"):
-            messages.append({"role": "assistant", "content": msg["content"]})
+            ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+            messages.append({"role": "assistant", "content": msg["content"], "timestamp": ts2})
             history_db.append("assistant", msg["content"])
 
         cleanup_inbox(bus)

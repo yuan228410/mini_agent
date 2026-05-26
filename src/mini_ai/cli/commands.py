@@ -75,7 +75,9 @@ class CommandHandler:
             for i, msg in enumerate(unarchived, 1):
                 role = msg.get("role", "?")
                 text = (msg.get("content") or "")[:100]
-                self.disp.info(f"  [{i}] {role}: {text}")
+                ts = msg.get("timestamp", "")
+                ts_display = f" {ts[2:].replace(chr(84), chr(32))}" if ts else ""
+                self.disp.info(f"  [{i}] {role}{ts_display}: {text}")
             return "continue"
 
         if user_input == "/model":

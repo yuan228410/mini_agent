@@ -15,6 +15,7 @@ interface Message {
   thinking?: { chars: number; elapsed: number; content: string }
   tools?: { name: string; args: string; result: string; elapsed: number }[]
   streaming?: boolean
+  timestamp?: string
 }
 
 interface SessionState {
@@ -143,7 +144,7 @@ async function restoreHistory(sid: string, ws?: string) {
         if (m.thinking && typeof m.thinking === 'object') prev.thinking = m.thinking
         else if (m.thinking && typeof m.thinking === 'string') prev.thinking = { chars: m.thinking.length, elapsed: 0, content: m.thinking }
       } else {
-        const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '' }
+        const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' }
         if (m.thinking) {
           if (typeof m.thinking === 'object') msg.thinking = m.thinking
           else if (typeof m.thinking === 'string') msg.thinking = { chars: m.thinking.length, elapsed: 0, content: m.thinking }
@@ -277,7 +278,7 @@ async function sendMessage(text: string) {
   s._currentThinking = ''
   s.isStreaming = true
   isStreaming.value = true
-  s.messages = [...s.messages, { role: 'user', content: text }, { role: 'assistant', content: '', tools: [], streaming: true }]
+  s.messages = [...s.messages, { role: 'user', content: text, timestamp: new Date().toISOString().slice(0,19) }, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
   messages.value = [...s.messages]
 
   emit('status-change', sid, 'generating')

@@ -73,7 +73,7 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **多会话并行** — 左侧侧边栏管理多个会话，可同时并行 LLM 生成，互不干扰
 - **会话状态指示** — 侧边栏会话项旁显示"生成中"绿点脉动动画
 - **多用户支持** — 用户名认证，按用户隔离数据目录，首次访问输入用户名
-- **会话文件持久化** — 消息写入 JSONL 文件，后端重启自动恢复历史
+- **会话文件持久化** — 消息存入 HistoryDB（SQLite），后端重启自动恢复历史
 - **中断生成** — 可中断 LLM 生成（服务端真正停止），点击 ⏹ 停止按钮
 - **会话持久化** — 刷新页面自动恢复历史消息（session_id 存 localStorage）
 - **工作空间管理** — 侧边栏顶部显示当前工作空间，支持创建/切换/删除/移除工作空间
@@ -220,9 +220,9 @@ data: {"error": "错误信息"}
 - 无密码认证，适合本地/内网自托管场景
 
 **会话文件持久化：**
-- 消息写入 JSONL 文件，后端重启后自动从文件恢复
-- 会话创建时写首行 system prompt，重置时清空重建
-- 关联工作空间：`~/.mini_ai/users/<username>/workspaces/<ws>/web_sessions/<sid>.jsonl`
+- 消息存入 HistoryDB（SQLite），后端重启后自动从数据库恢复
+- 会话创建时初始化 HistoryDB，重置时清空重建
+- 关联工作空间：`~/.mini_ai/users/<username>/workspaces/<ws>/web_sessions/<sid>/memory_data/history.db`
 
 **工作空间管理：**
 - 每个用户独立的工作空间列表，按 `~/.mini_ai/workspaces/<username>/` 隔离
@@ -246,6 +246,7 @@ data: {"error": "错误信息"}
 - **MemoryStore** — 三层记忆（情景层/长期层/用户画像），存放在 `<session_dir>/<sid>/memory_data/`
 - **HistoryDB** — SQLite 历史存储，支持全文搜索（`/api/chat/search`）
 - **Compactor** — 上下文超阈值自动压缩 + 记忆更新，复用 `config.yaml` 的 `compactor` 配置
+- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.keep_recent`（默认 50）控制上下文构建量，两者独立配置
 - **ContextBuilder** — 系统提示词含记忆 + 技能 + 项目规范（CLAUDE.md/AGENTS.md per-workspace 共享）
 - **工具绑定** — `remember`/`recall`/`forget`/`search_history` 工具在每轮 `_run_tool_loop_sync` 中动态绑定当前会话实例
 - **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md（通过 ContextBuilder + project_path 读取）

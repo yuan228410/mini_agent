@@ -64,12 +64,12 @@ class HistoryDB:
     def load_unarchived(self) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT role, content, metadata FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
+                "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
                 (self.workspace,),
             ).fetchall()
         results = []
-        for role, content, metadata in rows:
-            msg = {"role": role, "content": content}
+        for role, content, metadata, ts in rows:
+            msg = {"role": role, "content": content, "timestamp": ts[:19] if ts else ""}
             if metadata:
                 try:
                     msg.update(json.loads(metadata))
@@ -113,6 +113,42 @@ class HistoryDB:
             ).fetchall()
 
         return [{"ts": ts, "role": role, "content": content} for ts, role, content in rows]
+
+    def load_all(self, session_id: str = "", limit: int = 0) -> list[dict]:
+        with self._lock:
+            if session_id:
+                if limit > 0:
+                    rows = self._conn.execute(
+                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? AND archived=0 ORDER BY id DESC LIMIT ?) ORDER BY id",
+                        (self.workspace, session_id, limit),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? AND archived=0 ORDER BY id",
+                        (self.workspace, session_id),
+                    ).fetchall()
+            else:
+                if limit > 0:
+                    rows = self._conn.execute(
+                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id DESC LIMIT ?) ORDER BY id",
+                        (self.workspace, limit),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
+                        (self.workspace,),
+                    ).fetchall()
+        results = []
+        for role, content, metadata, ts in rows:
+            msg = {"role": role, "content": content, "timestamp": ts[:19] if ts else ""}
+            if metadata:
+                try:
+                    extra = json.loads(metadata)
+                    msg.update(extra)
+                except json.JSONDecodeError:
+                    pass
+            results.append(msg)
+        return results
 
     def count(self, archived: bool = False) -> int:
         with self._lock:

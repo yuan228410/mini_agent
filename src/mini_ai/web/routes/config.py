@@ -9,7 +9,7 @@ router = APIRouter()
 
 @router.get("/config")
 async def get_config(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default")):
-    _, messages = _get_or_create_session(username, session_id)
+    _, messages = _get_or_create_session(username, session_id, workspace=None)
     usage = _LAST_USAGE.get(f"{username}:{session_id}", {"prompt_tokens": 0, "completion_tokens": 0})
     model_name = _SESSION_MODELS.get(f"{username}:{session_id}")
     model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG

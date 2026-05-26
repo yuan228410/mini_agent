@@ -72,6 +72,7 @@ export interface HistoryMessage {
   role: string
   content?: string
   thinking?: any
+  timestamp?: string
 }
 
 export interface HistoryResponse {
@@ -85,6 +86,7 @@ export interface SessionInfo {
   message_count: number
   preview: string
   created_at: string
+  updated_at: string
   status: 'idle' | 'generating'
 }
 

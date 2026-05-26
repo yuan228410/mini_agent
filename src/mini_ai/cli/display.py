@@ -155,7 +155,7 @@ class Display:
                 self._streaming = True
             print(text, end="", flush=True)
 
-    def text_end(self, full_text: str | None = None):
+    def text_end(self, full_text: str | None = None, timestamp: str = ""):
         content = full_text if full_text is not None else self._stream_buf
         if not content:
             self._reset_stream()
@@ -163,7 +163,8 @@ class Display:
 
         if self._had_thinking:
             self.console.print()
-            self.console.print(Text("Assistant", style="bold"))
+            ts = f" [{timestamp[2:].replace('T', ' ')}]" if timestamp else ""
+            self.console.print(Text(f"Assistant{ts}", style="bold"))
             self._had_thinking = False
 
         if _IS_TTY and self._streaming:
@@ -233,9 +234,14 @@ class Display:
             suffix = "..." if len(result) > 200 else ""
             self.console.print(Text(f"    ✓ → {preview}{suffix} ({elapsed:.1f}s)", style="green"))
 
-    def assistant_prefix(self):
+    def user_label(self, timestamp: str = ""):
+        ts = f" [{timestamp[2:].replace('T', ' ')}]" if timestamp else ""
+        self.console.print(Text(f"You{ts}", style="bold cyan"))
+
+    def assistant_prefix(self, timestamp: str = ""):
+        ts = f" [{timestamp[2:].replace('T', ' ')}]" if timestamp else ""
         self.console.print()
-        self.console.print(Text("Assistant", style="bold"))
+        self.console.print(Text(f"Assistant{ts}", style="bold"))
 
     def info(self, text: str):
         self.console.print(Text(text, style="dim"))

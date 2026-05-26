@@ -396,13 +396,29 @@ max_turns: 10
 
 ### 记忆系统 (memory/)
 
-**存储模型：**
+四层存储模型，从短期到长期逐层提炼，确保 Agent 在长对话中不丢失关键信息：
 
 | 层级 | 存储 | 生命周期 | 说明 |
 |------|------|----------|------|
-| 对话历史 | `history.db`（SQLite） | 持久 | 全量对话记录，支持全文搜索，按 workspace 隔离 |
-| 情景层 | `YYYY-MM-DD.md` | 按日 | 每日对话的关键信息摘要 |
-| 长期层 | `MEMORY.md` | 持久 | 核心目标、重要决策、项目背景 |
+| 对话历史 | `history.db`（SQLite） | 持久 | 全量对话记录，支持 FTS5 全文搜索，按 workspace 隔离。压缩后旧消息标记 `archived`，数据不删除 |
+| 情景层 | `YYYY-MM-DD.md` | 按日 | 每日情景记忆短文——当天对话的关键事实、结论、待办。每天一个文件，用于快速回顾当日上下文 |
+| 长期层 | `MEMORY.md` | 持久 | 跨对话的长期记忆——核心目标、重要决策、项目背景、关键技术选型等。压缩时由 LLM 增量更新 |
+| 用户画像 | `USER.md` | 持久 | 用户偏好、习惯、知识背景。帮助 Agent 更好地理解用户需求风格 |
+
+**数据流：**
+
+```
+用户发消息 → 存入 history.db（未归档）
+              ↓
+         token 超阈值？
+           是 → 触发压缩
+                ├─ 旧轮次摘要 → 写入情景记忆（今日 .md）
+                ├─ 重要信息提炼 → 增量更新长期记忆（MEMORY.md）
+                ├─ 用户特征提取 → 增量更新用户画像（USER.md）
+                ├─ 旧消息标记 archived（不删除，仍可搜索）
+                └─ 重建 system prompt（含最新记忆 + 项目规范）
+           否 → 继续
+```
 
 **压缩触发条件：**
 - `prompt_tokens > context_length × context_usage_threshold`（API 返回值）
@@ -415,14 +431,18 @@ max_turns: 10
 - 最近 N 轮保持完整（按字符阈值动态决定保留多少轮）
 - 压缩后结构：`system → user1 → summary1 → user2 → summary2 → ... → 最近完整轮次`
 
-**压缩产出（三层记忆更新）：**
-1. `<episode>` — 写入今日情景记忆
-2. `<updated_memory>` — 更新长期记忆
-3. `<updated_user>` — 更新用户画像
+**压缩产出（三层记忆同时更新）：**
+1. `<episode>` — 写入今日情景记忆（`YYYY-MM-DD.md`，追加模式）
+2. `<updated_memory>` — 增量更新长期记忆（`MEMORY.md`，保留旧要点 + 新增/更新内容）
+3. `<updated_user>` — 增量更新用户画像（`USER.md`，同上）
+
+**记忆在上下文中的体现：**
+
+压缩后重建系统提示词时，长期记忆、今日情景、用户画像会被注入 system prompt，确保 Agent 在后续对话中"记得"之前的对话内容。项目规范（CLAUDE.md/AGENTS.md）也一并注入。
 
 **主动记忆工具：**
-- `remember(content, category)` — Agent 随时主动写入长期记忆
-- `recall(keyword?)` — 检索长期记忆
+- `remember(content, category)` — Agent 随时主动写入长期记忆（不需要等压缩触发）
+- `recall(keyword?)` — 检索长期记忆（模糊匹配）
 - `forget(keyword)` — 删除过期记忆
 
 ### 上下文组装 (context.py)
@@ -519,6 +539,9 @@ thinking:
 display:
   thinking_mode: collapsed  # 思考展示：collapsed / expanded / hidden
   tool_detail: summary      # 工具展示：summary / minimal / full
+
+web:
+  history_limit: 200        # Web 端加载历史消息条数（前端展示），compactor.keep_recent 控制上下文构建量
 
 runner:
   context_usage_limit: 0.88  # 子代理/队友上下文安全阀

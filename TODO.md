@@ -2,13 +2,19 @@
 
 ## 功能
 
+- [ ] **MCP 协议支持** — 实现 Model Context Protocol 客户端，支持连接 MCP 服务器获取工具/资源/提示词
+- [ ] **计划任务机制** — 支持定时/周期性任务调度（如定时摘要、定期检查），类似 cron 的 Agent 内置调度器
 - [ ] **工具结果缓存** — 同一轮对话中同参数工具调用走 LRU 缓存，减少重复 LLM 往返
 - [ ] **危险操作拦截** — `rm -rf` / `git push -f` 等操作在 RULES 中约束提示，或在 `run_command` 中加黑名单检测
 - [ ] **会话导出** — `/export` 命令将会话导出为 Markdown
 
 ## Web 界面
 
-- [x] **会话文件持久化** — JSONL 文件持久化，重启自动恢复
+- [x] **消息时间戳** — 每条消息含 timestamp，CLI/Web 均显示完整时间（26-05-27 14:30:25）
+- [x] **Web 历史加载量独立配置** — `web.history_limit`（默认 200）控制前端展示，`compactor.keep_recent`（默认 50）控制上下文构建
+- [x] **HistoryDB SQL 修复** — `load_all` 子查询缺少 id 列导致加载失败，已修复
+
+- [x] **会话文件持久化** — HistoryDB（SQLite）持久化，重启自动恢复
 - [x] **WebSocket 模式** — WebSocket 通信，支持中断生成
 - [x] **多用户并发安全** — RequestContext 隔离：每请求独立 model_config/display/http_session，per-session 模型切换
 - [x] **多会话并行** — 左侧侧边栏管理多个会话，可同时并行 LLM 生成

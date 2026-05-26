@@ -17,6 +17,7 @@ const props = defineProps<{
     thinking?: { chars: number; elapsed: number; content: string }
     tools?: { name: string; args: string; result: string; elapsed: number }[]
     streaming?: boolean
+    timestamp?: string
   }
 }>()
 
@@ -37,11 +38,16 @@ const renderedContent = computed(() => {
 
 const isUser = computed(() => props.message.role === 'user')
 const label = computed(() => props.message.role === 'user' ? 'You' : 'mini_ai')
+const timeLabel = computed(() => {
+  const ts = props.message.timestamp
+  if (!ts) return ''
+  return ts.length > 2 ? ts.slice(2).replace('T', ' ') : ts
+})
 </script>
 
 <template>
   <div class="message" :class="{ 'message--user': isUser, 'message--assistant': !isUser }">
-    <div class="message-label">{{ label }}</div>
+    <div class="message-label">{{ label }}<span v-if="timeLabel" class="message-time">{{ timeLabel }}</span></div>
     <ThinkingBlock v-if="message.thinking" :thinking="message.thinking" />
     <ToolCallBlock v-for="(tool, i) in message.tools" :key="i" :tool="tool" />
     <div v-if="message.content" class="message-body" v-html="renderedContent"></div>
@@ -64,8 +70,24 @@ const label = computed(() => props.message.role === 'user' ? 'You' : 'mini_ai')
   text-align: right;
 }
 
-.message--user .message-label {
+.message--user .message-time {
+  font-weight: 400;
+  font-size: 0.7rem;
+  margin-left: 0.5rem;
+  color: var(--fg-muted);
+  opacity: 0.6;
+}
+
+.message-label {
   justify-content: flex-end;
+}
+
+.message-time {
+  font-weight: 400;
+  font-size: 0.7rem;
+  margin-left: 0.5rem;
+  color: var(--fg-muted);
+  opacity: 0.6;
 }
 
 .message-label {

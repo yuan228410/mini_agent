@@ -1,4 +1,4 @@
-"""聊天接口 — WebSocket 模式，多用户，JSONL 持久化，多会话并行"""
+"""聊天接口 — WebSocket 模式，多用户，HistoryDB 持久化，多会话并行"""
 import asyncio
 import json
 import threading
@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, RequestContext, get_model_config, user_data_dir
+from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, WEB, RequestContext, get_model_config, user_data_dir
 from ...llm import get_usage, chat as llm_chat
 from ...runner import run_tool_loop
 from ...tools import get_definitions, register_memory_tools, register_history_tools
@@ -105,8 +105,9 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     user_memory_dir = user_data_dir(username) / "memory"
     user_store = MemoryStore(user_memory_dir)
 
-    sf = _session_file(username, sid, base)
-    session_memory_dir = sf.parent / sid / "memory_data"
+    session_dir = _user_dir(username, base) / sid
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_memory_dir = session_dir / "memory_data"
     session_memory_dir.mkdir(parents=True, exist_ok=True)
 
     history_db = HistoryDB(session_memory_dir / "history.db", workspace=sid[:15])
@@ -168,9 +169,6 @@ def _user_dir(username: str, base: Path | None = None) -> Path:
     return base
 
 
-def _session_file(username: str, session_id: str, base: Path | None = None) -> Path:
-    return _user_dir(username, base) / f"{session_id}.jsonl"
-
 
 def _parse_created_at(sid: str) -> str:
     try:
@@ -178,6 +176,10 @@ def _parse_created_at(sid: str) -> str:
         return dt.isoformat()
     except (ValueError, IndexError):
         return ""
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def _build_meta(sid: str, messages: list[dict], username: str) -> dict:
@@ -193,6 +195,7 @@ def _build_meta(sid: str, messages: list[dict], username: str) -> dict:
         "message_count": len(non_system),
         "preview": first_user,
         "created_at": _parse_created_at(sid),
+        "updated_at": next((m.get("timestamp", "") for m in reversed(non_system) if m.get("timestamp")), _parse_created_at(sid)),
         "status": _SESSION_STATUS.get(cache_key, "idle"),
     }
 
@@ -207,38 +210,10 @@ def _update_meta_cache(username: str, sid: str, messages: list[dict] | None = No
 
 _MAX_HISTORY_LOAD = 2000
 
-def _load_from_file(username: str, session_id: str, base: Path | None = None) -> list[dict] | None:
-    path = _session_file(username, session_id, base)
-    if not path.exists():
-        return None
-    messages = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    try:
-                        messages.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-                    if len(messages) > _MAX_HISTORY_LOAD:
-                        break
-    except Exception:
-        pass
-    return messages if messages else None
 
 
-def _append_to_file(username: str, session_id: str, msg: dict, base: Path | None = None):
-    path = _session_file(username, session_id, base)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
 
 
-def _write_session_file(username: str, session_id: str, messages: list[dict], base: Path | None = None):
-    path = _session_file(username, session_id, base)
-    with open(path, "w", encoding="utf-8") as f:
-        for m in messages:
-            f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
 
 def _ensure_user_sessions(username: str) -> dict[str, list[dict]]:
@@ -248,7 +223,29 @@ def _ensure_user_sessions(username: str) -> dict[str, list[dict]]:
         return _SESSIONS[username]
 
 
-def _get_or_create_session(username: str, session_id: str | None, base: Path | None = None) -> tuple[str, list[dict]]:
+def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> list[dict] | None:
+    try:
+        comp = _get_or_create_components(username, sid, base, workspace)
+        return comp["history_db"].load_all(sid, limit=WEB.get("history_limit", 200))
+    except Exception as e:
+        logger.error(f"[Web] _load_from_db error: {e}", exc_info=True)
+        return None
+
+
+def _rebuild_tool_messages(messages: list[dict]) -> list[dict]:
+    result = []
+    for m in messages:
+        result.append(m)
+        if m.get("role") == "assistant" and m.get("tool_calls"):
+            for tc in m["tool_calls"]:
+                tool_msg = {"role": "tool", "content": tc.pop("_result", ""), "name": tc.get("function", {}).get("name", "")}
+                if tc.get("id"):
+                    tool_msg["tool_call_id"] = tc["id"]
+                result.append(tool_msg)
+    return result
+
+
+def _get_or_create_session(username: str, session_id: str | None, base: Path | None = None, workspace: str | None = None) -> tuple[str, list[dict]]:
     with _sessions_lock:
         if username not in _SESSIONS:
             _SESSIONS[username] = {}
@@ -257,8 +254,12 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             existing = user_sessions[session_id]
             if len(existing) > 1:
                 return session_id, existing
-            loaded = _load_from_file(username, session_id, base)
+            loaded = _load_from_db(username, session_id, base, workspace)
             if loaded and len(loaded) > 1:
+                if loaded[0].get("role") != "system":
+                    prompt = _build_system_prompt(username, session_id, base, workspace) or _SYSTEM_PROMPT
+                    loaded.insert(0, {"role": "system", "content": prompt, "name": "新会话", "timestamp": _now()})
+                loaded = _rebuild_tool_messages(loaded)
                 user_sessions[session_id] = loaded
                 _update_meta_cache(username, session_id, loaded)
                 return session_id, loaded
@@ -268,19 +269,27 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             existing = user_sessions[sid]
             if len(existing) > 1:
                 return sid, user_sessions[sid]
-            loaded = _load_from_file(username, sid, base)
+            loaded = _load_from_db(username, sid, base, workspace)
             if loaded and len(loaded) > 1:
+                if loaded[0].get("role") != "system":
+                    prompt = _build_system_prompt(username, sid, base, workspace) or _SYSTEM_PROMPT
+                    loaded.insert(0, {"role": "system", "content": prompt, "name": "新会话", "timestamp": _now()})
+                loaded = _rebuild_tool_messages(loaded)
                 user_sessions[sid] = loaded
                 _update_meta_cache(username, sid, loaded)
                 return sid, user_sessions[sid]
             return sid, user_sessions[sid]
-        loaded = _load_from_file(username, sid, base)
+        loaded = _load_from_db(username, sid, base, workspace)
         if loaded:
+            if not loaded or loaded[0].get("role") != "system":
+                prompt = _build_system_prompt(username, sid, base, workspace) or _SYSTEM_PROMPT
+                loaded.insert(0, {"role": "system", "content": prompt, "name": "新会话", "timestamp": _now()})
+            loaded = _rebuild_tool_messages(loaded)
             user_sessions[sid] = loaded
             _update_meta_cache(username, sid, loaded)
             return sid, user_sessions[sid]
         prompt = _build_system_prompt(username, sid, base) or _SYSTEM_PROMPT
-        user_sessions[sid] = [{"role": "system", "content": prompt, "name": "新会话"}]
+        user_sessions[sid] = [{"role": "system", "content": prompt, "name": "新会话", "timestamp": _now()}]
         _update_meta_cache(username, sid, user_sessions[sid])
     return sid, user_sessions[sid]
 
@@ -298,7 +307,8 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         set_session(session_key)
 
         base = _resolve_base(username, workspace)
-        comp = _get_or_create_components(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
+        comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
+        comp = _get_or_create_components(username, comp_key, base, workspace)
         register_memory_tools(comp["store"])
         register_history_tools(comp["history_db"])
 
@@ -311,8 +321,9 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
         user_msgs = [m for m in messages if m["role"] == "user"]
         if user_msgs:
-            last_user = user_msgs[-1].get("content", "")
-            comp["history_db"].append("user", last_user)
+            last_user = user_msgs[-1]
+            user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
+            comp["history_db"].append("user", last_user.get("content", ""), session_id=comp_key, metadata=json.dumps(user_meta) if user_meta else "")
 
         msg, _ = run_tool_loop(
             messages, tools,
@@ -327,8 +338,22 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             m.get("role") == "assistant" and m.get("content") == msg["content"]
             for m in messages[-3:]
         ):
-            messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking")})
-            comp["history_db"].append("assistant", msg["content"])
+            asst_ts = _now()
+            messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts})
+            asst_meta = {}
+            if msg.get("thinking"):
+                asst_meta["thinking"] = msg["thinking"]
+            if msg.get("tool_calls"):
+                tool_results_map = {m.get("name", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
+                enriched = []
+                for tc in msg["tool_calls"]:
+                    tc_copy = {k: v for k, v in tc.items()}
+                    fn_name = tc.get("function", {}).get("name", "")
+                    if fn_name and fn_name in tool_results_map:
+                        tc_copy["_result"] = tool_results_map[fn_name][:500]
+                    enriched.append(tc_copy)
+                asst_meta["tool_calls"] = enriched
+            comp["history_db"].append("assistant", msg["content"], session_id=comp_key, metadata=json.dumps(asst_meta) if asst_meta else "")
 
         usage = get_usage()
         if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
@@ -355,7 +380,6 @@ async def create_session(body: dict):
     system_prompt = _build_system_prompt(username, sid, base, workspace) or _SYSTEM_PROMPT
     user_sessions[sid] = [{"role": "system", "content": system_prompt, "name": "新会话"}]
     _inject_todos(user_sessions[sid])
-    _write_session_file(username, sid, user_sessions[sid], base)
     _update_meta_cache(username, sid, user_sessions[sid])
     return {"session_id": sid}
 
@@ -367,18 +391,21 @@ async def list_sessions(username: str = Query(default="default"), workspace: str
     if not user_dir.exists():
         return {"sessions": []}
     sessions = []
-    for path in sorted(user_dir.glob("*.jsonl"), key=lambda f: f.name, reverse=True):
-        sid = path.stem
+    for d in sorted(user_dir.iterdir(), key=lambda d: d.name, reverse=True):
+        if not d.is_dir() or d.name.startswith('.'):
+            continue
+        sid = d.name
         cache_key = f"{username}:{sid}"
         cached = _META_CACHE.get(cache_key)
         if cached and cached.get("message_count", 0) > 0:
             cached["status"] = _SESSION_STATUS.get(cache_key, "idle")
             sessions.append(cached)
             continue
-        msgs = _load_from_file(username, sid, base) or []
+        msgs = _load_from_db(username, sid, base, workspace) or []
         meta = _build_meta(sid, msgs, username)
         _META_CACHE[cache_key] = meta
         sessions.append(meta)
+    sessions.sort(key=lambda s: s.get("updated_at", "") or s.get("created_at", ""), reverse=True)
     return {"sessions": sessions}
 
 
@@ -391,13 +418,10 @@ async def delete_session(body: dict):
     with _sessions_lock:
         user_sessions = _SESSIONS.get(username, {})
         user_sessions.pop(session_id, None)
-    path = _session_file(username, session_id)
-    if path.exists():
-        path.unlink()
-    session_memory_dir = path.parent / session_id / "memory_data"
-    if session_memory_dir.exists():
+    session_dir = _user_dir(username) / session_id
+    if session_dir.exists():
         import shutil
-        shutil.rmtree(session_memory_dir, ignore_errors=True)
+        shutil.rmtree(session_dir, ignore_errors=True)
     _SESSION_COMPONENTS.pop(f"{username}:{session_id}", None)
     _update_meta_cache(username, session_id)
     _SESSION_STATUS.pop(f"{username}:{session_id}", None)
@@ -411,9 +435,8 @@ async def rename_session(body: dict):
     name = body.get("name", "").strip()
     if not session_id or not name:
         return {"error": "参数不完整"}
-    _, messages = _get_or_create_session(username, session_id)
+    _, messages = _get_or_create_session(username, session_id, workspace=None)
     messages[0]["name"] = name
-    _write_session_file(username, session_id, messages)
     _update_meta_cache(username, session_id, messages)
     return {"status": "ok", "name": name}
 
@@ -432,15 +455,17 @@ async def chat_ws_endpoint(ws: WebSocket):
         async with _write_lock:
             try:
                 await ws.send_json(data)
-            except Exception:
+            except Exception as e:
                 pass
 
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None):
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name}")
         _SESSION_WORKSPACE[f"{username}:{sid}"] = ws_name
-        messages = _get_or_create_session(username, sid)[1]
-        messages.append({"role": "user", "content": user_message})
-        _append_to_file(username, sid, {"role": "user", "content": user_message})
+        base = _resolve_base(username, ws_name)
+        messages = _get_or_create_session(username, sid, base, ws_name)[1]
+        ts = _now()
+        messages.append({"role": "user", "content": user_message, "timestamp": ts})
+        _get_or_create_components(username, sid, base, ws_name)
 
         queue: asyncio.Queue = asyncio.Queue()
         loop = asyncio.get_event_loop()
@@ -480,12 +505,11 @@ async def chat_ws_endpoint(ws: WebSocket):
         try:
             result = future.result(timeout=5)
             msg, usage = result if isinstance(result, tuple) else (result, {"prompt_tokens": 0, "completion_tokens": 0})
-        except Exception:
+        except Exception as e:
             msg = None
             usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
         _LAST_USAGE[session_key] = usage
-        _write_session_file(username, sid, messages)
 
         _SESSION_ABORTS.pop(session_key, None)
         _update_meta_cache(username, sid, messages)
@@ -531,7 +555,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         await _send({"event": "error", "data": {"error": "消息不能为空"}})
                         continue
 
-                    sid, _ = _get_or_create_session(username, session_id)
+                    sid, _ = _get_or_create_session(username, session_id, workspace=None)
                     if f"{username}:{sid}" in _active_tasks:
                         await _send({"event": "error", "data": {"error": "该会话正在生成中", "session_id": sid}})
                         continue
@@ -558,7 +582,7 @@ async def chat_ws_endpoint(ws: WebSocket):
 
     try:
         await reader_task
-    except Exception:
+    except Exception as e:
         pass
     finally:
         ws_closed = True
@@ -588,28 +612,21 @@ async def chat_search(keyword: str = Query(default=""), session_id: str = Query(
 @router.get("/chat/history")
 async def chat_history(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default"), workspace: str = Query(default="")):
     base = _resolve_base(username, workspace or None)
-    sid, messages = _get_or_create_session(username, session_id, base)
+    sid, messages = _get_or_create_session(username, session_id, base, workspace or None)
     logger.info(f"[chat_history] sid={sid} ws={workspace} base={base} msgs={len(messages)}")
     history = []
-    tool_results: dict[str, str] = {}
-    for m in messages:
-        if m["role"] == "tool" and m.get("name"):
-            tool_results[m["name"]] = m.get("content", "")
-
     for m in messages:
         if m["role"] in ("system", "tool"):
             continue
         entry: dict = {"role": m["role"]}
         if m.get("content"):
             entry["content"] = m["content"]
+        if m.get("timestamp"):
+            entry["timestamp"] = m["timestamp"]
         if m.get("thinking"):
             entry["thinking"] = m["thinking"]
         if m.get("tool_calls"):
             entry["tool_calls"] = m["tool_calls"]
-            for tc in entry["tool_calls"]:
-                fn_name = tc.get("function", {}).get("name", "")
-                if fn_name and fn_name in tool_results:
-                    tc["_result"] = tool_results[fn_name]
         history.append(entry)
     return {"session_id": session_id, "history": history}
 
@@ -621,12 +638,11 @@ async def chat_reset(body: dict | None = None):
     session_id = body.get("session_id", _DEFAULT_SESSION)
     workspace = body.get("workspace", "")
     base = _resolve_base(username, workspace or None)
-    sid, messages = _get_or_create_session(username, session_id, base)
+    sid, messages = _get_or_create_session(username, session_id, base, workspace or None)
     system_content = messages[0]["content"]
     old_name = messages[0].get("name", "")
     user_sessions = _ensure_user_sessions(username)
-    user_sessions[sid] = [{"role": "system", "content": system_content, "name": old_name or "新会话"}]
+    user_sessions[sid] = [{"role": "system", "content": system_content, "name": old_name or "新会话", "timestamp": _now()}]
     _inject_todos(user_sessions[sid])
-    _write_session_file(username, sid, user_sessions[sid])
     _update_meta_cache(username, sid, user_sessions[sid])
     return {"status": "ok", "session_id": sid}

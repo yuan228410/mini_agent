@@ -280,7 +280,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
 | `/load <名称>` | 加载已保存的会话，恢复上下文（保留当前 system prompt） |
 | `/sessions` | 列出所有已保存会话（标记当前） |
 
-**存储格式：** `memory_data/sessions/<名称>.jsonl`，每行一条消息 JSON，首条含 `ts` 时间戳。
+**存储格式：** `memory_data/history.db`（SQLite），支持全文搜索（FTS5），按 workspace 隔离。
 
 ### 7. 上下文组装 (context.py)
 
@@ -415,7 +415,7 @@ FastAPI + WebSocket 后端，Vue 3 + Vite 前端，`mini-ai --web` 启动。同�
 - 请求上下文隔离：`RequestContext` 封装 model_config/display/http_session，每请求独立，多用户并发安全
 - Usage 统计准确：`_run_tool_loop_sync` 返回 `(msg, usage)` 元组，在 executor 线程内读取 `_get_usage()`，避免跨线程零值
 - Per-session 模型切换：`_SESSION_MODELS` 记录每个会话的模型选择，不修改全局 MODEL_CONFIG
-- 会话文件持久化：消息 append 写入 JSONL，重启自动恢复；多会话并行（`_SESSION_LOCKS` per-session 串行，跨会话并行）
+- 会话文件持久化：消息存入 HistoryDB（SQLite），重启自动恢复；`web.history_limit` 控制前端展示量，`compactor.keep_recent` 控制上下文构建量；多会话并行（`_SESSION_LOCKS` per-session 串行，跨会话并行）
 - 工作空间管理：按用户隔离（`workspaces/<username>/`），支持创建/切换/删除/移除，项目规范（CLAUDE.md/AGENTS.md）per-workspace 共享
 
 详细设计、组件架构、API 接口、WebSocket 协议等见 [WEB.md](WEB.md)。
