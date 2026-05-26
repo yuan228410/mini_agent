@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
   streamChat, ensureWs, onWsEvent, wsChat, abortChat, closeWs,
-  getTransport, getConfig, createSession, getHistory, resetChat,
+  getTransport, getConfig, createSession, getHistory, resetChat, renameSession,
+  getSessions, getWorkspaces,
   type SSEEvent, type HistoryMessage,
 } from '../api'
-
-let _wsOk = false
 import MessageItem from './MessageItem.vue'
 import InputBar from './InputBar.vue'
 
@@ -18,25 +17,64 @@ interface Message {
   streaming?: boolean
 }
 
+interface SessionState {
+  messages: Message[]
+  isStreaming: boolean
+  _currentContent: string
+  _currentThinking: string
+}
+
 const SESSION_KEY = 'mini-ai-session-id'
+const _states = new Map<string, SessionState>()
+const activeSessionId = ref('')
 const messages = ref<Message[]>([])
 const isStreaming = ref(false)
-const chatContainer = ref<HTMLElement>()
-const sessionId = ref('')
 const transport = ref('ws')
-const emit = defineEmits(['config-update'])
+const chatContainer = ref<HTMLElement>()
+const props = defineProps<{ workspace?: string }>()
+const emit = defineEmits(['config-update', 'status-change'])
 
 let _unsubWs: (() => void) | null = null
 
-onMounted(async () => {
-  transport.value = await getTransport()
-  await initSession()
-  await fetchConfig()
+function _state(sid: string): SessionState {
+  if (!_states.has(sid)) {
+    _states.set(sid, { messages: [], isStreaming: false, _currentContent: '', _currentThinking: '' })
+  }
+  return _states.get(sid)!
+}
 
-  if (transport.value === 'ws') {
-    const ok = await ensureWs()
+function _save() {
+  const s = _states.get(activeSessionId.value)
+  if (!s) return
+  s.messages = [...messages.value]
+  s.isStreaming = isStreaming.value
+}
+
+function _load(sid: string) {
+  const s = _state(sid)
+  if (sid === activeSessionId.value) {
+    messages.value = [...s.messages]
+    isStreaming.value = s.isStreaming
+  }
+}
+
+let _initialized = false
+
+onMounted(async () => {
+  transport.value = 'ws'
+  _unsubWs = onWsEvent(handleWsEvent)
+  ensureWs().then(ok => {
     if (!ok) transport.value = 'sse'
-    _unsubWs = onWsEvent(handleWsEvent)
+  }).catch(() => { transport.value = 'sse' })
+  getTransport().then(t => { transport.value = t }).catch(() => {})
+})
+
+watch(() => props.workspace, (ws) => {
+  if (!ws) return
+  if (!_initialized) {
+    _initialized = true
+    initSession(ws).catch(() => {})
+    fetchConfig().catch(() => {})
   }
 })
 
@@ -45,202 +83,272 @@ onUnmounted(() => {
   closeWs()
 })
 
-async function initSession() {
+async function initSession(ws?: string) {
   const stored = localStorage.getItem(SESSION_KEY)
   if (stored) {
-    sessionId.value = stored
-    await restoreHistory()
+    activeSessionId.value = stored
+    await restoreHistory(stored, ws || props.workspace)
   } else {
     await newSession()
   }
+  preloadAllSessions(ws || props.workspace)
 }
 
-async function newSession() {
+async function preloadAllSessions(ws?: string) {
   try {
-    const resp = await createSession()
-    sessionId.value = resp.session_id
+    const resp = await getSessions(ws || undefined)
+    const sessions = resp.sessions || []
+    for (const s of sessions) {
+      if (s.session_id === activeSessionId.value) continue
+      if (_states.has(s.session_id) && _states.get(s.session_id)!.messages.length > 0) continue
+      restoreHistory(s.session_id, ws).catch(() => {})
+    }
+    const resp2 = await getWorkspaces()
+    for (const w of resp2.workspaces || []) {
+      if (w.name === ws) continue
+      const resp3 = await getSessions(w.name)
+      for (const s of resp3.sessions || []) {
+        if (_states.has(s.session_id) && _states.get(s.session_id)!.messages.length > 0) continue
+        restoreHistory(s.session_id, w.name).catch(() => {})
+      }
+    }
+  } catch {}
+}
+
+async function newSession(ws?: string) {
+  try {
+    const resp = await createSession(ws || props.workspace)
+    activeSessionId.value = resp.session_id
     localStorage.setItem(SESSION_KEY, resp.session_id)
+    _load(resp.session_id)
   } catch {
-    sessionId.value = 'default'
+    activeSessionId.value = 'default'
+    _load('default')
   }
 }
 
-async function restoreHistory() {
+async function restoreHistory(sid: string, ws?: string) {
   try {
-    const resp = await getHistory(sessionId.value)
-    messages.value = resp.history
-      .filter((m: HistoryMessage) => m.role !== 'system')
-      .map((m: HistoryMessage) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content || '',
-        thinking: m.thinking,
-      }))
+    const resp = await getHistory(sid, ws || props.workspace)
+    const raw = (resp.history || []).filter((m: any) => m.role !== 'system' && m.role !== 'tool')
+    const merged: Message[] = []
+    for (const m of raw) {
+      if (m.role === 'assistant' && merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
+        const prev = merged[merged.length - 1]
+        if (m.tool_calls) {
+          const tools = m.tool_calls.map((tc: any) => ({
+            name: tc.function?.name || '?',
+            args: tc.function?.arguments || '',
+            result: tc._result || '',
+            elapsed: 0,
+          }))
+          prev.tools = [...(prev.tools || []), ...tools]
+        }
+        if (m.content) prev.content = (prev.content || '') + m.content
+        if (m.thinking && typeof m.thinking === 'object') prev.thinking = m.thinking
+        else if (m.thinking && typeof m.thinking === 'string') prev.thinking = { chars: m.thinking.length, elapsed: 0, content: m.thinking }
+      } else {
+        const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '' }
+        if (m.thinking) {
+          if (typeof m.thinking === 'object') msg.thinking = m.thinking
+          else if (typeof m.thinking === 'string') msg.thinking = { chars: m.thinking.length, elapsed: 0, content: m.thinking }
+        }
+        if (m.tool_calls && m.role === 'assistant') {
+          msg.tools = m.tool_calls.map((tc: any) => ({
+            name: tc.function?.name || '?',
+            args: tc.function?.arguments || '',
+            result: tc._result || '',
+            elapsed: 0,
+          }))
+        }
+        merged.push(msg)
+      }
+    }
+    const s = _state(sid)
+    s.messages = merged
+    _load(sid)
+    await nextTick()
+    scrollToBottom()
   } catch {
-    messages.value = []
+    _state(sid).messages = []
+    _load(sid)
   }
 }
 
 async function fetchConfig() {
   try {
-    const c = await getConfig(sessionId.value)
+    const c = await getConfig(activeSessionId.value)
     emit('config-update', c)
   } catch {}
 }
 
-// ── WS event handler (persistent connection) ──
-
-let _currentContent = ''
-let _currentThinking = ''
-
 function handleWsEvent(event: SSEEvent) {
-  const msg = messages.value[messages.value.length - 1]
-  if (!msg || msg.role !== 'assistant') return
+  const sid = event.data?.session_id || activeSessionId.value
+  const s = _state(sid)
+
+  _processEvent(s, event)
+
+  if (event.event === 'done' || event.event === 'aborted' || event.event === 'error') {
+    s.isStreaming = false
+    s._currentContent = ''
+    s._currentThinking = ''
+    emit('status-change', sid, 'idle')
+  }
+
+  if (sid === activeSessionId.value) {
+    messages.value = [...s.messages]
+    isStreaming.value = s.isStreaming
+    if (event.event === 'done' || event.event === 'aborted' || event.event === 'error') {
+      fetchConfig()
+    }
+    nextTick(() => scrollToBottom())
+  }
+}
+
+function _processEvent(s: SessionState, event: SSEEvent) {
+  const msg = s.messages[s.messages.length - 1]
 
   switch (event.event) {
     case 'thinking_start':
-      _currentThinking = ''
+      s._currentThinking = ''
       break
     case 'thinking':
-      _currentThinking += event.data.content || ''
+      s._currentThinking += event.data.content || ''
       break
     case 'thinking_end':
-      msg.thinking = {
-        chars: event.data.chars || _currentThinking.length,
-        elapsed: event.data.elapsed || 0,
-        content: _currentThinking,
+      if (msg && msg.role === 'assistant') {
+        msg.thinking = {
+          chars: event.data.chars || s._currentThinking.length,
+          elapsed: event.data.elapsed || 0,
+          content: s._currentThinking,
+        }
       }
-      _currentThinking = ''
+      s._currentThinking = ''
       break
     case 'text':
-      _currentContent += event.data.content || ''
-      msg.content = _currentContent
+      s._currentContent += event.data.content || ''
+      if (msg && msg.role === 'assistant') msg.content = s._currentContent
       break
     case 'tool_start':
-      if (!msg.tools) msg.tools = []
-      msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+      if (msg && msg.role === 'assistant') {
+        if (!msg.tools) msg.tools = []
+        msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+      }
       break
     case 'tool_result':
-      if (msg.tools && msg.tools.length > 0) {
+      if (msg && msg.role === 'assistant' && msg.tools && msg.tools.length > 0) {
         const last = msg.tools[msg.tools.length - 1]
         last.result = event.data.result || ''
         last.elapsed = event.data.elapsed || 0
       }
       break
     case 'done':
-      msg.streaming = false
-      isStreaming.value = false
-      _currentContent = ''
-      if (event.data.session_id) {
-        sessionId.value = event.data.session_id
-        localStorage.setItem(SESSION_KEY, event.data.session_id)
-      }
-      fetchConfig()
+      if (msg) msg.streaming = false
       break
     case 'aborted':
-      msg.streaming = false
-      msg.content += '\n\n⚠ 已中断生成'
-      isStreaming.value = false
-      _currentContent = ''
-      fetchConfig()
+      if (msg) { msg.streaming = false; msg.content += '\n\n⚠ 已中断生成' }
       break
     case 'error':
-      msg.content += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
-      msg.streaming = false
-      isStreaming.value = false
-      _currentContent = ''
-      fetchConfig()
+      if (msg) { msg.streaming = false; msg.content += `\n\n⚠ 错误: ${event.data.error || '未知错误'}` }
       break
   }
-
-  nextTick(() => scrollToBottom())
 }
 
-// ── SSE fallback ──
-
 async function sendViaSSE(text: string) {
+  const sid = activeSessionId.value
   let currentContent = ''
   let currentThinking = ''
 
   try {
-    for await (const event of streamChat(text, sessionId.value)) {
-      const msg = messages.value[messages.value.length - 1]
+    for await (const event of streamChat(text, sid)) {
+      const s = _state(sid)
+      const msg = s.messages[s.messages.length - 1]
       switch (event.event) {
-        case 'thinking_start':
-          currentThinking = ''
-          break
-        case 'thinking':
-          currentThinking += event.data.content || ''
-          break
+        case 'thinking_start': currentThinking = ''; break
+        case 'thinking': currentThinking += event.data.content || ''; break
         case 'thinking_end':
-          msg.thinking = { chars: event.data.chars || currentThinking.length, elapsed: event.data.elapsed || 0, content: currentThinking }
+          if (msg) msg.thinking = { chars: event.data.chars || currentThinking.length, elapsed: event.data.elapsed || 0, content: currentThinking }
           currentThinking = ''
           break
         case 'text':
           currentContent += event.data.content || ''
-          msg.content = currentContent
+          if (msg) msg.content = currentContent
           break
         case 'tool_start':
-          if (!msg.tools) msg.tools = []
-          msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+          if (msg) { if (!msg.tools) msg.tools = []; msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 }) }
           break
         case 'tool_result':
-          if (msg.tools && msg.tools.length > 0) {
+          if (msg && msg.tools && msg.tools.length > 0) {
             const last = msg.tools[msg.tools.length - 1]
-            last.result = event.data.result || ''
-            last.elapsed = event.data.elapsed || 0
+            last.result = event.data.result || ''; last.elapsed = event.data.elapsed || 0
           }
           break
-        case 'done':
-          msg.streaming = false
-          if (event.data.session_id) {
-            sessionId.value = event.data.session_id
-            localStorage.setItem(SESSION_KEY, event.data.session_id)
-          }
-          break
-        case 'error':
-          msg.content += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
-          msg.streaming = false
-          break
+        case 'done': if (msg) msg.streaming = false; break
+        case 'error': if (msg) { msg.streaming = false; msg.content += `\n\n⚠ 错误: ${event.data.error || '未知错误'}` }; break
       }
-      await nextTick()
-      scrollToBottom()
+
+      if (sid === activeSessionId.value) {
+        messages.value = [...s.messages]
+        await nextTick()
+        scrollToBottom()
+      }
     }
   } catch (e: any) {
-    const msg = messages.value[messages.value.length - 1]
-    msg.content += `\n\n⚠ 连接错误: ${e.message}`
-    msg.streaming = false
+    const s = _state(sid)
+    const msg = s.messages[s.messages.length - 1]
+    if (msg) { msg.content += `\n\n⚠ 连接错误: ${e.message}`; msg.streaming = false }
   }
 
-  isStreaming.value = false
-  await fetchConfig()
-}
+  const s = _state(sid)
+  s.isStreaming = false
+  s._currentContent = ''
+  emit('status-change', sid, 'idle')
 
-// ── Send message ──
+  if (sid === activeSessionId.value) {
+    isStreaming.value = false
+    messages.value = [...s.messages]
+    await fetchConfig()
+  }
+}
 
 async function sendMessage(text: string) {
   if (!text.trim() || isStreaming.value) return
 
   if (text.startsWith('/clear')) {
-    await resetChat(sessionId.value)
+    await resetChat(activeSessionId.value)
+    const s = _state(activeSessionId.value)
+    s.messages = []
     messages.value = []
     await fetchConfig()
     return
   }
 
+  const sid = activeSessionId.value
+  _save()
+  const s = _state(sid)
+  s._currentContent = ''
+  s._currentThinking = ''
+  s.isStreaming = true
   isStreaming.value = true
-  _currentContent = ''
-  _currentThinking = ''
+  s.messages = [...s.messages, { role: 'user', content: text }, { role: 'assistant', content: '', tools: [], streaming: true }]
+  messages.value = [...s.messages]
 
-  messages.value.push({ role: 'user', content: text })
-  messages.value.push({ role: 'assistant', content: '', tools: [], streaming: true })
+  emit('status-change', sid, 'generating')
 
   await nextTick()
   scrollToBottom()
 
+  const userMsgCount = s.messages.filter(m => m.role === 'user').length
+  if (userMsgCount === 1) {
+    const firstMsg = s.messages.find(m => m.role === 'user')
+    if (firstMsg) renameSession(sid, firstMsg.content.slice(0, 20)).catch(() => {})
+  }
+
   if (transport.value === 'ws') {
-    _wsOk = await ensureWs()
-    if (_wsOk) {
-      wsChat(text, sessionId.value)
+    let wsOk = false
+    try { wsOk = await ensureWs() } catch { wsOk = false }
+    if (wsOk) {
+      wsChat(text, sid)
     } else {
       transport.value = 'sse'
       await sendViaSSE(text)
@@ -250,12 +358,8 @@ async function sendMessage(text: string) {
   }
 }
 
-function _wsConnected(): boolean {
-  return _wsOk
-}
-
 function stopGeneration() {
-  abortChat()
+  abortChat(activeSessionId.value)
 }
 
 function useSkill(name: string) {
@@ -268,19 +372,24 @@ function scrollToBottom() {
   }
 }
 
-async function resetSession(targetSessionId?: string) {
-  const sid = targetSessionId || 'default'
-  sessionId.value = sid
+async function switchToSession(sid: string, ws?: string) {
+  _save()
+  activeSessionId.value = sid
   localStorage.setItem(SESSION_KEY, sid)
-  messages.value = []
-  await restoreHistory()
+  const s = _state(sid)
+  if (s.messages.length === 0) {
+    await restoreHistory(sid, ws || props.workspace)
+  } else {
+    _load(sid)
+  }
   await fetchConfig()
 }
 
-defineExpose({ useSkill, resetSession })
+defineExpose({ useSkill, switchToSession, activeSessionId })
 </script>
 
 <template>
+  <div class="chat-container">
   <div class="chat-view" ref="chatContainer">
     <div class="messages" v-if="messages.length === 0">
       <div class="empty-state">
@@ -305,9 +414,18 @@ defineExpose({ useSkill, resetSession })
     </button>
     <InputBar :disabled="isStreaming" @send="sendMessage" />
   </div>
+  </div>
 </template>
 
 <style scoped>
+.chat-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 0;
+}
+
 .chat-view {
   flex: 1;
   overflow-y: auto;
@@ -315,9 +433,7 @@ defineExpose({ useSkill, resetSession })
 }
 
 .messages {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 0 1.5rem;
+  padding: 0 3%;
 }
 
 .empty-state {
@@ -331,7 +447,7 @@ defineExpose({ useSkill, resetSession })
 
 .empty-icon {
   width: 64px;
-  height: 64px;
+  height: 72px;
   border-radius: 16px;
   background: var(--accent);
   color: var(--bg);

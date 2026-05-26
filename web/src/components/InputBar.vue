@@ -104,10 +104,9 @@ function onSlashSelect(cmd: CommandInfo) {
 
 .input-wrap {
   display: flex;
-  align-items: flex-end;
-  gap: 0.6rem;
-  max-width: 720px;
-  margin: 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0 3%;
 }
 
 .input-field {
@@ -143,8 +142,9 @@ textarea::placeholder {
 
 .send-btn {
   flex-shrink: 0;
-  width: 42px;
-  height: 42px;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 1px;
   border: none;
   border-radius: 8px;
   background: var(--accent);

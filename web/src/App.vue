@@ -1,14 +1,16 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, nextTick } from 'vue'
 import { initTheme, toggleTheme, type Theme } from './theme'
 import { hasUsername, getUsername, setUsername } from './api'
 import ChatView from './components/ChatView.vue'
+import SessionSidebar from './components/SessionSidebar.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
 import StatusBar from './components/StatusBar.vue'
 import ModelSelector from './components/ModelSelector.vue'
 import SkillPanel from './components/SkillPanel.vue'
-import WorkspacePanel from './components/WorkspacePanel.vue'
 import FileBrowserPanel from './components/FileBrowserPanel.vue'
+
+const SIDEBAR_KEY = 'mini-ai-sidebar-open'
 
 const theme = ref<Theme>('light')
 const config = ref({
@@ -22,11 +24,12 @@ const config = ref({
   session_id: '',
   username: '',
 })
+const showSidebar = ref(true)
 const showSkills = ref(false)
-const showWorkspaces = ref(false)
 const showFiles = ref(false)
-const activeWorkspace = ref('default')
+const activeWorkspace = ref('')
 const chatViewRef = ref<InstanceType<typeof ChatView>>()
+const sidebarRef = ref<InstanceType<typeof SessionSidebar>>()
 const needUsername = ref(false)
 const usernameInput = ref('')
 const currentUsername = ref('')
@@ -34,17 +37,15 @@ const sessionId = ref('')
 
 onMounted(async () => {
   theme.value = initTheme()
+  const saved = localStorage.getItem(SIDEBAR_KEY)
+  if (saved !== null) showSidebar.value = saved === 'true'
+
   if (hasUsername()) {
     currentUsername.value = getUsername()
     needUsername.value = false
   } else {
     needUsername.value = true
   }
-  try {
-    const resp = await fetch('/api/workspaces')
-    const data = await resp.json()
-    if (data.active) activeWorkspace.value = data.active
-  } catch {}
 })
 
 function onToggleTheme() {
@@ -60,9 +61,24 @@ function onModelSwitched() {
   config.value.model = '(switched)'
 }
 
-function onWorkspaceSwitched(name: string, sessionId?: string) {
-  activeWorkspace.value = name
-  chatViewRef.value?.resetSession(sessionId)
+async function onWorkspaceChange(wsName: string | null) {
+  activeWorkspace.value = wsName || ''
+}
+
+async function onSwitchSession(sid: string, wsName: string | null) {
+  activeWorkspace.value = wsName || ''
+  await nextTick()
+  chatViewRef.value?.switchToSession(sid, wsName || undefined)
+  if (sidebarRef.value) sidebarRef.value.setActiveSession(sid)
+}
+
+function onStatusChange(sid: string, status: 'idle' | 'generating') {
+  if (sidebarRef.value) sidebarRef.value.updateSessionStatus(sid, status)
+}
+
+function toggleSidebar() {
+  showSidebar.value = !showSidebar.value
+  localStorage.setItem(SIDEBAR_KEY, String(showSidebar.value))
 }
 
 function onUseSkill(name: string) {
@@ -101,14 +117,14 @@ function submitUsername() {
   <template v-else>
     <header class="app-header">
       <div class="header-left">
+        <button class="sidebar-toggle" @click="toggleSidebar" :title="showSidebar ? '收起侧栏' : '展开侧栏'">
+          <span class="toggle-icon">{{ showSidebar ? '☰' : '☰' }}</span>
+        </button>
         <h1 class="brand">mini_ai</h1>
         <span class="username-badge">{{ currentUsername }}</span>
       </div>
       <div class="header-right">
         <ModelSelector :session-id="sessionId" @switched="onModelSwitched" />
-        <button class="skill-btn" @click="showWorkspaces = true" title="工作空间">
-          <span>📂</span>
-        </button>
         <button class="skill-btn" @click="showFiles = true" title="文件浏览">
           <span>📄</span>
         </button>
@@ -118,10 +134,19 @@ function submitUsername() {
         <ThemeToggle :theme="theme" @toggle="onToggleTheme" />
       </div>
     </header>
-    <ChatView ref="chatViewRef" @config-update="onConfigUpdate" />
+    <div class="main-area">
+      <SessionSidebar
+        ref="sidebarRef"
+        :visible="showSidebar"
+        @switch-session="onSwitchSession"
+        @status-change="onStatusChange"
+        @toggle="toggleSidebar"
+        @workspace-change="onWorkspaceChange"
+      />
+      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" />
+    </div>
     <StatusBar v-bind="config" />
     <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
-    <WorkspacePanel :visible="showWorkspaces" @close="showWorkspaces = false" @switched="onWorkspaceSwitched" />
     <FileBrowserPanel :visible="showFiles" :workspace="activeWorkspace" @close="showFiles = false" />
   </template>
 </template>
@@ -231,7 +256,26 @@ function submitUsername() {
 .header-left {
   display: flex;
   align-items: center;
-  gap: 1rem;
+  gap: 0.8rem;
+}
+
+.sidebar-toggle {
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-size: 0.9rem;
+}
+
+.sidebar-toggle:hover {
+  border-color: var(--accent);
+  background: var(--bg-thinking);
 }
 
 .brand {
@@ -279,5 +323,11 @@ function submitUsername() {
 .skill-btn:hover {
   border-color: var(--accent);
   background: var(--bg-thinking);
+}
+
+.main-area {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
 }
 </style>

@@ -67,8 +67,18 @@ def main():
             print(f"提示: 前端未构建，请先执行: cd web && pnpm install && pnpm build")
             print(f"      开发模式可分别启动后端和前端 (pnpm dev)")
         print(f"mini_ai Web 界面启动: http://localhost:{args.port}")
+        import signal
         app = create_app()
-        uvicorn.run(app, host="0.0.0.0", port=args.port)
+        config = uvicorn.Config(app, host="0.0.0.0", port=args.port, timeout_graceful_shutdown=3)
+        server = uvicorn.Server(config)
+        original_sigint = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, lambda sig, frame: signal.raise_signal(signal.SIGTERM))
+        try:
+            server.run()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            signal.signal(signal.SIGINT, original_sigint)
         return
     disp = Display(
         thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),

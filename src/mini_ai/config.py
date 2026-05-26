@@ -11,6 +11,15 @@ DATA_DIR = Path(os.environ.get("MINI_AI_DATA", Path.home() / ".mini_ai"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def user_data_dir(username: str) -> Path:
+    """返回用户数据根目录。default 用户用 DATA_DIR 向后兼容，其他用户用 DATA_DIR/users/<name>"""
+    if not username or username == "default":
+        return DATA_DIR
+    d = DATA_DIR / "users" / username
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 class ConfigError(Exception):
     pass
 

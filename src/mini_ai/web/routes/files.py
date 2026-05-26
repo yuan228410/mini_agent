@@ -4,12 +4,17 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query
 
-from ...config import DATA_DIR, _raw
+from ...config import DATA_DIR, user_data_dir
 from ...workspace import WorkspaceManager
 
 router = APIRouter()
 
-_ws_mgr = WorkspaceManager(DATA_DIR)
+_ws_managers: dict[str, WorkspaceManager] = {}
+
+def _get_ws_mgr(username: str) -> WorkspaceManager:
+    if username not in _ws_managers:
+        _ws_managers[username] = WorkspaceManager(user_data_dir(username))
+    return _ws_managers[username]
 
 _EXT_LANG = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".tsx": "tsx",
@@ -25,10 +30,10 @@ _EXT_LANG = {
 _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", ".tox", ".egg-info"}
 
 
-def _get_project_root(workspace: str) -> Path | None:
-    ws = _ws_mgr.get(workspace)
+def _get_project_root(workspace: str, username: str = "default") -> Path | None:
+    ws = _get_ws_mgr(username).get(workspace)
     if not ws:
-        ws = _ws_mgr.get(_raw.get("active_workspace", "default"))
+        ws = _get_ws_mgr(username).get("default")
     if not ws or not ws.project_path:
         return None
     root = Path(ws.project_path)
@@ -51,8 +56,9 @@ def _safe_resolve(root: Path, rel_path: str) -> Path | None:
 async def list_files(
     path: str = Query(default=""),
     workspace: str = Query(default=""),
+    username: str = Query(default="default"),
 ):
-    root = _get_project_root(workspace)
+    root = _get_project_root(workspace, username)
     if not root:
         return {"error": "工作空间无关联项目路径"}
 
@@ -103,10 +109,11 @@ async def list_files(
 async def read_file(
     path: str = Query(...),
     workspace: str = Query(default=""),
+    username: str = Query(default="default"),
     offset: int = Query(default=0),
     limit: int = Query(default=200),
 ):
-    root = _get_project_root(workspace)
+    root = _get_project_root(workspace, username)
     if not root:
         return {"error": "工作空间无关联项目路径"}
 
@@ -143,3 +150,25 @@ async def read_file(
         "total_lines": total_lines,
         "has_more": (offset + limit) < total_lines,
     }
+
+
+@router.get("/files/browse")
+async def browse_dirs(path: str = Query(default=""), username: str = Query(default="default")):
+    if not path:
+        path = str(Path.home())
+    root = Path(path).resolve()
+    if not root.exists() or not root.is_dir():
+        return {"error": f"路径不存在: {path}", "current": path, "parent": "", "dirs": []}
+    parent = str(root.parent) if root != root.parent else ""
+    dirs = []
+    try:
+        for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if entry.is_dir() and not entry.name.startswith(".") and entry.name not in ("__pycache__", "node_modules", ".venv", "venv", "dist", "build"):
+                try:
+                    has_children = any(e.is_dir() for e in entry.iterdir())
+                except PermissionError:
+                    has_children = False
+                dirs.append({"name": entry.name, "path": str(entry), "has_children": has_children})
+    except PermissionError:
+        return {"error": "无权限访问", "current": path, "parent": parent, "dirs": []}
+    return {"current": str(root), "parent": parent, "dirs": dirs}

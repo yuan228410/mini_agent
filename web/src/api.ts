@@ -1,4 +1,19 @@
 const USERNAME_KEY = 'mini-ai-username'
+const _FETCH_TIMEOUT = 8000
+
+const _origFetch = window.fetch.bind(window)
+
+async function _fetch(url: string, init?: RequestInit): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), _FETCH_TIMEOUT)
+  try {
+    const resp = await _origFetch(url, { ...init, signal: controller.signal })
+    return resp
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 
 export function getUsername(): string {
   return localStorage.getItem(USERNAME_KEY) || ''
@@ -53,6 +68,7 @@ export interface CommandsResponse {
 }
 
 export interface HistoryMessage {
+  tool_calls?: any[]
   role: string
   content?: string
   thinking?: any
@@ -65,12 +81,29 @@ export interface HistoryResponse {
 
 export interface SessionInfo {
   session_id: string
+  name: string
   message_count: number
   preview: string
+  created_at: string
+  status: 'idle' | 'generating'
 }
 
 export interface SessionsResponse {
   sessions: SessionInfo[]
+}
+
+export interface WorkspaceInfo {
+  name: string
+  project_path: string
+}
+
+export interface WorkspacesResponse {
+  workspaces: WorkspaceInfo[]
+  active: string
+}
+
+function _username(): string {
+  return getUsername() || 'default'
 }
 
 function _usernameBody(): object {
@@ -84,7 +117,7 @@ export async function* streamChat(message: string, sessionId?: string): AsyncGen
   const body: any = { message, ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
 
-  const resp = await fetch('/api/chat', {
+  const resp = await _fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -138,20 +171,38 @@ function _wsUrl(): string {
   return `${proto}//${location.host}/api/chat/ws`
 }
 
+let _wsGeneration = 0
+
 export async function ensureWs(): Promise<boolean> {
   if (_ws && _wsConnected && _ws.readyState === WebSocket.OPEN) return true
+
+  if (_ws && _ws.readyState !== WebSocket.CLOSED) {
+    _ws.close(1000, 'reconnect')
+    await new Promise<void>(r => { _ws!.onclose = () => r(); setTimeout(r, 1000) })
+  }
+
+  const gen = ++_wsGeneration
 
   return new Promise<boolean>((resolve) => {
     const ws = new WebSocket(_wsUrl())
     _ws = ws
     _wsConnected = false
 
+    const timer = setTimeout(() => {
+      if (!_wsConnected) {
+        ws.close()
+        resolve(false)
+      }
+    }, 5000)
+
     ws.onopen = () => {
+      clearTimeout(timer)
       _wsConnected = true
       resolve(true)
     }
 
     ws.onmessage = (e) => {
+      if (gen !== _wsGeneration) return
       try {
         const evt = JSON.parse(e.data)
         for (const handler of _eventHandlers) {
@@ -161,13 +212,15 @@ export async function ensureWs(): Promise<boolean> {
     }
 
     ws.onerror = () => {
+      clearTimeout(timer)
       _wsConnected = false
       resolve(false)
     }
 
     ws.onclose = () => {
+      clearTimeout(timer)
       _wsConnected = false
-      _ws = null
+      if (gen === _wsGeneration) _ws = null
     }
   })
 }
@@ -192,15 +245,19 @@ export function wsChat(message: string, sessionId?: string) {
   wsSend(chatMsg)
 }
 
-export function abortChat() {
-  wsSend({ type: 'abort' })
+export function abortChat(sessionId?: string) {
+  const msg: any = { type: 'abort', ..._usernameBody() }
+  if (sessionId) msg.session_id = sessionId
+  wsSend(msg)
 }
 
 export function closeWs() {
   if (_ws) {
-    _ws.close()
+    const ws = _ws
     _ws = null
     _wsConnected = false
+    _eventHandlers.length = 0
+    try { ws.close(1000, 'page refresh') } catch {}
   }
 }
 
@@ -219,39 +276,108 @@ export async function getTransport(): Promise<string> {
   return _transport
 }
 
-// ── REST APIs ──
+// ── Session APIs ──
 
-export async function createSession(): Promise<{ session_id: string }> {
-  const resp = await fetch('/api/session', {
+export async function createSession(workspace?: string): Promise<{ session_id: string }> {
+  const body: any = { ..._usernameBody() }
+  if (workspace) body.workspace = workspace
+  const resp = await _fetch('/api/session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(_usernameBody()),
+    body: JSON.stringify(body),
   })
   return resp.json()
 }
 
-export async function getSessions(): Promise<SessionsResponse> {
-  const u = getUsername()
-  const resp = await fetch(`/api/sessions?username=${encodeURIComponent(u || 'default')}`)
+export async function getSessions(workspace?: string): Promise<SessionsResponse> {
+  const params = new URLSearchParams()
+  params.set('username', _username())
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _fetch(`/api/sessions?${params.toString()}`)
   return resp.json()
 }
 
-export async function getHistory(sessionId: string): Promise<HistoryResponse> {
-  const u = getUsername()
-  const resp = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}&username=${encodeURIComponent(u || 'default')}`)
+export async function deleteSession(sessionId: string): Promise<any> {
+  const resp = await _fetch('/api/session', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, ..._usernameBody() }),
+  })
   return resp.json()
 }
+
+export async function renameSession(sessionId: string, name: string): Promise<any> {
+  const resp = await _fetch('/api/session/rename', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, name, ..._usernameBody() }),
+  })
+  return resp.json()
+}
+
+export async function getHistory(sessionId: string, workspace?: string): Promise<HistoryResponse> {
+  const params = new URLSearchParams()
+  params.set('session_id', sessionId)
+  params.set('username', _username())
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _fetch(`/api/chat/history?${params.toString()}`)
+  return resp.json()
+}
+
+// ── Workspace APIs ──
+
+export async function getWorkspaces(): Promise<WorkspacesResponse> {
+  const resp = await _fetch(`/api/workspaces?username=${encodeURIComponent(_username())}`)
+  return resp.json()
+}
+
+export async function createWorkspace(name: string, projectPath?: string): Promise<any> {
+  const body: any = { name, ..._usernameBody() }
+  if (projectPath) body.project_path = projectPath
+  const resp = await _fetch('/api/workspaces', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return resp.json()
+}
+
+export async function addWorkspace(path: string): Promise<any> {
+  const resp = await _fetch('/api/workspaces/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, ..._usernameBody() }),
+  })
+  return resp.json()
+}
+
+export async function switchWorkspace(name: string): Promise<any> {
+  const resp = await _fetch('/api/workspaces/switch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, ..._usernameBody() }),
+  })
+  return resp.json()
+}
+
+export async function removeWorkspace(name: string, deleteData: boolean = false): Promise<any> {
+  const resp = await _fetch(`/api/workspaces/${encodeURIComponent(name)}?delete_data=${deleteData}&username=${encodeURIComponent(_username())}`, {
+    method: 'DELETE',
+  })
+  return resp.json()
+}
+
+// ── Other APIs ──
 
 export async function getModels(): Promise<ModelsResponse> {
-  const resp = await fetch('/api/models')
+  const resp = await _fetch('/api/models')
   return resp.json()
 }
 
 export async function switchModel(name: string, sessionId?: string): Promise<any> {
-  const u = getUsername()
   const body: any = { name, ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
-  const resp = await fetch('/api/models/switch', {
+  const resp = await _fetch('/api/models/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -260,18 +386,18 @@ export async function switchModel(name: string, sessionId?: string): Promise<any
 }
 
 export async function getConfig(sessionId?: string): Promise<ConfigResponse> {
-  const u = getUsername()
   const params = new URLSearchParams()
   if (sessionId) params.set('session_id', sessionId)
+  const u = _username()
   if (u) params.set('username', u)
-  const resp = await fetch(`/api/config?${params.toString()}`)
+  const resp = await _fetch(`/api/config?${params.toString()}`)
   return resp.json()
 }
 
 export async function resetChat(sessionId?: string): Promise<any> {
   const body: any = { ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
-  const resp = await fetch('/api/chat/reset', {
+  const resp = await _fetch('/api/chat/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -280,11 +406,31 @@ export async function resetChat(sessionId?: string): Promise<any> {
 }
 
 export async function getSkills(): Promise<any> {
-  const resp = await fetch('/api/skills')
+  const resp = await _fetch('/api/skills')
   return resp.json()
 }
 
 export async function getCommands(): Promise<CommandsResponse> {
-  const resp = await fetch('/api/commands')
+  const resp = await _fetch('/api/commands')
+  return resp.json()
+}
+
+export interface BrowseDir {
+  name: string
+  path: string
+  has_children: boolean
+}
+
+export interface BrowseResponse {
+  current: string
+  parent: string
+  dirs: BrowseDir[]
+  error?: string
+}
+
+export async function browseDirs(path?: string): Promise<BrowseResponse> {
+  const params = new URLSearchParams()
+  if (path) params.set('path', path)
+  const resp = await _fetch(`/api/files/browse?${params.toString()}`)
   return resp.json()
 }

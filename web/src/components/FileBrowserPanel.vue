@@ -46,7 +46,7 @@ async function loadDir(path: string) {
   previewFile.value = null
   currentPath.value = path
   try {
-    const resp = await fetch(`/api/files/list?path=${encodeURIComponent(path)}&workspace=${encodeURIComponent(props.workspace)}`)
+    const resp = await fetch(`/api/files/list?path=${encodeURIComponent(path)}&workspace=${encodeURIComponent(props.workspace)}&username=${encodeURIComponent(localStorage.getItem('mini-ai-username') || 'default')}`)
     const data = await resp.json()
     if (data.error) {
       items.value = []
@@ -82,7 +82,7 @@ async function loadMoreContent() {
   previewLoading.value = true
   try {
     const resp = await fetch(
-      `/api/files/read?path=${encodeURIComponent(previewFile.value!)}&workspace=${encodeURIComponent(props.workspace)}&offset=${previewOffset.value}&limit=200`
+      `/api/files/read?path=${encodeURIComponent(previewFile.value!)}&workspace=${encodeURIComponent(props.workspace)}&offset=${previewOffset.value}&limit=200&username=${encodeURIComponent(localStorage.getItem('mini-ai-username') || 'default')}`
     )
     const data = await resp.json()
     if (data.error) {

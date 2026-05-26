@@ -1,7 +1,7 @@
 """Web 模式共享依赖初始化"""
 import threading
 
-from ..config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, _raw
+from ..config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, user_data_dir
 from ..context import ContextBuilder
 from ..memory import MemoryStore, Compactor, SessionManager
 from ..memory.history_db import HistoryDB
@@ -15,8 +15,8 @@ SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
 def init_components():
-    ws_mgr = WorkspaceManager(DATA_DIR)
-    active_ws_name = _raw.get("active_workspace", "default")
+    ws_mgr = WorkspaceManager(user_data_dir("default"))
+    active_ws_name = "default"
     ws = ws_mgr.get(active_ws_name) or ws_mgr.get("default")
     ws_dir = ws.ws_dir
 

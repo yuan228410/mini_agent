@@ -70,23 +70,27 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **模型切换** — 顶部下拉框选择模型，实时切换
 - **斜杠命令** — 输入 `/` 弹出命令补全列表，支持 `/clear` `/compact` `/skill` `/genskill` `/model` `/thinking`
 - **技能面板** — 右侧抽屉式技能列表，点击技能名自动激活
-- **多会话隔离** — 每个浏览器标签页独立 session，互不干扰
-- **多用户支持** — 用户名认证，按用户隔离会话目录，首次访问输入用户名
+- **多会话并行** — 左侧侧边栏管理多个会话，可同时并行 LLM 生成，互不干扰
+- **会话状态指示** — 侧边栏会话项旁显示"生成中"绿点脉动动画
+- **多用户支持** — 用户名认证，按用户隔离数据目录，首次访问输入用户名
 - **会话文件持久化** — 消息写入 JSONL 文件，后端重启自动恢复历史
 - **中断生成** — WS 模式下可中断 LLM 生成（服务端真正停止）；SSE 模式不显示停止按钮
 - **会话持久化** — 刷新页面自动恢复历史消息（session_id 存 localStorage）
+- **工作空间管理** — 侧边栏顶部显示当前工作空间，支持创建/切换/删除/移除工作空间
+- **文件浏览** — 工作空间关联的项目目录文件列表预览
 
 ## 前端组件
 
 ```
 web/src/
-├── App.vue              # 根组件：标题栏 + ChatView + StatusBar + SkillPanel
+├── App.vue              # 根组件：标题栏 + SessionSidebar + ChatView + StatusBar
 ├── api.ts               # API 封装（fetch + SSE + WebSocket + session 管理）
 ├── theme.ts             # 主题管理（init/toggle/apply + localStorage）
 ├── style.css            # CSS 变量色板 + 噪点纹理 + 全局排版 + 动画
 └── components/
     ├── ChatView.vue     # 主聊天界面：消息列表 + 输入框，WS/SSE 双模式 + 中断 + session 持久化
     ├── MessageItem.vue  # 单条消息：Markdown 渲染 + 思维链 + 工具调用
+    ├── SessionSidebar.vue # 左侧会话列表面板：工作空间切换 + 会话管理 + 收起/展开
     ├── ThinkingBlock.vue# 思维链折叠区：琥珀色竖线，点击展开/收起
     ├── ToolCallBlock.vue# 工具调用折叠区：虚线竖线，工具名等宽
     ├── InputBar.vue     # 底部输入区：textarea + 斜杠命令补全
@@ -94,7 +98,8 @@ web/src/
     ├── ModelSelector.vue# 模型切换下拉框：显示当前模型，点击切换
     ├── SkillPanel.vue   # 技能面板：右侧抽屉，点击技能名激活
     ├── StatusBar.vue    # 底部状态栏：等宽小字号，靠右对齐
-    └── ThemeToggle.vue  # 主题切换按钮：☀/🌙，旋转过渡动画
+    ├── ThemeToggle.vue  # 主题切换按钮：☀/🌙，旋转过渡动画
+    └── FileBrowserPanel.vue # 工作空间文件浏览面板
 ```
 
 ## 后端架构
@@ -102,44 +107,34 @@ web/src/
 ```
 src/mini_ai/web/
 ├── __init__.py
-├── app.py               # FastAPI 应用：lifespan 初始化，CORS，静态文件挂载
-├── deps.py              # 共享组件初始化（SkillLoader / MemoryStore / Compactor 等）
-├── display.py           # WebDisplay 适配器：线程安全推入 asyncio.Queue
+├── app.py              # FastAPI 应用：lifespan 初始化，CORS，静态文件挂载
+├── deps.py             # 共享组件初始化（SkillLoader / MemoryStore / Compactor 等）
+├── display.py          # WebDisplay 适配器：线程安全推入 asyncio.Queue
 └── routes/
     ├── __init__.py
-    ├── chat.py           # 会话管理 + SSE/WS 双模式聊天 + 中断生成 + 历史查询 + 重置
-    ├── models.py         # GET /api/models + POST /api/models/switch
-    ├── skills.py         # GET /api/skills
-    ├── commands.py       # GET /api/commands（斜杠命令列表 + 参数选项）
-    └── config.py         # GET /api/config（状态信息，支持 session_id）
+    ├── chat.py         # 会话管理 + SSE/WS 双模式聊天 + 中断生成 + 历史查询 + 重置
+    ├── models.py       # 模型列表 + 切换
+    ├── files.py        # 文件浏览接口
+    ├── skills.py       # 技能列表
+    ├── commands.py     # 斜杠命令列表
+    ├── config.py       # 状态信息
+    └── workspaces.py   # 工作空间管理 API（按用户隔离）
 ```
 
-### 线程安全设计
-
-LLM 流式输出（`chat_stream()`）是同步生成器，直接调用会阻塞 asyncio 事件循环。
-
-解决方案：
-1. `_run_tool_loop_sync()` 在 `loop.run_in_executor(None, ...)` 中执行，不阻塞事件循环
-2. `WebDisplay` 通过 `loop.call_soon_threadsafe()` + `queue.put_nowait()` 线程安全推入 asyncio.Queue
-3. SSE `event_generator` 在事件循环中 `await queue.get()` 消费队列，实时推送给前端
-4. `register_display(disp)` 注入 WebDisplay 实例，工具调用结果自动通过同一通道推送
-
-### SSE 事件协议
-
-`POST /api/chat` 返回 `text/event-stream`，事件格式：
+### SSE 事件格式
 
 ```
 event: thinking_start
 data: {}
 
 event: thinking
-data: {"content": "增量思考文本"}
+data: {"content": "思考内容..."}
 
 event: thinking_end
 data: {"chars": 113, "elapsed": 0.6}
 
 event: text
-data: {"content": "增量回复文本"}
+data: {"content": "增量文本..."}
 
 event: tool_start
 data: {"name": "web_fetch", "args": "{\"url\":\"...\"}"}
@@ -153,7 +148,6 @@ data: {"prompt_tokens": 4120, "completion_tokens": 49}
 event: error
 data: {"error": "错误信息"}
 ```
-
 
 ### WebSocket 模式
 
@@ -169,7 +163,7 @@ data: {"error": "错误信息"}
 
 ```json
 {"type": "chat", "message": "你好", "session_id": "xxx", "username": "xxx"}
-{"type": "abort"}
+{"type": "abort", "session_id": "xxx", "username": "xxx"}
 ```
 
 **服务端 → 客户端：** 事件格式与 SSE 相同（`{"event": "...", "data": {...}}`），新增 `aborted` 事件。
@@ -186,19 +180,26 @@ data: {"error": "错误信息"}
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/session` | POST | 创建新会话，body: `{"username": "xxx"}` |
-| `/api/sessions` | GET | 获取用户会话列表，参数: `username` |
+| `/api/session` | POST | 创建新会话，body: `{"username": "xxx", "workspace": "xxx"}` |
+| `/api/sessions` | GET | 获取用户会话列表，参数: `username`, `workspace` |
+| `/api/session` | DELETE | 删除会话，body: `{"username": "xxx", "session_id": "xxx"}` |
+| `/api/session/rename` | PATCH | 重命名会话，body: `{"username": "xxx", "session_id": "xxx", "name": "xxx"}` |
 | `/api/chat` | POST | SSE 流式对话，body: `{"message": "...", "session_id": "xxx"}` |
 | `/api/chat/ws` | WS | WebSocket 持久连接，支持双向通信和中断生成 |
-| `/api/chat/history` | GET | 获取会话历史，参数: `session_id` |
+| `/api/chat/history` | GET | 获取会话历史，参数: `session_id`, `workspace` |
 | `/api/chat/reset` | POST | 重置会话，body: `{"session_id": "xxx"}` |
+| `/api/files/list` | GET | 获取工作空间文件列表 |
+| `/api/files/browse` | GET | 浏览目录结构 |
 | `/api/models` | GET | 获取模型列表及当前激活模型 |
 | `/api/models/switch` | POST | 切换模型，body: `{"name": "deepseek"}` |
 | `/api/skills` | GET | 获取技能列表 |
 | `/api/commands` | GET | 获取斜杠命令列表（含参数选项） |
-| `/api/config` | GET | 获取状态信息，参数: `session_id` |
-
-
+| `/api/config` | GET | 获取状态信息，参数: `session_id`, `username` |
+| `/api/workspaces` | GET | 获取工作空间列表 |
+| `/api/workspaces` | POST | 创建工作空间 |
+| `/api/workspaces/add` | POST | 添加已有目录为工作空间 |
+| `/api/workspaces/switch` | POST | 切换工作空间 |
+| `/api/workspaces/{name}` | DELETE | 删除/移除工作空间 |
 
 ### 多用户 + 会话持久化 + 并发安全
 
@@ -218,18 +219,31 @@ data: {"error": "错误信息"}
 
 **多用户隔离：**
 - 首次访问 Web 时弹出用户名输入界面，存入 `localStorage`
-- 后端按用户名隔离会话目录：`~/.mini_ai/web_sessions/<username>/<session_id>.jsonl`
-- 不同用户各自独立的会话列表和消息历史
+- 后端按用户名隔离数据目录：`~/.mini_ai/users/<username>/`（default 用户用 `~/.mini_ai/` 向后兼容）
+- 不同用户各自独立的会话列表、消息历史和工作空间
 - 无密码认证，适合本地/内网自托管场景
 
 **会话文件持久化：**
-- 每条消息 append 写入用户对应的 JSONL 文件
-- 后端重启后，前端请求时自动从文件加载到内存
+- 消息写入 JSONL 文件，后端重启后自动从文件恢复
 - 会话创建时写首行 system prompt，重置时清空重建
-- 存储路径：`~/.mini_ai/web_sessions/<username>/<session_id>.jsonl`
+- 未关联工作空间：`~/.mini_ai/web_sessions/<username>/<sid>.jsonl`
+- 关联工作空间：`~/.mini_ai/workspaces/<username>/<ws>/web_sessions/<username>/<sid>.jsonl`
+
+**工作空间管理：**
+- 每个用户独立的工作空间列表，按 `~/.mini_ai/workspaces/<username>/` 隔离
+- 工作空间可关联项目目录（project_path），支持创建/切换/删除/移除
+- 切换工作空间时重建系统提示词（含项目规范的 CLAUDE.md/AGENTS.md）
+- 同一工作空间下可创建多个会话，会话并行生成互不干扰
 
 **会话列表：**
-- `GET /api/sessions?username=xxx` 返回该用户所有会话及预览
+- `GET /api/sessions?username=xxx&workspace=yyy` 返回该用户指定工作空间的会话及预览
+
+**多会话并行：**
+- 前端 `_states: Map<string, SessionState>` 管理每个会话的独立消息/流式状态
+- 切换会话从 Map 恢复，不中断其他会话的 LLM 生成
+- 后端 `_SESSION_LOCKS` 仅序列化同一会话的消息读写，不同会话不同线程并行
+- WS 连接共用，事件按 `session_id` 路由到对应会话状态
+- SSE 模式每个会话独立 fetch
 
 ### 斜杠命令
 
@@ -267,5 +281,6 @@ Vite 开发模式自动代理 `/api` 请求到 `http://localhost:8765`（后端�
 ## 待办
 
 - [ ] highlight.js 按需加载 — 仅加载常用语言包，减少前端体积
-- [ ] 多用户并发安全 — 多用户同时会话可能互相影响（register_display 全局覆盖、MODEL_CONFIG 全局状态）
+- [ ] Web 端记忆/压缩/搜索 — 集成 MemoryStore + HistoryDB + Compactor，per-session 隔离
 - [ ] 多模态输入 — 支持图片/PDF 作为输入
+- [ ] 多用户并发安全 — register_memory_tools/register_history_tools 全局覆盖问题

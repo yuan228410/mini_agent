@@ -48,7 +48,7 @@ src/mini_ai/            # 包源码
     run_command.py / web_fetch.py / read_file.py / write_file.py
     update_todos.py / list_skills.py / load_skill.py / install_skill.py
   subagents/              #   子代理定义（coder.md, researcher.md）
-~/.mini_ai/  # 运行时数据目录
+~/.mini_ai/              # 运行时数据目录（default 用户）
   config.yaml             #   用户配置（含 API 密钥 + active_workspace）
   skills/                 #   用户技能
   workflows/              #   工作流 YAML 模板
@@ -57,6 +57,10 @@ src/mini_ai/            # 包源码
     default/              #     默认工作空间
       memory_data/        #       记忆 + 历史 DB + 会话
       .team/              #       Team 协作数据
+  web_sessions/           #   Web 会话 JSONL（未关联工作空间）
+  users/<name>/           #   其他用户数据根目录（结构同上）
+    workspaces/
+    web_sessions/
 ```
 
 ## 架构原则
@@ -77,7 +81,7 @@ src/mini_ai/            # 包源码
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
 - **终端 UI**：`cli/display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理；状态栏每轮对话后右对齐显示模型/上下文/token 信息
 - **项目规范自动加载**：`context.py` 自动读取当前目录的 `CLAUDE.md` 或 `AGENTS.md`（优先前者），注入系统提示词
-- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WS/SSE 双模式（WS 支持中断生成）。`RequestContext` 实现多用户并发隔离：每请求独立 model_config/display/http_session，per-session 模型切换不修改全局配置。多会话隔离（`_SESSIONS` 两级字典 username→session_id），多用户认证（用户名 + localStorage），斜杠命令补全（`/api/commands`），技能面板抽屉，会话 JSONL 文件持久化（`~/.mini_ai/web_sessions/<username>/<sid>.jsonl`，重启自动恢复）
+- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WS/SSE 双模式（WS 支持中断生成）。`RequestContext` 实现多用户并发隔离：每请求独立 model_config/display/http_session，per-session 模型切换不修改全局配置。多会话并行（`_SESSIONS` 两级字典 username→session_id，`_SESSION_LOCKS` per-session 串行），多用户认证（用户名 + localStorage），`user_data_dir()` 按用户隔离数据根目录，工作空间管理（创建/切换/删除/移除），斜杠命令补全，技能面板抽屉，会话 JSONL 文件持久化（重启自动恢复）
 
 ## 行为规则
 

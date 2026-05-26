@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from .routes import chat, models, skills, config, commands, workspaces, files
 from .deps import init_components
 from ..context import ContextBuilder
-from ..config import DATA_DIR, SKILL_PATHS, _raw
+from ..config import DATA_DIR, SKILL_PATHS, user_data_dir
 from ..memory import MemoryStore
 from ..skills import SkillLoader
 from ..workspace import WorkspaceManager
@@ -17,11 +17,10 @@ from ..workspace import WorkspaceManager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_components()
-    ws_mgr = WorkspaceManager(DATA_DIR)
-    active_ws_name = _raw.get("active_workspace", "default")
-    ws = ws_mgr.get(active_ws_name) or ws_mgr.get("default")
+    ws_mgr = WorkspaceManager(user_data_dir("default"))
+    ws = ws_mgr.get("default") or ws_mgr.get("default")
 
-    chat.switch_session_base(ws.ws_dir / "web_sessions")
+    chat.switch_session_base(ws.ws_dir / "web_sessions", "default")
 
     store = MemoryStore(ws.ws_dir / "memory_data")
     ctx = ContextBuilder(DATA_DIR)

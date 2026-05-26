@@ -411,11 +411,12 @@ FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端，`mini-ai --web` 
 - WebDisplay 适配器实现与 CLI Display 相同接口，通过 `loop.call_soon_threadsafe()` 线程安全推入 asyncio.Queue
 - 同步工具循环在 `run_in_executor()` 中执行，不阻塞事件循环
 - 前端 Editorial 杂志编辑风，亮暗主题切换，Markdown + highlight.js 渲染
-- 多用户隔离：`_SESSIONS[username][session_id]` 两级字典，用户名认证 + localStorage
+- 多用户隔离：`_SESSIONS[username][session_id]` 两级字典，用户名认证 + localStorage，`user_data_dir()` 按用户隔离数据根目录
 - 请求上下文隔离：`RequestContext` 封装 model_config/display/http_session，每请求独立，多用户并发安全
 - Usage 统计准确：`_run_tool_loop_sync` 返回 `(msg, usage)` 元组，在 executor 线程内读取 `_get_usage()`，避免跨线程零值
 - Per-session 模型切换：`_SESSION_MODELS` 记录每个会话的模型选择，不修改全局 MODEL_CONFIG
-- 会话文件持久化：消息 append 写入 `~/.mini_ai/web_sessions/<username>/<sid>.jsonl`，重启自动恢复
+- 会话文件持久化：消息 append 写入 JSONL，重启自动恢复；多会话并行（`_SESSION_LOCKS` per-session 串行，跨会话并行）
+- 工作空间管理：按用户隔离（`workspaces/<username>/`），支持创建/切换/删除/移除，项目规范（CLAUDE.md/AGENTS.md）per-workspace 共享
 
 详细设计、组件架构、API 接口、SSE 协议等见 [WEB.md](WEB.md)。
 

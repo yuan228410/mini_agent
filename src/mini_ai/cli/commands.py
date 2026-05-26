@@ -17,7 +17,7 @@ class CommandHandler:
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
-        if user_input.lower() in ("exit", "quit", "q"):
+        if user_input.lower() in ("exit", "quit", "q", "/exit", "/quit", "/q"):
             return "break"
 
         if user_input == "/save":
