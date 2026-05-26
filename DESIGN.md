@@ -402,6 +402,8 @@ FastAPI + SSE 后端，Vue 3 + Vite 前端，`mini-ai --web` 启动。同一套 
 - WebDisplay 适配器实现与 CLI Display 相同接口，通过 `loop.call_soon_threadsafe()` 线程安全推入 asyncio.Queue
 - 同步工具循环在 `run_in_executor()` 中执行，不阻塞事件循环
 - 前端 Editorial 杂志编辑风，亮暗主题切换，Markdown + highlight.js 渲染
+- 多用户隔离：`_SESSIONS[username][session_id]` 两级字典，用户名认证 + localStorage
+- 会话文件持久化：消息 append 写入 `~/.mini_ai/web_sessions/<username>/<sid>.jsonl`，重启自动恢复
 
 详细设计、组件架构、API 接口、SSE 协议等见 [WEB.md](WEB.md)。
 

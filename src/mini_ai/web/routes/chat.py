@@ -1,12 +1,13 @@
-"""聊天 SSE 流式接口 — 多会话隔离"""
+"""聊天 SSE 流式接口 — 多用户 + JSONL 持久化"""
 import asyncio
 import json
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, Query
 from starlette.responses import StreamingResponse
 
-from ...config import MODEL_CONFIG, STREAMING
+from ...config import DATA_DIR, MODEL_CONFIG, STREAMING
 from ...llm import chat_stream, chat, _get_usage
 from ...tools import handle_tool_calls, get_definitions, register_display
 from ...logger import logger
@@ -15,7 +16,10 @@ from ..display import WebDisplay
 router = APIRouter()
 
 _SYSTEM_PROMPT: str = ""
-_SESSIONS: dict[str, list[dict]] = {}
+_SESSION_BASE = DATA_DIR / "web_sessions"
+_SESSION_BASE.mkdir(parents=True, exist_ok=True)
+
+_SESSIONS: dict[str, dict[str, list[dict]]] = {}
 _DEFAULT_SESSION = "default"
 
 def _inject_todos(messages: list[dict]):
@@ -34,14 +38,60 @@ def set_system_prompt(prompt: str):
     global _SYSTEM_PROMPT
     _SYSTEM_PROMPT = prompt
 
-def _get_or_create_session(session_id: str | None) -> tuple[str, list[dict]]:
-    if session_id and session_id in _SESSIONS:
-        return session_id, _SESSIONS[session_id]
+def _user_dir(username: str) -> Path:
+    d = _SESSION_BASE / username
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+def _session_file(username: str, session_id: str) -> Path:
+    return _user_dir(username) / f"{session_id}.jsonl"
+
+def _load_from_file(username: str, session_id: str) -> list[dict] | None:
+    path = _session_file(username, session_id)
+    if not path.exists():
+        return None
+    messages = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    messages.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    return messages if messages else None
+
+def _append_to_file(username: str, session_id: str, msg: dict):
+    path = _session_file(username, session_id)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+
+def _write_session_file(username: str, session_id: str, messages: list[dict]):
+    path = _session_file(username, session_id)
+    with open(path, "w", encoding="utf-8") as f:
+        for m in messages:
+            f.write(json.dumps(m, ensure_ascii=False) + "\n")
+
+def _ensure_user_sessions(username: str) -> dict[str, list[dict]]:
+    if username not in _SESSIONS:
+        _SESSIONS[username] = {}
+    return _SESSIONS[username]
+
+def _get_or_create_session(username: str, session_id: str | None) -> tuple[str, list[dict]]:
+    user_sessions = _ensure_user_sessions(username)
+    if session_id and session_id in user_sessions:
+        return session_id, user_sessions[session_id]
     sid = session_id or _DEFAULT_SESSION
-    if sid not in _SESSIONS:
-        _SESSIONS[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
-        _inject_todos(_SESSIONS[sid])
-    return sid, _SESSIONS[sid]
+    if sid in user_sessions:
+        return sid, user_sessions[sid]
+    loaded = _load_from_file(username, sid)
+    if loaded:
+        user_sessions[sid] = loaded
+        return sid, user_sessions[sid]
+    user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    _inject_todos(user_sessions[sid])
+    _write_session_file(username, sid, user_sessions[sid])
+    return sid, user_sessions[sid]
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          messages: list[dict], tools: list[dict], max_turns: int = 30):
@@ -88,20 +138,37 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
     return None
 
 @router.post("/session")
-async def create_session():
+async def create_session(body: dict):
+    username = body.get("username", "default")
     sid = str(uuid.uuid4())[:8]
-    _SESSIONS[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
-    _inject_todos(_SESSIONS[sid])
+    user_sessions = _ensure_user_sessions(username)
+    user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    _inject_todos(user_sessions[sid])
+    _write_session_file(username, sid, user_sessions[sid])
     return {"session_id": sid}
+
+@router.get("/sessions")
+async def list_sessions(username: str = Query(default="default")):
+    user_dir = _user_dir(username)
+    sessions = []
+    for path in sorted(user_dir.glob("*.jsonl")):
+        sid = path.stem
+        messages = _load_from_file(username, sid) or []
+        non_system = [m for m in messages if m["role"] != "system"]
+        first_user = next((m.get("content", "")[:50] for m in non_system if m["role"] == "user"), "")
+        sessions.append({"session_id": sid, "message_count": len(non_system), "preview": first_user})
+    return {"sessions": sessions}
 
 @router.post("/chat")
 async def chat_endpoint(body: dict):
     user_message = body.get("message", "").strip()
+    username = body.get("username", "default")
     session_id = body.get("session_id")
     if not user_message:
         return {"error": "消息不能为空"}
 
-    sid, messages = _get_or_create_session(session_id)
+    sid, messages = _get_or_create_session(username, session_id)
+    start_idx = len(messages)
     messages.append({"role": "user", "content": user_message})
 
     queue = asyncio.Queue()
@@ -127,8 +194,10 @@ async def chat_endpoint(body: dict):
 
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
+            for m in messages[start_idx:]:
+                _append_to_file(username, sid, m)
 
-            done_data = {'prompt_tokens': usage['prompt_tokens'], 'completion_tokens': usage['completion_tokens'], 'session_id': sid}
+            done_data = {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
             yield f"event: done\ndata: {json.dumps(done_data, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.error(f"[Web] SSE 错误: {e}")
@@ -137,11 +206,13 @@ async def chat_endpoint(body: dict):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @router.get("/chat/history")
-async def chat_history(session_id: str = Query(default=_DEFAULT_SESSION)):
-    _, messages = _get_or_create_session(session_id)
+async def chat_history(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default")):
+    _, messages = _get_or_create_session(username, session_id)
     history = []
     for m in messages:
-        if m["role"] == "system":
+        if m["role"] in ("system", "tool"):
+            continue
+        if m.get("tool_calls"):
             continue
         entry: dict = {"role": m["role"]}
         if m.get("content"):
@@ -153,9 +224,13 @@ async def chat_history(session_id: str = Query(default=_DEFAULT_SESSION)):
 
 @router.post("/chat/reset")
 async def chat_reset(body: dict | None = None):
-    session_id = (body or {}).get("session_id", _DEFAULT_SESSION)
-    sid, messages = _get_or_create_session(session_id)
+    body = body or {}
+    username = body.get("username", "default")
+    session_id = body.get("session_id", _DEFAULT_SESSION)
+    sid, messages = _get_or_create_session(username, session_id)
     system_content = messages[0]["content"]
-    _SESSIONS[sid] = [{"role": "system", "content": system_content}]
-    _inject_todos(_SESSIONS[sid])
+    user_sessions = _ensure_user_sessions(username)
+    user_sessions[sid] = [{"role": "system", "content": system_content}]
+    _inject_todos(user_sessions[sid])
+    _write_session_file(username, sid, user_sessions[sid])
     return {"status": "ok", "session_id": sid}

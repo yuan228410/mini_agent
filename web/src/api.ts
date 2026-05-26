@@ -1,3 +1,17 @@
+const USERNAME_KEY = 'mini-ai-username'
+
+export function getUsername(): string {
+  return localStorage.getItem(USERNAME_KEY) || ''
+}
+
+export function setUsername(name: string) {
+  localStorage.setItem(USERNAME_KEY, name)
+}
+
+export function hasUsername(): boolean {
+  return !!localStorage.getItem(USERNAME_KEY)
+}
+
 export interface SSEEvent {
   event: string
   data: any
@@ -22,6 +36,7 @@ export interface ConfigResponse {
   system_prompt_chars: number
   history_count: number
   session_id: string
+  username: string
 }
 
 export interface CommandInfo {
@@ -47,11 +62,34 @@ export interface HistoryResponse {
   history: HistoryMessage[]
 }
 
+export interface SessionInfo {
+  session_id: string
+  message_count: number
+  preview: string
+}
+
+export interface SessionsResponse {
+  sessions: SessionInfo[]
+}
+
+function _usernameParam(): string {
+  const u = getUsername()
+  return u ? `&username=${encodeURIComponent(u)}` : ''
+}
+
+function _usernameBody(): object {
+  const u = getUsername()
+  return u ? { username: u } : {}
+}
+
 export async function* streamChat(message: string, sessionId?: string): AsyncGenerator<SSEEvent> {
+  const body: any = { message, ..._usernameBody() }
+  if (sessionId) body.session_id = sessionId
+
   const resp = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
+    body: JSON.stringify(body),
   })
 
   if (!resp.ok || !resp.body) {
@@ -92,12 +130,23 @@ export async function* streamChat(message: string, sessionId?: string): AsyncGen
 }
 
 export async function createSession(): Promise<{ session_id: string }> {
-  const resp = await fetch('/api/session', { method: 'POST' })
+  const resp = await fetch('/api/session', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_usernameBody()),
+  })
+  return resp.json()
+}
+
+export async function getSessions(): Promise<SessionsResponse> {
+  const u = getUsername()
+  const resp = await fetch(`/api/sessions?username=${encodeURIComponent(u || 'default')}`)
   return resp.json()
 }
 
 export async function getHistory(sessionId: string): Promise<HistoryResponse> {
-  const resp = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}`)
+  const u = getUsername()
+  const resp = await fetch(`/api/chat/history?session_id=${encodeURIComponent(sessionId)}&username=${encodeURIComponent(u || 'default')}`)
   return resp.json()
 }
 
@@ -116,18 +165,21 @@ export async function switchModel(name: string): Promise<any> {
 }
 
 export async function getConfig(sessionId?: string): Promise<ConfigResponse> {
-  const url = sessionId
-    ? `/api/config?session_id=${encodeURIComponent(sessionId)}`
-    : '/api/config'
-  const resp = await fetch(url)
+  const u = getUsername()
+  const params = new URLSearchParams()
+  if (sessionId) params.set('session_id', sessionId)
+  if (u) params.set('username', u)
+  const resp = await fetch(`/api/config?${params.toString()}`)
   return resp.json()
 }
 
 export async function resetChat(sessionId?: string): Promise<any> {
+  const body: any = { ..._usernameBody() }
+  if (sessionId) body.session_id = sessionId
   const resp = await fetch('/api/chat/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId }),
+    body: JSON.stringify(body),
   })
   return resp.json()
 }

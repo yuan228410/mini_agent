@@ -71,6 +71,8 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **斜杠命令** — 输入 `/` 弹出命令补全列表，支持 `/clear` `/compact` `/skill` `/genskill` `/model` `/thinking`
 - **技能面板** — 右侧抽屉式技能列表，点击技能名自动激活
 - **多会话隔离** — 每个浏览器标签页独立 session，互不干扰
+- **多用户支持** — 用户名认证，按用户隔离会话目录，首次访问输入用户名
+- **会话文件持久化** — 消息写入 JSONL 文件，后端重启自动恢复历史
 - **会话持久化** — 刷新页面自动恢复历史消息（session_id 存 localStorage）
 
 ## 前端组件
@@ -155,7 +157,8 @@ data: {"error": "错误信息"}
 
 | 接口 | 方法 | 说明 |
 |------|------|------|
-| `/api/session` | POST | 创建新会话，返回 `{"session_id": "xxx"}` |
+| `/api/session` | POST | 创建新会话，body: `{"username": "xxx"}` |
+| `/api/sessions` | GET | 获取用户会话列表，参数: `username` |
 | `/api/chat` | POST | SSE 流式对话，body: `{"message": "...", "session_id": "xxx"}` |
 | `/api/chat/history` | GET | 获取会话历史，参数: `session_id` |
 | `/api/chat/reset` | POST | 重置会话，body: `{"session_id": "xxx"}` |
@@ -167,14 +170,24 @@ data: {"error": "错误信息"}
 
 
 
-### 多会话隔离
+### 多用户 + 会话持久化
 
-后端维护 `_SESSIONS: dict[str, list[dict]]`，每个 session 拥有独立的消息列表。
+后端维护 `_SESSIONS: dict[str, dict[str, list[dict]]]`，按 `username` → `session_id` 两级隔离。
 
-- 前端首次加载自动 `POST /api/session` 创建 session，`session_id` 存入 `localStorage`
-- 刷新页面时携带 `session_id` 请求 `GET /api/chat/history` 恢复历史消息
-- 不同浏览器标签页各自独立 session，互不干扰
-- 未携带 `session_id` 的请求使用默认 session（兼容单用户场景）
+**多用户隔离：**
+- 首次访问 Web 时弹出用户名输入界面，存入 `localStorage`
+- 后端按用户名隔离会话目录：`~/.mini_ai/web_sessions/<username>/<session_id>.jsonl`
+- 不同用户各自独立的会话列表和消息历史
+- 无密码认证，适合本地/内网自托管场景
+
+**会话文件持久化：**
+- 每条消息 append 写入用户对应的 JSONL 文件
+- 后端重启后，前端请求时自动从文件加载到内存
+- 会话创建时写首行 system prompt，重置时清空重建
+- 存储路径：`~/.mini_ai/web_sessions/<username>/<session_id>.jsonl`
+
+**会话列表：**
+- `GET /api/sessions?username=xxx` 返回该用户所有会话及预览
 
 ### 斜杠命令
 
