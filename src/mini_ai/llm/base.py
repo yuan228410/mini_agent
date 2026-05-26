@@ -41,13 +41,15 @@ def get_usage() -> dict:
     return _local.last_usage
 
 
-# ── Session management ──
-
-_fallback_session = requests.Session()
+# ── Session management (thread-local for safety) ──
 
 
 def get_session(ctx=None) -> requests.Session:
-    return ctx.http_session if ctx else _fallback_session
+    if ctx:
+        return ctx.http_session
+    if not hasattr(_local, "session"):
+        _local.session = requests.Session()
+    return _local.session
 
 
 def ensure_session_openai(ctx=None):

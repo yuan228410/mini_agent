@@ -1,5 +1,6 @@
 """工作流编排工具 — run_workflow / workflow_status / load_workflow"""
 import json
+import threading
 from pathlib import Path
 
 import yaml
@@ -7,8 +8,9 @@ import yaml
 from ..logger import logger
 
 _blackboard = None
-_last_graph = None
 _workflow_dirs: list[Path] = []
+_graphs_lock = threading.Lock()
+_last_graphs: dict[int, object] = {}  # thread_id → last TaskGraph
 
 
 def configure(blackboard=None, workflow_dirs: list[Path] | None = None):
@@ -61,8 +63,6 @@ _run_def = {
 
 
 def _run_exec(args: dict) -> str:
-    global _last_graph
-
     from ..team.task_graph import TaskGraph, TaskNode
     from ..team.orchestrator import Orchestrator
     from ..config import MODEL_CONFIG
@@ -83,7 +83,7 @@ def _run_exec(args: dict) -> str:
         )
         graph.add_task(node)
 
-    _last_graph = graph
+    _last_graphs[threading.current_thread().ident] = graph
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
     orch = Orchestrator(
@@ -107,9 +107,10 @@ _status_def = {
 
 
 def _status_exec(args: dict) -> str:
-    if _last_graph is None:
+    graph = _last_graphs.get(threading.current_thread().ident)
+    if graph is None:
         return "暂无工作流记录"
-    return _last_graph.render_status()
+    return graph.render_status()
 
 
 # ── 构建可注册的工具模块对象 ──

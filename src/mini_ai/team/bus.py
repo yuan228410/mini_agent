@@ -25,10 +25,12 @@ class MessageBus:
         self._wake_events: dict[str, threading.Event] = {}
 
     def set_wake_callback(self, callback):
-        self._on_send = callback
+        with self._lock:
+            self._on_send = callback
 
     def register_wake(self, name: str, event: threading.Event):
-        self._wake_events[name] = event
+        with self._lock:
+            self._wake_events[name] = event
 
     @staticmethod
     def _valid(name: str) -> bool:
@@ -56,9 +58,10 @@ class MessageBus:
                 return f"Error: {to} 的 inbox 已满，请等待对方读取后再发送"
             with inbox_path.open("a", encoding="utf-8") as f:
                 f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-        if self._on_send:
-            self._on_send(to)
-        ev = self._wake_events.get(to)
+            on_send = self._on_send
+            ev = self._wake_events.get(to)
+        if on_send:
+            on_send(to)
         if ev:
             ev.set()
         return f"已送达 {to} 的 inbox"

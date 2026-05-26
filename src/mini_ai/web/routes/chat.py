@@ -26,6 +26,7 @@ _SESSION_BASE.mkdir(parents=True, exist_ok=True)
 _SESSIONS: dict[str, dict[str, list[dict]]] = {}
 _SESSION_MODELS: dict[str, str] = {}
 _LAST_USAGE: dict[str, dict] = {}
+_SESSION_LOCKS: dict[str, threading.Lock] = {}
 _DEFAULT_SESSION = "default"
 
 def _inject_todos(messages: list[dict]):
@@ -36,6 +37,13 @@ def _inject_todos(messages: list[dict]):
     if marker in base:
         base = base[: base.index(marker)]
     messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
+
+def _get_session_lock(username: str, sid: str) -> threading.Lock:
+    key = f"{username}:{sid}"
+    with _sessions_lock:
+        if key not in _SESSION_LOCKS:
+            _SESSION_LOCKS[key] = threading.Lock()
+        return _SESSION_LOCKS[key]
 
 def _lead_tool_defs() -> list[dict]:
     return [d for d in get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
@@ -105,23 +113,33 @@ def _get_or_create_session(username: str, session_id: str | None) -> tuple[str, 
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          messages: list[dict], tools: list[dict],
-                         max_turns: int = 30, abort_event: threading.Event | None = None,
-                         model_name: str | None = None) -> tuple:
-    disp = WebDisplay(queue, loop)
-    cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
-    ctx = RequestContext(model_config=cfg, display=disp)
+                         max_turns: int = 30, abort_event=None,
+                         model_name=None, session_lock=None,
+                         session_key: str = "default") -> tuple:
+    if session_lock:
+        session_lock.acquire()
+    try:
+        from ...tools.update_todos import set_session
+        set_session(session_key)
 
-    msg, _ = run_tool_loop(
-        messages, tools,
-        streaming=STREAMING,
-        display=disp,
-        inject_fn=_inject_todos,
-        abort_event=abort_event,
-        max_turns=max_turns,
-        ctx=ctx,
-    )
-    usage = get_usage()
-    return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
+        disp = WebDisplay(queue, loop)
+        cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+        ctx = RequestContext(model_config=cfg, display=disp)
+
+        msg, _ = run_tool_loop(
+            messages, tools,
+            streaming=STREAMING,
+            display=disp,
+            inject_fn=_inject_todos,
+            abort_event=abort_event,
+            max_turns=max_turns,
+            ctx=ctx,
+        )
+        usage = get_usage()
+        return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
+    finally:
+        if session_lock:
+            session_lock.release()
 
 # ── SSE endpoint ──
 
@@ -162,11 +180,12 @@ async def chat_sse_endpoint(body: dict):
     queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
     model_name = _SESSION_MODELS.get(f"{username}:{sid}")
+    s_lock = _get_session_lock(username, sid)
 
     async def event_generator():
         try:
             future = loop.run_in_executor(
-                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, None, model_name
+                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, None, model_name, s_lock, f"{username}:{sid}"
             )
             while True:
                 try:
@@ -254,8 +273,9 @@ async def chat_ws_endpoint(ws: WebSocket):
             abort_event = threading.Event()
 
             model_name = _SESSION_MODELS.get(f"{username}:{sid}")
+            s_lock = _get_session_lock(username, sid)
             future = loop.run_in_executor(
-                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name
+                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name, s_lock, f"{username}:{sid}"
             )
 
             try:

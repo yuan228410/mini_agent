@@ -1,7 +1,13 @@
-"""待办列表工具 — 跨压缩存活的计划管理"""
+"""待办列表工具 — 跨压缩存活的计划管理，per-session 隔离"""
+import contextvars
+import threading
+
 from ..logger import logger
+
 _VALID_STATUS = ("pending", "in_progress", "completed")
 _ICONS = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
+
+_current_session = contextvars.ContextVar("todo_session", default="default")
 
 definition = {
     "type": "function",
@@ -39,6 +45,7 @@ class TodoStore:
 
     def __init__(self):
         self.items: list[dict] = []
+        self._lock = threading.Lock()
 
     def update(self, todos: list[dict]) -> str:
         cleaned = []
@@ -55,14 +62,17 @@ class TodoStore:
         if in_progress > 5:
             return "Error: in_progress 任务过多（最多 5 个并行）。"
 
-        self.items = cleaned
+        with self._lock:
+            self.items = cleaned
         return self.render()
 
     def render(self) -> str:
-        if not self.items:
+        with self._lock:
+            items = list(self.items)
+        if not items:
             return "(当前无待办事项)"
         lines = []
-        for t in self.items:
+        for t in items:
             icon = _ICONS.get(t["status"], "[?]")
             if t["status"] == "in_progress":
                 lines.append(f"{icon} **{t['id']}. {t['content']}** ← 当前")
@@ -71,7 +81,27 @@ class TodoStore:
         return "\n".join(lines)
 
 
-_store = TodoStore()
+_stores_lock = threading.Lock()
+_stores: dict[str, TodoStore] = {}
+
+
+def _get_store() -> TodoStore:
+    sid = _current_session.get()
+    with _stores_lock:
+        if sid not in _stores:
+            _stores[sid] = TodoStore()
+        return _stores[sid]
+
+
+# 兼容：CLI 模式和 render_todos() 使用
+_store = type("_StoreProxy", (), {
+    "render": staticmethod(lambda: _get_store().render()),
+    "update": staticmethod(lambda todos: _get_store().update(todos)),
+})()
+
+
+def set_session(session_id: str):
+    _current_session.set(session_id)
 
 
 def execute(args: dict) -> str:

@@ -16,3 +16,4 @@ uv.lock
 # Web frontend
 web/node_modules/
 web/dist/
+.claude/

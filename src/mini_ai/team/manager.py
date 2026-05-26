@@ -93,15 +93,17 @@ class TeammateManager:
                 self.config["members"].append(member)
             self._save_config()
 
-        self._wake_events[name] = threading.Event()
-        self._wake_events[name].set()
+            self._wake_events[name] = threading.Event()
+            self._wake_events[name].set()
+
         logger.info(f"[spawn→] {name} role={role}")
         thread = threading.Thread(
             target=self._teammate_loop,
             args=(name, role, prompt),
             daemon=True,
         )
-        self.threads[name] = thread
+        with self.lock:
+            self.threads[name] = thread
         thread.start()
         return f"已召入队友 '{name}'（职司：{role}）"
 

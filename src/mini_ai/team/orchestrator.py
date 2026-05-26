@@ -15,7 +15,7 @@ class Orchestrator:
         self.context_length = context_length
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
-        self._pending_results: dict[str, str | None] = {}
+        self._pending_results: dict[str, tuple[str | None, str | None]] = {}
 
     def run(self, timeout: int = 1800) -> str:
         logger.info(f"[Orchestrator] 启动，{len(self.graph.nodes)} 个任务，超时 {timeout}s")
@@ -44,12 +44,11 @@ class Orchestrator:
             self._wait_pending()
 
             with self._lock:
-                for task_id, result in list(self._pending_results.items()):
+                for task_id, (result, error) in list(self._pending_results.items()):
                     if result is not None:
                         self.graph.mark_done(task_id, result)
                     else:
-                        node = self.graph.nodes[task_id]
-                        self.graph.mark_failed(task_id, node.error or "执行失败")
+                        self.graph.mark_failed(task_id, error or "执行失败")
                     del self._pending_results[task_id]
 
         return self._summarize()
@@ -75,10 +74,9 @@ class Orchestrator:
 
         with self._condition:
             if result:
-                self._pending_results[task.id] = result
+                self._pending_results[task.id] = (result, None)
             else:
-                task.error = "执行返回空结果"
-                self._pending_results[task.id] = None
+                self._pending_results[task.id] = (None, "执行返回空结果")
             self._condition.notify()
 
     def _run_subagent(self, agent_type: str, prompt: str) -> str | None:
