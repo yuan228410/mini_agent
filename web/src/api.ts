@@ -1,6 +1,7 @@
 const USERNAME_KEY = 'mini-ai-username'
 const _FETCH_TIMEOUT = 8000
 
+
 const _origFetch = window.fetch.bind(window)
 
 async function _fetch(url: string, init?: RequestInit): Promise<Response> {
@@ -27,7 +28,7 @@ export function hasUsername(): boolean {
   return !!localStorage.getItem(USERNAME_KEY)
 }
 
-export interface SSEEvent {
+export interface WsEvent {
   event: string
   data: any
 }
@@ -52,7 +53,6 @@ export interface ConfigResponse {
   history_count: number
   session_id: string
   username: string
-  transport: string
 }
 
 export interface CommandInfo {
@@ -111,60 +111,11 @@ function _usernameBody(): object {
   return u ? { username: u } : {}
 }
 
-// ── SSE (回退) ──
-
-export async function* streamChat(message: string, sessionId?: string): AsyncGenerator<SSEEvent> {
-  const body: any = { message, ..._usernameBody() }
-  if (sessionId) body.session_id = sessionId
-
-  const resp = await _fetch('/api/chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
-
-  if (!resp.ok || !resp.body) {
-    throw new Error(`Chat request failed: ${resp.status}`)
-  }
-
-  const reader = resp.body.getReader()
-  const decoder = new TextDecoder()
-  let buffer = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-
-    buffer += decoder.decode(value, { stream: true })
-    const lines = buffer.split('\n')
-    buffer = lines.pop() || ''
-
-    let currentEvent = ''
-    let currentData = ''
-
-    for (const line of lines) {
-      if (line.startsWith('event: ')) {
-        currentEvent = line.slice(7)
-      } else if (line.startsWith('data: ')) {
-        currentData = line.slice(6)
-      } else if (line === '' && currentEvent) {
-        try {
-          yield { event: currentEvent, data: JSON.parse(currentData) }
-        } catch {
-          yield { event: currentEvent, data: {} }
-        }
-        currentEvent = ''
-        currentData = ''
-      }
-    }
-  }
-}
-
-// ── WebSocket (持久连接) ──
+// ── WebSocket ──
 
 let _ws: WebSocket | null = null
 let _wsConnected = false
-const _eventHandlers: ((event: SSEEvent) => void)[] = []
+const _eventHandlers: ((event: WsEvent) => void)[] = []
 
 function _wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -225,7 +176,7 @@ export async function ensureWs(): Promise<boolean> {
   })
 }
 
-export function onWsEvent(handler: (event: SSEEvent) => void): () => void {
+export function onWsEvent(handler: (event: WsEvent) => void): () => void {
   _eventHandlers.push(handler)
   return () => {
     const idx = _eventHandlers.indexOf(handler)
@@ -239,9 +190,10 @@ export function wsSend(data: object) {
   }
 }
 
-export function wsChat(message: string, sessionId?: string) {
+export function wsChat(message: string, sessionId?: string, workspace?: string) {
   const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
   if (sessionId) chatMsg.session_id = sessionId
+  if (workspace) chatMsg.workspace = workspace
   wsSend(chatMsg)
 }
 
@@ -263,18 +215,6 @@ export function closeWs() {
 
 // ── Config ──
 
-let _transport: string | null = null
-
-export async function getTransport(): Promise<string> {
-  if (_transport) return _transport
-  try {
-    const c = await getConfig()
-    _transport = c.transport || 'ws'
-  } catch {
-    _transport = 'ws'
-  }
-  return _transport
-}
 
 // ── Session APIs ──
 
@@ -432,5 +372,24 @@ export async function browseDirs(path?: string): Promise<BrowseResponse> {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
   const resp = await _fetch(`/api/files/browse?${params.toString()}`)
+  return resp.json()
+}
+
+export interface SearchResult {
+  ts: string
+  role: string
+  content: string
+}
+
+export async function searchHistory(keyword: string, sessionId?: string, workspace?: string, dateFrom?: string, dateTo?: string, limit?: number): Promise<{ results: SearchResult[] }> {
+  const params = new URLSearchParams()
+  params.set('keyword', keyword)
+  if (sessionId) params.set('session_id', sessionId)
+  params.set('username', _username())
+  if (workspace) params.set('workspace', workspace)
+  if (dateFrom) params.set('date_from', dateFrom)
+  if (dateTo) params.set('date_to', dateTo)
+  if (limit) params.set('limit', String(limit))
+  const resp = await _fetch(`/api/chat/search?${params.toString()}`)
   return resp.json()
 }

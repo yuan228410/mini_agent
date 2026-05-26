@@ -21,7 +21,6 @@ const contextMenu = ref<{ x: number; y: number; sid: string } | null>(null)
 
 const wsSessions: Record<string, SessionInfo[]> = reactive({})
 const wsCollapsed: Record<string, boolean> = reactive({})
-const unlinkedSessions = ref<SessionInfo[]>([])
 
 const showWsManager = ref(false)
 const showCreateWs = ref(false)
@@ -59,7 +58,7 @@ async function loadWorkspaces() {
 async function loadAllSessions() {
   const promises: Promise<void>[] = []
   promises.push((async () => {
-    try { const resp = await getSessions(); unlinkedSessions.value = resp.sessions || [] } catch { unlinkedSessions.value = [] }
+
   })())
   for (const ws of workspaces.value) {
     promises.push((async () => {
@@ -75,7 +74,7 @@ async function loadSessionsFor(wsName: string | null) {
     if (wsName) {
       wsSessions[wsName] = resp.sessions || []
     } else {
-      unlinkedSessions.value = resp.sessions || []
+
     }
   } catch {}
 }
@@ -226,7 +225,7 @@ function getAllSessions(): SessionInfo[] {
   for (const ws of workspaces.value) {
     all.push(...(wsSessions[ws.name] || []))
   }
-  all.push(...unlinkedSessions.value)
+
   return all
 }
 
@@ -235,8 +234,7 @@ function updateSessionStatus(sid: string, status: 'idle' | 'generating') {
     const s = (wsSessions[ws.name] || []).find(s => s.session_id === sid)
     if (s) { s.status = status; return }
   }
-  const s = unlinkedSessions.value.find(s => s.session_id === sid)
-  if (s) s.status = status
+  return null
 }
 
 function setActiveSession(sid: string) {
@@ -287,38 +285,6 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
             <div class="session-meta">{{ s.message_count }} 条{{ s.created_at ? ' · ' + relativeTime(s.created_at) : '' }}</div>
           </div>
           <div v-if="!(wsSessions[ws.name] || []).length" class="session-empty-sm">暂无会话</div>
-        </div>
-      </div>
-
-      <!-- Unlinked sessions -->
-      <div class="ws-group">
-        <div class="ws-group-header" @click="toggleCollapse('__unlinked__')">
-          <span class="ws-collapse-icon">{{ wsCollapsed['__unlinked__'] ? '▸' : '▾' }}</span>
-          <span class="ws-group-icon">📂⁻</span>
-          <span class="ws-group-name">未关联</span>
-          <button class="ws-add-btn" @click.stop="newSessionFor(null)" title="新建会话">+</button>
-        </div>
-        <div v-if="!wsCollapsed['__unlinked__']" class="ws-group-sessions">
-          <div v-for="s in unlinkedSessions" :key="s.session_id"
-               class="session-item" :class="{ active: activeSessionId === s.session_id }"
-               @click="selectSession(s.session_id, null)"
-               @contextmenu="onContextMenu($event, s.session_id)"
-               @dblclick="startEdit(s.session_id, s.name)">
-            <div class="session-row">
-              <span v-if="s.status === 'generating'" class="session-dot generating"></span>
-              <span v-else class="session-dot idle"></span>
-              <template v-if="editingSid === s.session_id">
-                <input class="session-edit-input" v-model="editingName"
-                       @keydown="handleEditKey($event, s.session_id)"
-                       @blur="finishEdit(s.session_id)" autofocus />
-              </template>
-              <template v-else>
-                <span class="session-name">{{ s.name || s.preview || '新会话' }}</span>
-              </template>
-            </div>
-            <div class="session-meta">{{ s.message_count }} 条{{ s.created_at ? ' · ' + relativeTime(s.created_at) : '' }}</div>
-          </div>
-          <div v-if="!unlinkedSessions.length" class="session-empty-sm">暂无会话</div>
         </div>
       </div>
     </div>

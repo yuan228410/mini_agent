@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Query
 
 from ... import __version__
-from ...config import MODEL_CONFIG, WEB, get_model_config
+from ...config import MODEL_CONFIG, get_model_config
 from .chat import _get_or_create_session, _DEFAULT_SESSION, _SESSION_MODELS, _LAST_USAGE
 
 router = APIRouter()
@@ -23,5 +23,4 @@ async def get_config(session_id: str = Query(default=_DEFAULT_SESSION), username
         "history_count": len(messages) - 1 if messages else 0,
         "session_id": session_id,
         "username": username,
-        "transport": WEB.get("transport", "ws"),
     }

@@ -1,4 +1,4 @@
-"""聊天接口 — SSE + WebSocket 双模式，多用户，JSONL 持久化，多会话并行"""
+"""聊天接口 — WebSocket 模式，多用户，JSONL 持久化，多会话并行"""
 import asyncio
 import json
 import threading
@@ -7,12 +7,11 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
-from starlette.responses import StreamingResponse
 
-from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, RequestContext, get_model_config, user_data_dir
-from ...llm import get_usage
+from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, RequestContext, get_model_config, user_data_dir
+from ...llm import get_usage, chat as llm_chat
 from ...runner import run_tool_loop
-from ...tools import get_definitions
+from ...tools import get_definitions, register_memory_tools, register_history_tools
 from ...logger import logger
 from ..display import WebDisplay
 
@@ -21,8 +20,7 @@ router = APIRouter()
 _sessions_lock = threading.Lock()
 
 _SYSTEM_PROMPT: str = ""
-_SESSION_BASE = DATA_DIR / "web_sessions"
-_SESSION_BASE.mkdir(parents=True, exist_ok=True)
+
 
 _SESSIONS: dict[str, dict[str, list[dict]]] = {}
 _SESSION_MODELS: dict[str, str] = {}
@@ -31,6 +29,8 @@ _SESSION_LOCKS: dict[str, threading.Lock] = {}
 _SESSION_STATUS: dict[str, str] = {}
 _SESSION_ABORTS: dict[str, threading.Event] = {}
 _META_CACHE: dict[str, dict] = {}
+_SESSION_COMPONENTS: dict[str, dict] = {}
+_SESSION_WORKSPACE: dict[str, str | None] = {}
 _DEFAULT_SESSION = "default"
 
 
@@ -39,17 +39,6 @@ _USER_BASES: dict[str, Path] = {}
 def switch_session_base(new_base, username: str = "default"):
     _USER_BASES[username] = new_base
     new_base.mkdir(parents=True, exist_ok=True)
-
-
-def get_latest_session_id(username: str) -> str:
-    user_dir = _SESSION_BASE / username
-    if not user_dir.exists():
-        return _DEFAULT_SESSION
-    files = list(user_dir.glob("*.jsonl"))
-    if not files:
-        return _DEFAULT_SESSION
-    latest = max(files, key=lambda f: f.name)
-    return latest.stem
 
 
 def _get_workspace_base(username: str, workspace: str | None) -> Path | None:
@@ -66,10 +55,18 @@ def _get_workspace_base(username: str, workspace: str | None) -> Path | None:
 
 
 def _resolve_base(username: str, workspace: str | None) -> Path:
-    ws_base = _get_workspace_base(username, workspace)
+    ws_name = workspace or "default"
+    ws_base = _get_workspace_base(username, ws_name)
     if ws_base:
         return ws_base
-    base = user_data_dir(username) / "web_sessions"
+    from ...workspace import WorkspaceManager
+    ws_mgr = WorkspaceManager(user_data_dir(username))
+    ws = ws_mgr.get("default")
+    if ws:
+        base = ws.ws_dir / "web_sessions"
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    base = user_data_dir(username) / "workspaces" / "default" / "web_sessions"
     base.mkdir(parents=True, exist_ok=True)
     return base
 
@@ -95,6 +92,67 @@ def _get_session_lock(username: str, sid: str) -> threading.Lock:
 def _lead_tool_defs() -> list[dict]:
     return [d for d in get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
 
+def _get_or_create_components(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> dict:
+    cache_key = f"{username}:{sid}"
+    if cache_key in _SESSION_COMPONENTS:
+        return _SESSION_COMPONENTS[cache_key]
+
+    from ...memory import MemoryStore, Compactor
+    from ...memory.history_db import HistoryDB
+    from ...context import ContextBuilder
+    from ..deps import SKILL_LOADER
+
+    user_memory_dir = user_data_dir(username) / "memory"
+    user_store = MemoryStore(user_memory_dir)
+
+    sf = _session_file(username, sid, base)
+    session_memory_dir = sf.parent / sid / "memory_data"
+    session_memory_dir.mkdir(parents=True, exist_ok=True)
+
+    history_db = HistoryDB(session_memory_dir / "history.db", workspace=sid[:15])
+
+    project_path = ""
+    if workspace:
+        from ...workspace import WorkspaceManager
+        ws_mgr = WorkspaceManager(user_data_dir(username))
+        ws = ws_mgr.get(workspace)
+        if ws:
+            project_path = ws.project_path
+
+    ctx_builder = ContextBuilder(DATA_DIR)
+    compactor = Compactor(
+        user_store,
+        keep_recent=COMPACTOR.get("keep_recent", 50),
+        char_threshold=COMPACTOR.get("char_threshold", 20000),
+        context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
+        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_builder=ctx_builder,
+        skill_loader=SKILL_LOADER,
+        history_db=history_db,
+    )
+
+    components = {
+        "store": user_store,
+        "history_db": history_db,
+        "compactor": compactor,
+        "ctx_builder": ctx_builder,
+        "project_path": project_path,
+    }
+    _SESSION_COMPONENTS[cache_key] = components
+    return components
+
+
+def _build_system_prompt(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> str:
+    from ..deps import SKILL_LOADER
+    comp = _get_or_create_components(username, sid, base, workspace)
+    return comp["ctx_builder"].build(
+        memory_store=comp["store"],
+        skill_loader=SKILL_LOADER,
+        project_path=comp["project_path"],
+    )
+
+
+
 
 def set_system_prompt(prompt: str):
     global _SYSTEM_PROMPT
@@ -105,11 +163,9 @@ def _user_dir(username: str, base: Path | None = None) -> Path:
     if base is None:
         base = _USER_BASES.get(username)
         if base is None:
-            base = user_data_dir(username) / "web_sessions"
-            base.mkdir(parents=True, exist_ok=True)
-    d = base / username
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+            base = _resolve_base(username, None)
+    base.mkdir(parents=True, exist_ok=True)
+    return base
 
 
 def _session_file(username: str, session_id: str, base: Path | None = None) -> Path:
@@ -198,7 +254,15 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             _SESSIONS[username] = {}
         user_sessions = _SESSIONS[username]
         if session_id and session_id in user_sessions:
-            return session_id, user_sessions[session_id]
+            existing = user_sessions[session_id]
+            if len(existing) > 1:
+                return session_id, existing
+            loaded = _load_from_file(username, session_id, base)
+            if loaded and len(loaded) > 1:
+                user_sessions[session_id] = loaded
+                _update_meta_cache(username, session_id, loaded)
+                return session_id, loaded
+            return session_id, existing
         sid = session_id or _DEFAULT_SESSION
         if sid in user_sessions:
             existing = user_sessions[sid]
@@ -215,7 +279,8 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             user_sessions[sid] = loaded
             _update_meta_cache(username, sid, loaded)
             return sid, user_sessions[sid]
-        user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT, "name": "新会话"}]
+        prompt = _build_system_prompt(username, sid, base) or _SYSTEM_PROMPT
+        user_sessions[sid] = [{"role": "system", "content": prompt, "name": "新会话"}]
         _update_meta_cache(username, sid, user_sessions[sid])
     return sid, user_sessions[sid]
 
@@ -224,15 +289,30 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          messages: list[dict], tools: list[dict],
                          max_turns: int = 30, abort_event=None,
                          model_name=None, session_lock=None,
-                         session_key: str = "default") -> tuple:
+                         session_key: str = "default",
+                         username: str = "default",
+                         workspace: str | None = None) -> tuple:
     _SESSION_STATUS[session_key] = "generating"
     try:
         from ...tools.update_todos import set_session
         set_session(session_key)
 
+        base = _resolve_base(username, workspace)
+        comp = _get_or_create_components(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
+        register_memory_tools(comp["store"])
+        register_history_tools(comp["history_db"])
+
+        if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
+            messages[0]["content"] = _build_system_prompt(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
+
         disp = WebDisplay(queue, loop)
         cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
         ctx = RequestContext(model_config=cfg, display=disp)
+
+        user_msgs = [m for m in messages if m["role"] == "user"]
+        if user_msgs:
+            last_user = user_msgs[-1].get("content", "")
+            comp["history_db"].append("user", last_user)
 
         msg, _ = run_tool_loop(
             messages, tools,
@@ -248,7 +328,15 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             for m in messages[-3:]
         ):
             messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking")})
+            comp["history_db"].append("assistant", msg["content"])
+
         usage = get_usage()
+        if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
+            messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx)
+            comp["history_db"].mark_archived()
+            messages[0]["content"] = _build_system_prompt(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
+            _inject_todos(messages)
+
         return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
     finally:
         _SESSION_STATUS[session_key] = "idle"
@@ -263,7 +351,9 @@ async def create_session(body: dict):
     base = _resolve_base(username, workspace)
     sid = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
     user_sessions = _ensure_user_sessions(username)
-    user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT, "name": "新会话"}]
+    _SESSION_WORKSPACE[f"{username}:{sid}"] = workspace
+    system_prompt = _build_system_prompt(username, sid, base, workspace) or _SYSTEM_PROMPT
+    user_sessions[sid] = [{"role": "system", "content": system_prompt, "name": "新会话"}]
     _inject_todos(user_sessions[sid])
     _write_session_file(username, sid, user_sessions[sid], base)
     _update_meta_cache(username, sid, user_sessions[sid])
@@ -280,10 +370,10 @@ async def list_sessions(username: str = Query(default="default"), workspace: str
     for path in sorted(user_dir.glob("*.jsonl"), key=lambda f: f.name, reverse=True):
         sid = path.stem
         cache_key = f"{username}:{sid}"
-        if cache_key in _META_CACHE:
-            meta = _META_CACHE[cache_key]
-            meta["status"] = _SESSION_STATUS.get(cache_key, "idle")
-            sessions.append(meta)
+        cached = _META_CACHE.get(cache_key)
+        if cached and cached.get("message_count", 0) > 0:
+            cached["status"] = _SESSION_STATUS.get(cache_key, "idle")
+            sessions.append(cached)
             continue
         msgs = _load_from_file(username, sid, base) or []
         meta = _build_meta(sid, msgs, username)
@@ -304,6 +394,11 @@ async def delete_session(body: dict):
     path = _session_file(username, session_id)
     if path.exists():
         path.unlink()
+    session_memory_dir = path.parent / session_id / "memory_data"
+    if session_memory_dir.exists():
+        import shutil
+        shutil.rmtree(session_memory_dir, ignore_errors=True)
+    _SESSION_COMPONENTS.pop(f"{username}:{session_id}", None)
     _update_meta_cache(username, session_id)
     _SESSION_STATUS.pop(f"{username}:{session_id}", None)
     return {"status": "ok"}
@@ -323,57 +418,6 @@ async def rename_session(body: dict):
     return {"status": "ok", "name": name}
 
 
-# ── SSE endpoint ──
-
-@router.post("/chat")
-async def chat_sse_endpoint(body: dict):
-    user_message = body.get("message", "").strip()
-    username = body.get("username", "default")
-    session_id = body.get("session_id")
-    if not user_message:
-        return {"error": "消息不能为空"}
-
-    sid, messages = _get_or_create_session(username, session_id)
-    start_idx = len(messages)
-    messages.append({"role": "user", "content": user_message})
-    _append_to_file(username, sid, {"role": "user", "content": user_message})
-
-    queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
-    abort_event = threading.Event()
-
-    model_name = _SESSION_MODELS.get(f"{username}:{sid}")
-    s_lock = _get_session_lock(username, sid)
-    future = loop.run_in_executor(
-        None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name, s_lock, f"{username}:{sid}"
-    )
-
-    async def event_generator():
-        try:
-            while True:
-                try:
-                    event = await asyncio.wait_for(queue.get(), timeout=0.5)
-                    ev_data = json.dumps(event['data'], ensure_ascii=False)
-                    yield f"event: {event['event']}\ndata: {ev_data}\n\n"
-                except asyncio.TimeoutError:
-                    if future.done():
-                        break
-                    continue
-
-            result = future.result()
-            msg, usage = result if isinstance(result, tuple) else (result, get_usage())
-            _LAST_USAGE[f"{username}:{sid}"] = usage
-            _write_session_file(username, sid, messages)
-            _update_meta_cache(username, sid, messages)
-            done_data = {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
-            yield f"event: done\ndata: {json.dumps(done_data, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            logger.error(f"[Web] SSE 错误: {e}")
-            yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
 # ── WebSocket endpoint (parallel) ──
 
 @router.websocket("/chat/ws")
@@ -391,7 +435,9 @@ async def chat_ws_endpoint(ws: WebSocket):
             except Exception:
                 pass
 
-    async def _run_chat(sid: str, username: str, user_message: str):
+    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None):
+        logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name}")
+        _SESSION_WORKSPACE[f"{username}:{sid}"] = ws_name
         messages = _get_or_create_session(username, sid)[1]
         messages.append({"role": "user", "content": user_message})
         _append_to_file(username, sid, {"role": "user", "content": user_message})
@@ -404,8 +450,9 @@ async def chat_ws_endpoint(ws: WebSocket):
 
         model_name = _SESSION_MODELS.get(session_key)
         s_lock = _get_session_lock(username, sid)
+        ws_name = _SESSION_WORKSPACE.get(session_key)
         future = loop.run_in_executor(
-            None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name, s_lock, session_key
+            None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name, s_lock, session_key, username, ws_name
         )
 
         aborted = False
@@ -424,7 +471,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                     if future.done():
                         break
         except Exception as e:
-            logger.error(f"[Web] WS chat task error: {e}")
+            logger.error(f"[Web] WS chat task error: {e}", exc_info=True)
             await _send({"event": "error", "data": {"error": str(e), "session_id": sid}})
 
         if aborted:
@@ -489,7 +536,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         await _send({"event": "error", "data": {"error": "该会话正在生成中", "session_id": sid}})
                         continue
 
-                    task = asyncio.create_task(_run_chat(sid, username, user_message))
+                    task = asyncio.create_task(_run_chat(sid, username, user_message, data.get("workspace")))
                     _active_tasks[f"{username}:{sid}"] = task
 
                 except asyncio.TimeoutError:
@@ -497,11 +544,12 @@ async def chat_ws_endpoint(ws: WebSocket):
                 except WebSocketDisconnect:
                     ws_closed = True
                     break
-                except Exception:
+                except Exception as _e:
+                    logger.error(f"[Web] WS reader error: {_e}")
                     ws_closed = True
                     break
-        except Exception:
-            pass
+        except Exception as _e:
+            logger.error(f"[Web] WS outer error: {_e}")
         finally:
             if not ws_closed:
                 ws_closed = True
@@ -522,12 +570,26 @@ async def chat_ws_endpoint(ws: WebSocket):
         _active_tasks.clear()
 
 
+
+@router.get("/chat/search")
+async def chat_search(keyword: str = Query(default=""), session_id: str = Query(default=_DEFAULT_SESSION),
+                       username: str = Query(default="default"), workspace: str = Query(default=""),
+                       date_from: str = Query(default=""), date_to: str = Query(default=""),
+                       limit: int = Query(default=20)):
+    if not keyword:
+        return {"results": []}
+    base = _resolve_base(username, workspace or None)
+    comp = _get_or_create_components(username, session_id, base, workspace or None)
+    results = comp["history_db"].search(keyword, date_from=date_from, date_to=date_to, limit=limit)
+    return {"results": results}
+
 # ── History & Reset ──
 
 @router.get("/chat/history")
 async def chat_history(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default"), workspace: str = Query(default="")):
     base = _resolve_base(username, workspace or None)
-    _, messages = _get_or_create_session(username, session_id, base)
+    sid, messages = _get_or_create_session(username, session_id, base)
+    logger.info(f"[chat_history] sid={sid} ws={workspace} base={base} msgs={len(messages)}")
     history = []
     tool_results: dict[str, str] = {}
     for m in messages:

@@ -405,7 +405,7 @@ def run_tool_loop(messages, tools, *, streaming=False, display=None,
 
 ### 13. Web 界面 (web/)
 
-FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端，`mini-ai --web` 启动。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
+FastAPI + WebSocket 后端，Vue 3 + Vite 前端，`mini-ai --web` 启动。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
 
 **关键设计：**
 - WebDisplay 适配器实现与 CLI Display 相同接口，通过 `loop.call_soon_threadsafe()` 线程安全推入 asyncio.Queue
@@ -418,7 +418,7 @@ FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端，`mini-ai --web` 
 - 会话文件持久化：消息 append 写入 JSONL，重启自动恢复；多会话并行（`_SESSION_LOCKS` per-session 串行，跨会话并行）
 - 工作空间管理：按用户隔离（`workspaces/<username>/`），支持创建/切换/删除/移除，项目规范（CLAUDE.md/AGENTS.md）per-workspace 共享
 
-详细设计、组件架构、API 接口、SSE 协议等见 [WEB.md](WEB.md)。
+详细设计、组件架构、API 接口、WebSocket 协议等见 [WEB.md](WEB.md)。
 
 ---
 
@@ -434,4 +434,4 @@ FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端，`mini-ai --web` 
 8. **零浪费轮询：** inbox 读取由代码层自动处理，不暴露给 LLM 避免空轮询消耗 token
 9. **Event 驱动唤醒：** 用 `threading.Event` 替代 sleep 轮询，有消息 0ms 响应，无消息低功耗等待
 10. **多模型可插拔：** `active_model` 一键切换，`api_mode` 适配不同协议，零代码改动
-11. **Web/CLI 双模式：** `--web` 参数切换，同一套 LLM/工具/记忆逻辑，仅 Display 层不同；Web 模式同步代码在线程池运行，通过 `call_soon_threadsafe` 线程安全推送事件；WS/SSE 双模式，WS 支持中断生成；`RequestContext` 实现多用户并发隔离，per-session 模型切换
+11. **Web/CLI 双模式：** `--web` 参数切换，同一套 LLM/工具/记忆逻辑，仅 Display 层不同；Web 模式同步代码在线程池运行，通过 `call_soon_threadsafe` 线程安全推送事件；WebSocket 通信，支持中断生成；`RequestContext` 实现多用户并发隔离，per-session 模型切换

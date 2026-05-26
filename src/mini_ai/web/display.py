@@ -1,4 +1,4 @@
-"""Web 端 Display 适配器 — 将事件推入 SSE 队列（线程安全）"""
+"""Web 端 Display 适配器 — 将事件推入 WebSocket 队列（线程安全）"""
 import asyncio
 import time
 

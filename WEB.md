@@ -4,7 +4,7 @@
 
 通过 `mini-ai --web` 启动 Web 对话界面，默认监听 `http://localhost:8765`。
 
-技术栈：FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
+技术栈：FastAPI + WebSocket 后端，Vue 3 + Vite 前端。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
 
 ## 启动方式
 
@@ -74,7 +74,7 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **会话状态指示** — 侧边栏会话项旁显示"生成中"绿点脉动动画
 - **多用户支持** — 用户名认证，按用户隔离数据目录，首次访问输入用户名
 - **会话文件持久化** — 消息写入 JSONL 文件，后端重启自动恢复历史
-- **中断生成** — WS 模式下可中断 LLM 生成（服务端真正停止）；SSE 模式不显示停止按钮
+- **中断生成** — 可中断 LLM 生成（服务端真正停止），点击 ⏹ 停止按钮
 - **会话持久化** — 刷新页面自动恢复历史消息（session_id 存 localStorage）
 - **工作空间管理** — 侧边栏顶部显示当前工作空间，支持创建/切换/删除/移除工作空间
 - **文件浏览** — 工作空间关联的项目目录文件列表预览
@@ -84,11 +84,11 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 ```
 web/src/
 ├── App.vue              # 根组件：标题栏 + SessionSidebar + ChatView + StatusBar
-├── api.ts               # API 封装（fetch + SSE + WebSocket + session 管理）
+├── api.ts               # API 封装（fetch + WebSocket + session 管理）
 ├── theme.ts             # 主题管理（init/toggle/apply + localStorage）
 ├── style.css            # CSS 变量色板 + 噪点纹理 + 全局排版 + 动画
 └── components/
-    ├── ChatView.vue     # 主聊天界面：消息列表 + 输入框，WS/SSE 双模式 + 中断 + session 持久化
+    ├── ChatView.vue     # 主聊天界面：消息列表 + 输入框，WebSocket 通信 + 中断 + session 持久化
     ├── MessageItem.vue  # 单条消息：Markdown 渲染 + 思维链 + 工具调用
     ├── SessionSidebar.vue # 左侧会话列表面板：工作空间切换 + 会话管理 + 收起/展开
     ├── ThinkingBlock.vue# 思维链折叠区：琥珀色竖线，点击展开/收起
@@ -112,7 +112,7 @@ src/mini_ai/web/
 ├── display.py          # WebDisplay 适配器：线程安全推入 asyncio.Queue
 └── routes/
     ├── __init__.py
-    ├── chat.py         # 会话管理 + SSE/WS 双模式聊天 + 中断生成 + 历史查询 + 重置
+    ├── chat.py         # 会话管理 + WebSocket 聊天 + 中断生成 + 历史查询 + 重置
     ├── models.py       # 模型列表 + 切换
     ├── files.py        # 文件浏览接口
     ├── skills.py       # 技能列表
@@ -121,7 +121,7 @@ src/mini_ai/web/
     └── workspaces.py   # 工作空间管理 API（按用户隔离）
 ```
 
-### SSE 事件格式
+### WebSocket 事件格式
 
 ```
 event: thinking_start
@@ -151,11 +151,7 @@ data: {"error": "错误信息"}
 
 ### WebSocket 模式
 
-`config.yaml` 配置 `web.transport: ws|sse`，默认 `ws`。
-
-- WS 模式：前端建立持久 WebSocket 连接，支持中断生成（`{"type": "abort"}`）
-- SSE 模式：纯 HTTP 流式，不支持中断，停止按钮不显示
-- 前端 WS 连接失败时自动回退到 SSE
+前端建立持久 WebSocket 连接，支持中断生成（`{"type": "abort"}`）。
 
 `WS /api/chat/ws` 消息协议：
 
@@ -166,7 +162,7 @@ data: {"error": "错误信息"}
 {"type": "abort", "session_id": "xxx", "username": "xxx"}
 ```
 
-**服务端 → 客户端：** 事件格式与 SSE 相同（`{"event": "...", "data": {...}}`），新增 `aborted` 事件。
+**服务端 → 客户端：** `{"event": "...", "data": {...}}`，事件类型包括 `thinking_start`/`thinking`/`thinking_end`/`text`/`tool_start`/`tool_result`/`done`/`aborted`/`error`。
 
 ### 中断机制
 
@@ -184,7 +180,6 @@ data: {"error": "错误信息"}
 | `/api/sessions` | GET | 获取用户会话列表，参数: `username`, `workspace` |
 | `/api/session` | DELETE | 删除会话，body: `{"username": "xxx", "session_id": "xxx"}` |
 | `/api/session/rename` | PATCH | 重命名会话，body: `{"username": "xxx", "session_id": "xxx", "name": "xxx"}` |
-| `/api/chat` | POST | SSE 流式对话，body: `{"message": "...", "session_id": "xxx"}` |
 | `/api/chat/ws` | WS | WebSocket 持久连接，支持双向通信和中断生成 |
 | `/api/chat/history` | GET | 获取会话历史，参数: `session_id`, `workspace` |
 | `/api/chat/reset` | POST | 重置会话，body: `{"session_id": "xxx"}` |
@@ -200,6 +195,7 @@ data: {"error": "错误信息"}
 | `/api/workspaces/add` | POST | 添加已有目录为工作空间 |
 | `/api/workspaces/switch` | POST | 切换工作空间 |
 | `/api/workspaces/{name}` | DELETE | 删除/移除工作空间 |
+| `/api/chat/search` | GET | 搜索历史消息，参数: `keyword`, `session_id`, `workspace`, `date_from`, `date_to`, `limit` |
 
 ### 多用户 + 会话持久化 + 并发安全
 
@@ -226,8 +222,7 @@ data: {"error": "错误信息"}
 **会话文件持久化：**
 - 消息写入 JSONL 文件，后端重启后自动从文件恢复
 - 会话创建时写首行 system prompt，重置时清空重建
-- 未关联工作空间：`~/.mini_ai/web_sessions/<username>/<sid>.jsonl`
-- 关联工作空间：`~/.mini_ai/workspaces/<username>/<ws>/web_sessions/<username>/<sid>.jsonl`
+- 关联工作空间：`~/.mini_ai/users/<username>/workspaces/<ws>/web_sessions/<sid>.jsonl`
 
 **工作空间管理：**
 - 每个用户独立的工作空间列表，按 `~/.mini_ai/workspaces/<username>/` 隔离
@@ -243,7 +238,28 @@ data: {"error": "错误信息"}
 - 切换会话从 Map 恢复，不中断其他会话的 LLM 生成
 - 后端 `_SESSION_LOCKS` 仅序列化同一会话的消息读写，不同会话不同线程并行
 - WS 连接共用，事件按 `session_id` 路由到对应会话状态
-- SSE 模式每个会话独立 fetch
+
+### 记忆/压缩/搜索（Per-session 隔离）
+
+每个 Web 会话独立初始化 MemoryStore + HistoryDB + Compactor 实例：
+
+- **MemoryStore** — 三层记忆（情景层/长期层/用户画像），存放在 `<session_dir>/<sid>/memory_data/`
+- **HistoryDB** — SQLite 历史存储，支持全文搜索（`/api/chat/search`）
+- **Compactor** — 上下文超阈值自动压缩 + 记忆更新，复用 `config.yaml` 的 `compactor` 配置
+- **ContextBuilder** — 系统提示词含记忆 + 技能 + 项目规范（CLAUDE.md/AGENTS.md per-workspace 共享）
+- **工具绑定** — `remember`/`recall`/`forget`/`search_history` 工具在每轮 `_run_tool_loop_sync` 中动态绑定当前会话实例
+- **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md（通过 ContextBuilder + project_path 读取）
+
+存储路径：
+```
+<session_dir>/<sid>/memory_data/
+├── MEMORY.md          # 长期记忆
+├── USER.md            # 用户画像
+├── 2026-05-27.md      # 情景记忆
+└── history.db         # SQLite 历史搜索
+```
+
+压缩触发时机：每轮对话后检查 `prompt_tokens` 或本地字符数超阈值，自动压缩并更新三层记忆。
 
 ### 斜杠命令
 
@@ -281,6 +297,4 @@ Vite 开发模式自动代理 `/api` 请求到 `http://localhost:8765`（后端�
 ## 待办
 
 - [ ] highlight.js 按需加载 — 仅加载常用语言包，减少前端体积
-- [ ] Web 端记忆/压缩/搜索 — 集成 MemoryStore + HistoryDB + Compactor，per-session 隔离
 - [ ] 多模态输入 — 支持图片/PDF 作为输入
-- [ ] 多用户并发安全 — register_memory_tools/register_history_tools 全局覆盖问题

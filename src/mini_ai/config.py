@@ -75,7 +75,6 @@ RUNNER = (_raw.get("runner") or {"context_usage_limit": 0.88})
 THINKING = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000})
 DISPLAY = (_raw.get("display") or {"thinking_mode": "collapsed", "tool_detail": "summary"})
 SKILL_PATHS = [Path(p) for p in (_raw.get("skill_paths") or [])]
-WEB = (_raw.get("web") or {})
 
 
 AVAILABLE_MODELS = list(_models.keys())

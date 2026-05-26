@@ -85,7 +85,7 @@ def main():
         tool_detail=DISPLAY.get("tool_detail", "summary"),
     )
 
-    ws_mgr = WorkspaceManager(DATA_DIR)
+    ws_mgr = WorkspaceManager(DATA_DIR, ensure_default=False)
     cwd = Path.cwd()
     cwd_name = cwd.name or "default"
     ws = ws_mgr.get(cwd_name)

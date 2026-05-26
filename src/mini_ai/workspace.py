@@ -21,11 +21,12 @@ class Workspace:
 
 class WorkspaceManager:
 
-    def __init__(self, data_dir: Path):
+    def __init__(self, data_dir: Path, ensure_default: bool = True):
         self.data_dir = data_dir
         self.workspaces_dir = data_dir / "workspaces"
         self.workspaces_dir.mkdir(parents=True, exist_ok=True)
-        self._ensure_default()
+        if ensure_default:
+            self._ensure_default()
 
     def _ensure_default(self):
         default_dir = self.workspaces_dir / "default"
