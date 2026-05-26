@@ -192,6 +192,8 @@ init (offline) → spawn → working → idle → ...
 | 上下文重置 | 每轮任务完成后 `messages = [messages[0]]`，防止无限增长 |
 | 上下文安全阀 | 队友 `prompt_tokens > context_length × 88%` 时自动终止并回禀 |
 | `threading.local()` | 各线程独立 token 统计，避免 lead/队友并发读写竞态 |
+| `RequestContext` | 每请求独立的 model_config/display/http_session，多用户并发隔离 |
+| `_sessions_lock` | `threading.Lock` 保护 `_SESSIONS` 字典并发读写 |
 | 数量限制 | `config.yaml` 的 `teammate.max_teammates` 控制，默认 10 |
 
 **回禀等待流程（team_loop.py）：**
@@ -403,6 +405,9 @@ FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端，`mini-ai --web` 
 - 同步工具循环在 `run_in_executor()` 中执行，不阻塞事件循环
 - 前端 Editorial 杂志编辑风，亮暗主题切换，Markdown + highlight.js 渲染
 - 多用户隔离：`_SESSIONS[username][session_id]` 两级字典，用户名认证 + localStorage
+- 请求上下文隔离：`RequestContext` 封装 model_config/display/http_session，每请求独立，多用户并发安全
+- Usage 统计准确：`_run_tool_loop_sync` 返回 `(msg, usage)` 元组，在 executor 线程内读取 `_get_usage()`，避免跨线程零值
+- Per-session 模型切换：`_SESSION_MODELS` 记录每个会话的模型选择，不修改全局 MODEL_CONFIG
 - 会话文件持久化：消息 append 写入 `~/.mini_ai/web_sessions/<username>/<sid>.jsonl`，重启自动恢复
 
 详细设计、组件架构、API 接口、SSE 协议等见 [WEB.md](WEB.md)。
@@ -421,4 +426,4 @@ FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端，`mini-ai --web` 
 8. **零浪费轮询：** inbox 读取由代码层自动处理，不暴露给 LLM 避免空轮询消耗 token
 9. **Event 驱动唤醒：** 用 `threading.Event` 替代 sleep 轮询，有消息 0ms 响应，无消息低功耗等待
 10. **多模型可插拔：** `active_model` 一键切换，`api_mode` 适配不同协议，零代码改动
-11. **Web/CLI 双模式：** `--web` 参数切换，同一套 LLM/工具/记忆逻辑，仅 Display 层不同；Web 模式同步代码在线程池运行，通过 `call_soon_threadsafe` 线程安全推送事件；WS/SSE 双模式，WS 支持中断生成
+11. **Web/CLI 双模式：** `--web` 参数切换，同一套 LLM/工具/记忆逻辑，仅 Display 层不同；Web 模式同步代码在线程池运行，通过 `call_soon_threadsafe` 线程安全推送事件；WS/SSE 双模式，WS 支持中断生成；`RequestContext` 实现多用户并发隔离，per-session 模型切换

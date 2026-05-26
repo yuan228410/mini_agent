@@ -12,7 +12,7 @@ src/mini_ai/            # 包源码
   __init__.py             #   包定义
   __main__.py             #   python -m mini_ai 入口
   main.py                 #   主循环编排
-  config.py               #   配置加载（DATA_DIR/PACKAGE_DIR 分离）
+  config.py               #   配置加载 + RequestContext（请求上下文隔离）
   config.example.yaml     #   配置模板（首次运行自动拷贝到 DATA_DIR）
   llm.py                  #   LLM API 通信（OpenAI 协议）
   anthropic.py            #   Anthropic Claude 适配层
@@ -50,11 +50,12 @@ src/mini_ai/            # 包源码
 - **记忆系统**：MemoryStore（存储）+ Compactor（压缩），触发条件：`prompt_tokens > context_length × context_usage_threshold`
 - **Event 驱动**：lead 用 `threading.Event` 等待队友回禀，`bus.send()` 即唤醒，0ms 响应
 - **线程安全**：`threading.local()` 隔离各线程 token 统计；`copy_context()` 保持并行 contextvars
+- **请求上下文隔离**：`RequestContext` 封装每请求独立的 model_config/display/http_session，CLI/Web 统一使用，多用户并发不互相覆盖；`_sessions_lock` 保护并发读写
 - **上下文安全阀**：子代理/队友 `prompt_tokens > context_length × 88%` 时自动终止
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
 - **终端 UI**：`display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理；状态栏每轮对话后右对齐显示模型/上下文/token 信息
 - **项目规范自动加载**：`context.py` 自动读取当前目录的 `CLAUDE.md` 或 `AGENTS.md`（优先前者），注入系统提示词
-- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，SSE 流式推送，WebDisplay 适配器将 Display 事件线程安全推入 asyncio.Queue，同步工具循环在线程池执行不阻塞事件循环。前端 Editorial 杂志编辑风，亮暗主题切换，Markdown + highlight.js 渲染。多会话隔离（`_SESSIONS` 两级字典 username→session_id），多用户认证（用户名 + localStorage），模型切换下拉框，斜杠命令补全（`/api/commands`），技能面板抽屉，会话 JSONL 文件持久化（`~/.mini_ai/web_sessions/<username>/<sid>.jsonl`，重启自动恢复）
+- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WS/SSE 双模式（WS 支持中断生成）。`RequestContext` 实现多用户并发隔离：每请求独立 model_config/display/http_session，per-session 模型切换不修改全局配置。多会话隔离（`_SESSIONS` 两级字典 username→session_id），多用户认证（用户名 + localStorage），斜杠命令补全（`/api/commands`），技能面板抽屉，会话 JSONL 文件持久化（`~/.mini_ai/web_sessions/<username>/<sid>.jsonl`，重启自动恢复）
 
 ## 行为规则
 

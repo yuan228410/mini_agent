@@ -12,7 +12,7 @@ def _filter_tools(tool_names: list[str]) -> list[dict]:
 
 def run_agent(messages: list[dict], *, max_turns: int = 10,
               tool_names: list[str] | None = None,
-              context_length: int = 128000) -> str | None:
+              context_length: int = 128000, ctx=None) -> str | None:
     """运行 agent 循环直到产出最终回复或超出轮次。
 
     Args:
@@ -30,7 +30,7 @@ def run_agent(messages: list[dict], *, max_turns: int = 10,
     tools = _filter_tools(tool_names) if tool_names else True
 
     for i in range(max_turns):
-        msg = llm_chat(messages, tools=tools)
+        msg = llm_chat(messages, tools=tools, ctx=ctx)
 
         if not msg:
             return None
@@ -38,7 +38,7 @@ def run_agent(messages: list[dict], *, max_turns: int = 10,
         if "tool_calls" not in msg:
             return msg.get("content")
 
-        handle_tool_calls(msg, messages)
+        handle_tool_calls(msg, messages, display=ctx.display if ctx else None)
 
         usage = _get_usage()
         if usage["prompt_tokens"] > context_length * _CONTEXT_USAGE_LIMIT:

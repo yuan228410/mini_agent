@@ -24,6 +24,7 @@ const chatViewRef = ref<InstanceType<typeof ChatView>>()
 const needUsername = ref(false)
 const usernameInput = ref('')
 const currentUsername = ref('')
+const sessionId = ref('')
 
 onMounted(() => {
   theme.value = initTheme()
@@ -41,6 +42,7 @@ function onToggleTheme() {
 
 function onConfigUpdate(c: any) {
   config.value = c
+  if (c.session_id) sessionId.value = c.session_id
 }
 
 function onModelSwitched() {
@@ -87,7 +89,7 @@ function submitUsername() {
         <span class="username-badge">{{ currentUsername }}</span>
       </div>
       <div class="header-right">
-        <ModelSelector @switched="onModelSwitched" />
+        <ModelSelector :session-id="sessionId" @switched="onModelSwitched" />
         <button class="skill-btn" @click="showSkills = true" title="技能面板">
           <span>🔧</span>
         </button>

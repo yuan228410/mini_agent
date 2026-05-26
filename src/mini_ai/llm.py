@@ -9,23 +9,23 @@ from .logger import logger
 from .tools import get_definitions
 
 
-def _cfg():
-    return MODEL_CONFIG
+def _cfg(ctx=None):
+    return ctx.model_config if ctx else MODEL_CONFIG
 
-def _api_mode():
-    return MODEL_CONFIG.get("api_mode", "openai")
+def _api_mode(ctx=None):
+    return _cfg(ctx).get("api_mode", "openai")
 
-def _api_url():
-    return MODEL_CONFIG["api_url"]
+def _api_url(ctx=None):
+    return _cfg(ctx)["api_url"]
 
-def _api_key():
-    return MODEL_CONFIG["api_key"]
+def _api_key(ctx=None):
+    return _cfg(ctx)["api_key"]
 
-def _model():
-    return MODEL_CONFIG["model"]
+def _model(ctx=None):
+    return _cfg(ctx)["model"]
 
-def _context_length():
-    return MODEL_CONFIG.get("context_length", 128000)
+def _context_length(ctx=None):
+    return _cfg(ctx).get("context_length", 128000)
 
 _local = threading.local()
 _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -38,16 +38,23 @@ def _get_usage() -> dict:
 
 _session = requests.Session()
 
-def _ensure_session():
-    key = _api_key()
-    if _session.headers.get("Authorization") != f"Bearer {key}":
-        _session.headers.update({
-            "Authorization": f"Bearer {key}",
+def _ensure_session(ctx=None):
+    cfg = _cfg(ctx)
+    sess = ctx.http_session if ctx else _session
+    key = cfg["api_key"]
+    auth_header = "x-api-key" if _api_mode(ctx) == "anthropic" else "Authorization"
+    auth_value = key if _api_mode(ctx) == "anthropic" else f"Bearer {key}"
+    if sess.headers.get(auth_header) != auth_value:
+        headers = {
+            "Authorization" if auth_header == "Authorization" else "x-api-key": auth_value,
             "Content-Type": "application/json",
-        })
-        custom_headers = MODEL_CONFIG.get("headers", {})
+        }
+        if _api_mode(ctx) == "anthropic":
+            headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "Content-Type": "application/json"}
+        sess.headers.update(headers)
+        custom_headers = cfg.get("headers", {})
         if custom_headers:
-            _session.headers.update(custom_headers)
+            sess.headers.update(custom_headers)
 
 
 def _msg_summary(m: dict) -> str:
@@ -66,13 +73,13 @@ def _msg_summary(m: dict) -> str:
     return f"[{role}] {content}"
 
 
-def chat(messages, tools=True):
-    _ensure_session()
-    if _api_mode() == "anthropic":
+def chat(messages, tools=True, ctx=None):
+    _ensure_session(ctx)
+    if _api_mode(ctx) == "anthropic":
         from .anthropic import chat as anth_chat
-        return anth_chat(messages, tools)
+        return anth_chat(messages, tools, ctx=ctx)
     """发送请求，tools=True=全部工具，tools=list=自定义工具列表，tools=False=无工具"""
-    payload = {"model": _model(), "messages": messages}
+    payload = {"model": _model(ctx), "messages": messages}
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -84,7 +91,7 @@ def chat(messages, tools=True):
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
 
-    logger.info(f"[LLM→] model={_model()} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
+    logger.info(f"[LLM→] model={_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
     if len(messages) <= 3:
         for m in messages:
             if m["role"] != "tool":
@@ -100,11 +107,12 @@ def chat(messages, tools=True):
     max_retries = TIMEOUTS.get("llm_retries", 3)
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
 
+    sess = ctx.http_session if ctx else _session
     t0 = time.monotonic()
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"])
+            response = sess.post(_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
             break
         except requests.RequestException as e:
             last_error = e
@@ -153,22 +161,14 @@ def chat(messages, tools=True):
     return msg
 
 
-def chat_stream(messages, tools=True):
-    _ensure_session()
-    if _api_mode() == "anthropic":
+def chat_stream(messages, tools=True, ctx=None):
+    _ensure_session(ctx)
+    if _api_mode(ctx) == "anthropic":
         from .anthropic import chat_stream as anth_stream
-        yield from anth_stream(messages, tools)
+        yield from anth_stream(messages, tools, ctx=ctx)
         return
-    """流式发送请求，yield delta chunks，最后 yield 完整 msg。
-
-    用法:
-        for chunk in chat_stream(messages, tools=tools):
-            if chunk["type"] == "text":
-                print(chunk["content"], end="", flush=True)
-            elif chunk["type"] == "done":
-                msg = chunk["msg"]  # 完整消息，等价于 chat() 返回值
-    """
-    payload = {"model": _model(), "messages": messages, "stream": True}
+    """流式发送请求，yield delta chunks，最后 yield 完整 msg。"""
+    payload = {"model": _model(ctx), "messages": messages, "stream": True}
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -180,13 +180,14 @@ def chat_stream(messages, tools=True):
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
 
-    logger.info(f"[LLM→] model={_model()} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
+    logger.info(f"[LLM→] model={_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
     if tool_names:
         logger.debug(f"  tool_list={tool_names}")
 
+    sess = ctx.http_session if ctx else _session
     t0 = time.monotonic()
     try:
-        response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+        response = sess.post(_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"[LLM✗] 流式请求异常: {e}")
@@ -196,7 +197,7 @@ def chat_stream(messages, tools=True):
     collected_content = ""
     collected_thinking = ""
     in_thinking = False
-    tool_call_buf: dict[int, dict] = {}  # index -> {"id","name","arguments"}
+    tool_call_buf: dict[int, dict] = {}
 
     for line in response.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):

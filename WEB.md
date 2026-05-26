@@ -200,9 +200,21 @@ data: {"error": "错误信息"}
 
 
 
-### 多用户 + 会话持久化
+### 多用户 + 会话持久化 + 并发安全
 
 后端维护 `_SESSIONS: dict[str, dict[str, list[dict]]]`，按 `username` → `session_id` 两级隔离。
+
+**请求上下文隔离（RequestContext）：**
+- 每个请求构建 `RequestContext`，封装独立的 `model_config`/`display`/`http_session`
+- CLI/Web 统一使用 `RequestContext`，不再依赖全局 `_display`/`MODEL_CONFIG`/`_session`
+- 多用户并发互不影响：用户 A 的工具调用结果显示到 A 的 WebDisplay，用户 B 的请求用 B 的 HTTP Session
+- `_run_tool_loop_sync` 返回 `(msg, usage)` 元组，在 executor 线程内读取 `_get_usage()`，避免跨线程读到零值
+- `_sessions_lock = threading.Lock()` 保护 `_SESSIONS` 字典并发读写
+
+**Per-session 模型切换：**
+- `_SESSION_MODELS` 记录每个会话的模型选择（`username:session_id` → model_name）
+- 切换模型不修改全局 `MODEL_CONFIG`，不影响其他会话
+- 请求时根据 session 查找模型名，深拷贝配置构建 `RequestContext`
 
 **多用户隔离：**
 - 首次访问 Web 时弹出用户名输入界面，存入 `localStorage`

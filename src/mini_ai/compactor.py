@@ -45,7 +45,7 @@ class Compactor:
             return True
         return False
 
-    def compact(self, chat_fn, messages: list[dict]) -> list[dict]:
+    def compact(self, chat_fn, messages: list[dict], ctx=None) -> list[dict]:
         non_system = [m for m in messages if m["role"] != "system"]
         recent = non_system[-self.keep_recent:]
 
@@ -64,7 +64,7 @@ class Compactor:
             now_hhmm=datetime.now(_UTC8).strftime("%H:%M"),
         )
 
-        result = chat_fn([{"role": "user", "content": prompt}], tools=None)
+        result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
         if not result:
             logger.warning("[压缩✗] 模型未返回结果")
             self.memory.mark_compacted()

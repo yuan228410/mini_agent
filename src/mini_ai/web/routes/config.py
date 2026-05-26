@@ -1,9 +1,9 @@
 """状态配置接口"""
 from fastapi import APIRouter, Query
 
-from ...config import MODEL_CONFIG, WEB
+from ...config import MODEL_CONFIG, WEB, get_model_config
 from ...llm import _get_usage
-from .chat import _get_or_create_session, _DEFAULT_SESSION
+from .chat import _get_or_create_session, _DEFAULT_SESSION, _SESSION_MODELS
 
 router = APIRouter()
 
@@ -11,9 +11,11 @@ router = APIRouter()
 async def get_config(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default")):
     _, messages = _get_or_create_session(username, session_id)
     usage = _get_usage()
+    model_name = _SESSION_MODELS.get(f"{username}:{session_id}")
+    model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
     return {
-        "model": MODEL_CONFIG.get("model", "?"),
-        "context_length": MODEL_CONFIG.get("context_length", 128000),
+        "model": model_cfg.get("model", "?"),
+        "context_length": model_cfg.get("context_length", 128000),
         "prompt_tokens": usage["prompt_tokens"],
         "completion_tokens": usage["completion_tokens"],
         "system_prompt_chars": len(messages[0]["content"]) if messages else 0,

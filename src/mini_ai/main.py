@@ -4,7 +4,7 @@ import threading
 from . import __version__
 from .commands import CommandHandler
 from .compactor import Compactor
-from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS
+from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, RequestContext
 from .context import ContextBuilder
 from .llm import chat, chat_stream, _get_usage
 from .logger import logger
@@ -40,12 +40,12 @@ def _inject_todos(messages: list[dict]):
     messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
-def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30):
+def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30, ctx=None):
     for turn in range(max_turns):
         msg = None
         if STREAMING:
             thinking_seen = False
-            for chunk in chat_stream(messages, tools=tools):
+            for chunk in chat_stream(messages, tools=tools, ctx=ctx):
                 if chunk["type"] == "thinking_start":
                     disp.thinking_start()
                     thinking_seen = True
@@ -67,7 +67,7 @@ def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30):
                 disp.text_end()
                 return msg
         else:
-            msg = chat(messages, tools=tools)
+            msg = chat(messages, tools=tools, ctx=ctx)
             if msg and msg.get("thinking"):
                 disp.thinking_start()
                 disp._thinking_buf = msg["thinking"]
@@ -76,7 +76,8 @@ def _run_tool_loop(messages, tools, inject_fn, disp, max_turns=30):
                 if msg and msg.get("content"):
                     disp.text_end(msg["content"])
                 return msg
-        spawned = handle_tool_calls(msg, messages)
+        _disp = ctx.display if ctx else disp
+        spawned = handle_tool_calls(msg, messages, display=_disp)
         inject_fn(messages)
         if spawned:
             logger.info("[spawn] lead 退出 LLM 循环，等待队友")
@@ -120,6 +121,8 @@ def main():
     register_team(bus, team_mgr)
     register_display(disp)
 
+    req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
+
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
 
@@ -140,7 +143,7 @@ def main():
     cmd = CommandHandler(
         disp=disp, store=store, sessions=sessions, compactor=compactor,
         inject_fn=_inject_todos, run_tool_fn=_run_tool_loop,
-        lead_tools=_lead_tool_defs(),
+        lead_tools=_lead_tool_defs(), ctx=req_ctx,
     )
 
     system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER)
@@ -175,12 +178,12 @@ def main():
         messages.append({"role": "user", "content": user_input})
         store.append("user", user_input)
 
-        msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp)
+        msg = _run_tool_loop(messages, _lead_tool_defs(), _inject_todos, disp, ctx=req_ctx)
 
         teammate_msg = wait_for_teammates(
             bus, team_mgr, lead_event,
             _run_tool_loop, messages, _lead_tool_defs(),
-            _inject_todos, disp, store,
+            _inject_todos, disp, store, ctx=req_ctx,
         )
         if teammate_msg:
             msg = teammate_msg

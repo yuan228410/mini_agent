@@ -3,14 +3,16 @@ import asyncio
 import json
 import threading
 import uuid
+
+_sessions_lock = threading.Lock()
 from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from starlette.responses import StreamingResponse
 
-from ...config import DATA_DIR, MODEL_CONFIG, STREAMING
+from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, RequestContext, get_model_config
 from ...llm import chat_stream, chat, _get_usage
-from ...tools import handle_tool_calls, get_definitions, register_display
+from ...tools import handle_tool_calls, get_definitions
 from ...logger import logger
 from ..display import WebDisplay
 
@@ -21,6 +23,7 @@ _SESSION_BASE = DATA_DIR / "web_sessions"
 _SESSION_BASE.mkdir(parents=True, exist_ok=True)
 
 _SESSIONS: dict[str, dict[str, list[dict]]] = {}
+_SESSION_MODELS: dict[str, str] = {}
 _DEFAULT_SESSION = "default"
 
 def _inject_todos(messages: list[dict]):
@@ -74,46 +77,50 @@ def _write_session_file(username: str, session_id: str, messages: list[dict]):
             f.write(json.dumps(m, ensure_ascii=False) + "\n")
 
 def _ensure_user_sessions(username: str) -> dict[str, list[dict]]:
-    if username not in _SESSIONS:
-        _SESSIONS[username] = {}
-    return _SESSIONS[username]
+    with _sessions_lock:
+        if username not in _SESSIONS:
+            _SESSIONS[username] = {}
+        return _SESSIONS[username]
 
 def _get_or_create_session(username: str, session_id: str | None) -> tuple[str, list[dict]]:
-    user_sessions = _ensure_user_sessions(username)
-    if session_id and session_id in user_sessions:
-        return session_id, user_sessions[session_id]
-    sid = session_id or _DEFAULT_SESSION
-    if sid in user_sessions:
-        return sid, user_sessions[sid]
-    loaded = _load_from_file(username, sid)
-    if loaded:
-        user_sessions[sid] = loaded
-        return sid, user_sessions[sid]
-    user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
+    with _sessions_lock:
+        if username not in _SESSIONS:
+            _SESSIONS[username] = {}
+        user_sessions = _SESSIONS[username]
+        if session_id and session_id in user_sessions:
+            return session_id, user_sessions[session_id]
+        sid = session_id or _DEFAULT_SESSION
+        if sid in user_sessions:
+            return sid, user_sessions[sid]
+        loaded = _load_from_file(username, sid)
+        if loaded:
+            user_sessions[sid] = loaded
+            return sid, user_sessions[sid]
+        user_sessions[sid] = [{"role": "system", "content": _SYSTEM_PROMPT}]
     _inject_todos(user_sessions[sid])
     _write_session_file(username, sid, user_sessions[sid])
     return sid, user_sessions[sid]
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          messages: list[dict], tools: list[dict],
-                         max_turns: int = 30, abort_event: threading.Event | None = None):
+                         max_turns: int = 30, abort_event: threading.Event | None = None,
+                         model_name: str | None = None) -> tuple:
     disp = WebDisplay(queue, loop)
-    register_display(disp)
+    cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+    ctx = RequestContext(model_config=cfg, display=disp)
 
     for turn in range(max_turns):
         if abort_event and abort_event.is_set():
-            disp._push("aborted")
             disp.text_end()
-            return None
+            return None, _get_usage()
 
         msg = None
         if STREAMING:
             thinking_seen = False
-            for chunk in chat_stream(messages, tools=tools):
+            for chunk in chat_stream(messages, tools=tools, ctx=ctx):
                 if abort_event and abort_event.is_set():
-                    disp._push("aborted")
                     disp.text_end()
-                    return None
+                    return None, _get_usage()
                 if chunk["type"] == "thinking_start":
                     disp.thinking_start()
                     thinking_seen = True
@@ -125,14 +132,13 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 elif chunk["type"] == "text":
                     disp.text_chunk(chunk["content"])
                 elif chunk["type"] == "error":
-                    disp._push("error", {"error": chunk["error"]})
-                    return None
+                    return None, _get_usage()
                 elif chunk["type"] == "done":
                     msg = chunk["msg"]
                     if thinking_seen:
                         disp.thinking_end()
         else:
-            msg = chat(messages, tools=tools)
+            msg = chat(messages, tools=tools, ctx=ctx)
             if msg and msg.get("thinking"):
                 disp.thinking_start()
                 disp._thinking_buf = msg["thinking"]
@@ -140,13 +146,12 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
         if not msg or "tool_calls" not in msg:
             disp.text_end()
-            return msg
+            return msg, _get_usage()
 
-        handle_tool_calls(msg, messages)
+        handle_tool_calls(msg, messages, display=disp)
         _inject_todos(messages)
 
-    disp._push("error", {"error": f"工具循环达到上限 {max_turns} 轮"})
-    return None
+    return None, _get_usage()
 
 # ── SSE endpoint ──
 
@@ -186,11 +191,12 @@ async def chat_sse_endpoint(body: dict):
 
     queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
+    model_name = _SESSION_MODELS.get(f"{username}:{sid}")
 
     async def event_generator():
         try:
             future = loop.run_in_executor(
-                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs()
+                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, None, model_name
             )
             while True:
                 try:
@@ -201,8 +207,8 @@ async def chat_sse_endpoint(body: dict):
                         break
                     continue
 
-            msg = future.result()
-            usage = _get_usage()
+            result = future.result()
+            msg, usage = result if isinstance(result, tuple) else (result, _get_usage())
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
             for m in messages[start_idx:]:
@@ -276,8 +282,9 @@ async def chat_ws_endpoint(ws: WebSocket):
             loop = asyncio.get_event_loop()
             abort_event = threading.Event()
 
+            model_name = _SESSION_MODELS.get(f"{username}:{sid}")
             future = loop.run_in_executor(
-                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event
+                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name
             )
 
             try:
@@ -307,19 +314,19 @@ async def chat_ws_endpoint(ws: WebSocket):
                 await ws.send_json({"event": "error", "data": {"error": str(e)}})
 
             try:
-                msg = future.result()
+                result = future.result()
+                msg, usage = result if isinstance(result, tuple) else (result, {"prompt_tokens": 0, "completion_tokens": 0})
             except Exception:
                 msg = None
-
-            usage = _get_usage()
+                usage = {"prompt_tokens": 0, "completion_tokens": 0}
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
             for m in messages[start_idx:]:
                 _append_to_file(username, sid, m)
 
-            final_event = "aborted" if abort_event.is_set() else "done"
-            done_data = {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
-            await ws.send_json({"event": final_event, "data": done_data})
+            if not abort_event.is_set():
+                done_data = {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
+                await ws.send_json({"event": "done", "data": done_data})
 
     except WebSocketDisconnect:
         pass

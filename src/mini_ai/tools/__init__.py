@@ -78,11 +78,12 @@ def dispatch(name: str, args: dict) -> str | None:
     return mod.execute(args) if mod else None
 
 
-def handle_tool_calls(msg: dict, messages: list[dict]) -> bool:
+def handle_tool_calls(msg: dict, messages: list[dict], display=None) -> bool:
     """处理消息中的 tool_calls，返回是否包含 spawn_teammate"""
     calls = msg["tool_calls"]
     messages.append({"role": "assistant", "content": None, "tool_calls": calls})
 
+    _disp = display if display is not None else _display
     spawned = False
     i = 0
     while i < len(calls):
@@ -97,21 +98,21 @@ def handle_tool_calls(msg: dict, messages: list[dict]) -> bool:
             while i < len(calls) and calls[i]["function"]["name"] in _PARALLEL_TOOLS:
                 group.append(calls[i])
                 i += 1
-            _execute_parallel(group, messages)
+            _execute_parallel(group, messages, _disp)
         else:
-            _execute_one(tc, messages)
+            _execute_one(tc, messages, _disp)
             i += 1
 
     return spawned
 
 
-def _execute_one(tc: dict, messages: list[dict]) -> None:
+def _execute_one(tc: dict, messages: list[dict], display=None) -> None:
     name = tc["function"]["name"]
     args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
     logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
     args_summary = json.dumps(args, ensure_ascii=False)
-    if _display:
-        _display.tool_call_start(name, args_summary)
+    if display:
+        display.tool_call_start(name, args_summary)
     t0 = time.monotonic()
     output = dispatch(name, args)
     elapsed = time.monotonic() - t0
@@ -119,11 +120,11 @@ def _execute_one(tc: dict, messages: list[dict]) -> None:
         output = _truncate(output)
         logger.debug(f"[工具←] {name} len={len(output)}")
         messages.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
-    if _display:
-        _display.tool_result(name, output or "", elapsed)
+    if display:
+        display.tool_result(name, output or "", elapsed)
 
 
-def _execute_parallel(calls: list[dict], messages: list[dict]) -> None:
+def _execute_parallel(calls: list[dict], messages: list[dict], display=None) -> None:
     import contextvars as _cv
     results = {}
     caller_val = _cv.copy_context()
@@ -133,13 +134,13 @@ def _execute_parallel(calls: list[dict], messages: list[dict]) -> None:
             name = tc["function"]["name"]
             args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
             logger.info(f"[并行→] {name}({json.dumps(args, ensure_ascii=False)})")
-            if _display:
-                _display.tool_call_start(name, json.dumps(args, ensure_ascii=False))
+            if display:
+                display.tool_call_start(name, json.dumps(args, ensure_ascii=False))
             t0 = time.monotonic()
             result = caller_val.run(dispatch, name, args)
             elapsed = time.monotonic() - t0
-            if _display and result is not None:
-                _display.tool_result(name, result, elapsed)
+            if display and result is not None:
+                display.tool_result(name, result, elapsed)
             return tc["id"], result
         except Exception as e:
             return tc["id"], f"执行失败: {e}"

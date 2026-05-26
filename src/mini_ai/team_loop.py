@@ -30,7 +30,7 @@ def has_active_teammates(team_mgr):
         return any(m["status"] == "working" for m in team_mgr.config.get("members", []))
 
 
-def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, store):
+def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, store, ctx=None):
     if not has_active_teammates(team_mgr):
         return None
 
@@ -49,7 +49,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
             disp.info("📬 收到队友回禀")
             messages.append({"role": "user", "content": inbox_text})
             store.append("user", inbox_text)
-            last_msg = run_loop_fn(messages, tools, inject_fn, disp)
+            last_msg = run_loop_fn(messages, tools, inject_fn, disp, ctx=ctx)
 
         if not has_active_teammates(team_mgr):
             break

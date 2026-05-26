@@ -11,7 +11,7 @@
 - [x] **会话文件持久化** — JSONL 文件持久化，重启自动恢复
 - [ ] **highlight.js 按需加载** — 仅加载常用语言包，减少前端体积
 - [x] **WebSocket 模式** — SSE/WS 双模式，支持中断生成，配置切换
-- [ ] **多用户并发安全** — register_display 全局覆盖、MODEL_CONFIG 全局状态、requests.Session 共享，多用户同时会话会互相影响
+- [x] **多用户并发安全** — RequestContext 隔离：每请求独立 model_config/display/http_session，per-session 模型切换
 - [ ] **多模态输入** — 支持图片/PDF 作为输入
 
 ## 优化

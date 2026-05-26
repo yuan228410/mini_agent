@@ -6,17 +6,23 @@ import time
 import requests
 
 from .config import MODEL_CONFIG, TIMEOUTS, THINKING
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from .config import RequestContext
 from .logger import logger
 
 
-def _api_url():
-    return MODEL_CONFIG["api_url"]
+def _cfg(ctx=None):
+    return ctx.model_config if ctx else MODEL_CONFIG
 
-def _api_key():
-    return MODEL_CONFIG["api_key"]
+def _api_url(ctx=None):
+    return _cfg(ctx)["api_url"]
 
-def _model():
-    return MODEL_CONFIG["model"]
+def _api_key(ctx=None):
+    return _cfg(ctx)["api_key"]
+
+def _model(ctx=None):
+    return _cfg(ctx)["model"]
 
 _local = threading.local()
 _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -29,17 +35,19 @@ def _get_usage() -> dict:
 
 _session = requests.Session()
 
-def _ensure_session():
-    key = _api_key()
-    if _session.headers.get("x-api-key") != key:
-        _session.headers.update({
+def _ensure_session(ctx=None):
+    cfg = _cfg(ctx)
+    sess = ctx.http_session if ctx else _session
+    key = cfg["api_key"]
+    if sess.headers.get("x-api-key") != key:
+        sess.headers.update({
             "x-api-key": key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
         })
-        custom_headers = MODEL_CONFIG.get("headers", {})
+        custom_headers = cfg.get("headers", {})
         if custom_headers:
-            _session.headers.update(custom_headers)
+            sess.headers.update(custom_headers)
 
 
 def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -131,13 +139,13 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
     return msg
 
 
-def chat(messages, tools=True):
+def chat(messages, tools=True, ctx=None):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
     from .tools import get_definitions
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
-    payload = {"model": _model(), "messages": ant_msgs, "max_tokens": 4096}
+    payload = {"model": _model(ctx), "messages": ant_msgs, "max_tokens": 4096}
     if system_text:
         payload["system"] = system_text
 
@@ -151,12 +159,13 @@ def chat(messages, tools=True):
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
-    logger.info(f"[Anth→] model={_model()} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))}")
+    logger.info(f"[Anth→] model={_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))}")
 
     t0 = time.monotonic()
     try:
-        _ensure_session()
-        response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"])
+        _ensure_session(ctx)
+        sess = ctx.http_session if ctx else _session
+        response = sess.post(_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
     except requests.RequestException as e:
         logger.error(f"[Anth✗] 请求异常: {e}")
         return None
@@ -184,13 +193,13 @@ def chat(messages, tools=True):
     return msg
 
 
-def chat_stream(messages, tools=True):
+def chat_stream(messages, tools=True, ctx=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
     from .tools import get_definitions
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
-    payload = {"model": _model(), "messages": ant_msgs, "max_tokens": 4096, "stream": True}
+    payload = {"model": _model(ctx), "messages": ant_msgs, "max_tokens": 4096, "stream": True}
     if system_text:
         payload["system"] = system_text
 
@@ -204,12 +213,13 @@ def chat_stream(messages, tools=True):
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
-    logger.info(f"[Anth→] model={_model()} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} [stream]")
+    logger.info(f"[Anth→] model={_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} [stream]")
 
     t0 = time.monotonic()
     try:
-        _ensure_session()
-        response = _session.post(_api_url(), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+        _ensure_session(ctx)
+        sess = ctx.http_session if ctx else _session
+        response = sess.post(_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
         response.raise_for_status()
     except requests.RequestException as e:
         logger.error(f"[Anth✗] 流式请求异常: {e}")

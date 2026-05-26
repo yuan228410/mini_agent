@@ -11,6 +11,7 @@ const models = ref<ModelItem[]>([])
 const activeName = ref('')
 const activeModel = ref('')
 const open = ref(false)
+const props = defineProps<{ sessionId?: string }>()
 const emit = defineEmits(['switched'])
 
 onMounted(async () => {
@@ -30,7 +31,7 @@ async function select(name: string) {
   open.value = false
   if (name === activeName.value) return
   try {
-    const resp = await switchModel(name)
+    const resp = await switchModel(name, props.sessionId)
     if (resp.error) return
     activeName.value = name
     activeModel.value = resp.model || name

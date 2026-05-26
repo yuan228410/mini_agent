@@ -1,7 +1,7 @@
 """模型管理接口"""
 from fastapi import APIRouter
 
-from ...config import AVAILABLE_MODELS, MODEL_CONFIG, switch_model
+from ...config import AVAILABLE_MODELS, MODEL_CONFIG, get_model_config
 
 router = APIRouter()
 
@@ -16,12 +16,16 @@ async def list_models():
 @router.post("/models/switch")
 async def switch_model_endpoint(body: dict):
     name = body.get("name", "").strip()
+    username = body.get("username", "default")
+    session_id = body.get("session_id", "default")
     if name not in AVAILABLE_MODELS:
         return {"error": f"未知模型: {name}，可选: {', '.join(AVAILABLE_MODELS)}"}
-    err = switch_model(name)
-    if err:
-        return {"error": err}
-    return {"status": "ok", "active_name": name, "model": MODEL_CONFIG.get("model", "?")}
+    cfg = get_model_config(name)
+    if not cfg:
+        return {"error": f"模型配置无效: {name}"}
+    from .chat import _SESSION_MODELS
+    _SESSION_MODELS[f"{username}:{session_id}"] = name
+    return {"status": "ok", "active_name": name, "model": cfg.get("model", "?")}
 
 def _get_active_name():
     from ...config import _raw

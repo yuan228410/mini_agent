@@ -247,11 +247,14 @@ export async function getModels(): Promise<ModelsResponse> {
   return resp.json()
 }
 
-export async function switchModel(name: string): Promise<any> {
+export async function switchModel(name: string, sessionId?: string): Promise<any> {
+  const u = getUsername()
+  const body: any = { name, ..._usernameBody() }
+  if (sessionId) body.session_id = sessionId
   const resp = await fetch('/api/models/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
+    body: JSON.stringify(body),
   })
   return resp.json()
 }

@@ -56,6 +56,24 @@ WEB = (_raw.get("web") or {})
 AVAILABLE_MODELS = list(_models.keys())
 
 
+def get_model_config(name: str) -> dict | None:
+    if name not in _models:
+        return None
+    return copy.deepcopy(_models[name])
+
+
+import requests as _requests
+
+
+class RequestContext:
+    __slots__ = ("model_config", "display", "http_session")
+
+    def __init__(self, model_config: dict, display=None, http_session: _requests.Session | None = None):
+        self.model_config = model_config
+        self.display = display
+        self.http_session = http_session or _requests.Session()
+
+
 def switch_model(name: str) -> str | None:
     global API_MODE
     if name not in _models:
