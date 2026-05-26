@@ -1,6 +1,12 @@
 <script setup lang="ts">
-import { ref, nextTick, onMounted } from 'vue'
-import { streamChat, getConfig, createSession, getHistory, resetChat, type HistoryMessage } from '../api'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
+import {
+  streamChat, ensureWs, onWsEvent, wsChat, abortChat, closeWs,
+  getTransport, getConfig, createSession, getHistory, resetChat,
+  type SSEEvent, type HistoryMessage,
+} from '../api'
+
+let _wsOk = false
 import MessageItem from './MessageItem.vue'
 import InputBar from './InputBar.vue'
 
@@ -17,11 +23,26 @@ const messages = ref<Message[]>([])
 const isStreaming = ref(false)
 const chatContainer = ref<HTMLElement>()
 const sessionId = ref('')
+const transport = ref('ws')
 const emit = defineEmits(['config-update'])
 
+let _unsubWs: (() => void) | null = null
+
 onMounted(async () => {
+  transport.value = await getTransport()
   await initSession()
   await fetchConfig()
+
+  if (transport.value === 'ws') {
+    const ok = await ensureWs()
+    if (!ok) transport.value = 'sse'
+    _unsubWs = onWsEvent(handleWsEvent)
+  }
+})
+
+onUnmounted(() => {
+  if (_unsubWs) _unsubWs()
+  closeWs()
 })
 
 async function initSession() {
@@ -66,35 +87,83 @@ async function fetchConfig() {
   } catch {}
 }
 
-async function sendMessage(text: string) {
-  if (!text.trim() || isStreaming.value) return
+// ── WS event handler (persistent connection) ──
 
-  // Handle / commands that don't need LLM
-  if (text.startsWith('/clear')) {
-    await resetChat(sessionId.value)
-    messages.value = []
-    await fetchConfig()
-    return
+let _currentContent = ''
+let _currentThinking = ''
+
+function handleWsEvent(event: SSEEvent) {
+  const msg = messages.value[messages.value.length - 1]
+  if (!msg || msg.role !== 'assistant') return
+
+  switch (event.event) {
+    case 'thinking_start':
+      _currentThinking = ''
+      break
+    case 'thinking':
+      _currentThinking += event.data.content || ''
+      break
+    case 'thinking_end':
+      msg.thinking = {
+        chars: event.data.chars || _currentThinking.length,
+        elapsed: event.data.elapsed || 0,
+        content: _currentThinking,
+      }
+      _currentThinking = ''
+      break
+    case 'text':
+      _currentContent += event.data.content || ''
+      msg.content = _currentContent
+      break
+    case 'tool_start':
+      if (!msg.tools) msg.tools = []
+      msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+      break
+    case 'tool_result':
+      if (msg.tools && msg.tools.length > 0) {
+        const last = msg.tools[msg.tools.length - 1]
+        last.result = event.data.result || ''
+        last.elapsed = event.data.elapsed || 0
+      }
+      break
+    case 'done':
+      msg.streaming = false
+      isStreaming.value = false
+      _currentContent = ''
+      if (event.data.session_id) {
+        sessionId.value = event.data.session_id
+        localStorage.setItem(SESSION_KEY, event.data.session_id)
+      }
+      fetchConfig()
+      break
+    case 'aborted':
+      msg.streaming = false
+      msg.content += '\n\n⚠ 已中断生成'
+      isStreaming.value = false
+      _currentContent = ''
+      fetchConfig()
+      break
+    case 'error':
+      msg.content += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
+      msg.streaming = false
+      isStreaming.value = false
+      _currentContent = ''
+      fetchConfig()
+      break
   }
 
-  isStreaming.value = true
+  nextTick(() => scrollToBottom())
+}
 
-  messages.value.push({ role: 'user', content: text })
-  const assistantMsg: Message = { role: 'assistant', content: '', tools: [], streaming: true }
-  messages.value.push(assistantMsg)
+// ── SSE fallback ──
 
-  await nextTick()
-  scrollToBottom()
-
+async function sendViaSSE(text: string) {
   let currentContent = ''
   let currentThinking = ''
-  let thinkingChars = 0
-  let thinkingElapsed = 0
 
   try {
     for await (const event of streamChat(text, sessionId.value)) {
       const msg = messages.value[messages.value.length - 1]
-
       switch (event.event) {
         case 'thinking_start':
           currentThinking = ''
@@ -103,9 +172,7 @@ async function sendMessage(text: string) {
           currentThinking += event.data.content || ''
           break
         case 'thinking_end':
-          thinkingChars = event.data.chars || currentThinking.length
-          thinkingElapsed = event.data.elapsed || 0
-          msg.thinking = { chars: thinkingChars, elapsed: thinkingElapsed, content: currentThinking }
+          msg.thinking = { chars: event.data.chars || currentThinking.length, elapsed: event.data.elapsed || 0, content: currentThinking }
           currentThinking = ''
           break
         case 'text':
@@ -114,12 +181,7 @@ async function sendMessage(text: string) {
           break
         case 'tool_start':
           if (!msg.tools) msg.tools = []
-          msg.tools.push({
-            name: event.data.name || '?',
-            args: event.data.args || '',
-            result: '...',
-            elapsed: 0,
-          })
+          msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
           break
         case 'tool_result':
           if (msg.tools && msg.tools.length > 0) {
@@ -140,7 +202,6 @@ async function sendMessage(text: string) {
           msg.streaming = false
           break
       }
-
       await nextTick()
       scrollToBottom()
     }
@@ -152,6 +213,49 @@ async function sendMessage(text: string) {
 
   isStreaming.value = false
   await fetchConfig()
+}
+
+// ── Send message ──
+
+async function sendMessage(text: string) {
+  if (!text.trim() || isStreaming.value) return
+
+  if (text.startsWith('/clear')) {
+    await resetChat(sessionId.value)
+    messages.value = []
+    await fetchConfig()
+    return
+  }
+
+  isStreaming.value = true
+  _currentContent = ''
+  _currentThinking = ''
+
+  messages.value.push({ role: 'user', content: text })
+  messages.value.push({ role: 'assistant', content: '', tools: [], streaming: true })
+
+  await nextTick()
+  scrollToBottom()
+
+  if (transport.value === 'ws') {
+    _wsOk = await ensureWs()
+    if (_wsOk) {
+      wsChat(text, sessionId.value)
+    } else {
+      transport.value = 'sse'
+      await sendViaSSE(text)
+    }
+  } else {
+    await sendViaSSE(text)
+  }
+}
+
+function _wsConnected(): boolean {
+  return _wsOk
+}
+
+function stopGeneration() {
+  abortChat()
 }
 
 function useSkill(name: string) {
@@ -186,7 +290,12 @@ defineExpose({ useSkill })
       />
     </div>
   </div>
-  <InputBar :disabled="isStreaming" @send="sendMessage" />
+  <div class="input-area">
+    <button v-if="isStreaming && transport === 'ws'" class="stop-btn" @click="stopGeneration" title="停止生成">
+      ⏹ 停止
+    </button>
+    <InputBar :disabled="isStreaming" @send="sendMessage" />
+  </div>
 </template>
 
 <style scoped>
@@ -237,5 +346,30 @@ defineExpose({ useSkill })
 .empty-sub {
   color: var(--fg-muted);
   font-size: 0.95rem;
+}
+
+.input-area {
+  flex-shrink: 0;
+  border-top: 0.5px solid var(--border);
+  background: var(--bg);
+}
+
+.stop-btn {
+  display: block;
+  margin: 0.5rem auto 0;
+  padding: 0.3rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--fg-muted);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.stop-btn:hover {
+  border-color: #e55;
+  color: #e55;
+  background: var(--bg-thinking);
 }
 </style>

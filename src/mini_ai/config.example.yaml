@@ -56,3 +56,7 @@ models:
     # headers:                  # 可选自定义请求头
     #   X-Custom-Header: value
     #   X-Another: foo
+
+# Web 界面配置
+web:
+ transport: sse   # 传输方式：ws (WebSocket，支持中断生成) 或 sse

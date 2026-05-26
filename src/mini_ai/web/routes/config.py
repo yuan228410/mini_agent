@@ -1,7 +1,7 @@
 """状态配置接口"""
 from fastapi import APIRouter, Query
 
-from ...config import MODEL_CONFIG
+from ...config import MODEL_CONFIG, WEB
 from ...llm import _get_usage
 from .chat import _get_or_create_session, _DEFAULT_SESSION
 
@@ -20,4 +20,5 @@ async def get_config(session_id: str = Query(default=_DEFAULT_SESSION), username
         "history_count": len(messages) - 1 if messages else 0,
         "session_id": session_id,
         "username": username,
+        "transport": WEB.get("transport", "ws"),
     }

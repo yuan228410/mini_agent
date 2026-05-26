@@ -4,7 +4,7 @@
 
 通过 `mini-ai --web` 启动 Web 对话界面，默认监听 `http://localhost:8765`。
 
-技术栈：FastAPI + SSE 后端，Vue 3 + Vite 前端。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
+技术栈：FastAPI + WebSocket/SSE 双模式后端，Vue 3 + Vite 前端。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
 
 ## 启动方式
 
@@ -73,6 +73,7 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **多会话隔离** — 每个浏览器标签页独立 session，互不干扰
 - **多用户支持** — 用户名认证，按用户隔离会话目录，首次访问输入用户名
 - **会话文件持久化** — 消息写入 JSONL 文件，后端重启自动恢复历史
+- **中断生成** — WS 模式下可中断 LLM 生成（服务端真正停止）；SSE 模式不显示停止按钮
 - **会话持久化** — 刷新页面自动恢复历史消息（session_id 存 localStorage）
 
 ## 前端组件
@@ -80,11 +81,11 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 ```
 web/src/
 ├── App.vue              # 根组件：标题栏 + ChatView + StatusBar + SkillPanel
-├── api.ts               # API 封装（fetch + SSE + session 管理）
+├── api.ts               # API 封装（fetch + SSE + WebSocket + session 管理）
 ├── theme.ts             # 主题管理（init/toggle/apply + localStorage）
 ├── style.css            # CSS 变量色板 + 噪点纹理 + 全局排版 + 动画
 └── components/
-    ├── ChatView.vue     # 主聊天界面：消息列表 + 输入框，SSE + session 持久化
+    ├── ChatView.vue     # 主聊天界面：消息列表 + 输入框，WS/SSE 双模式 + 中断 + session 持久化
     ├── MessageItem.vue  # 单条消息：Markdown 渲染 + 思维链 + 工具调用
     ├── ThinkingBlock.vue# 思维链折叠区：琥珀色竖线，点击展开/收起
     ├── ToolCallBlock.vue# 工具调用折叠区：虚线竖线，工具名等宽
@@ -106,7 +107,7 @@ src/mini_ai/web/
 ├── display.py           # WebDisplay 适配器：线程安全推入 asyncio.Queue
 └── routes/
     ├── __init__.py
-    ├── chat.py           # 会话管理 + SSE 聊天 + 历史查询 + 重置
+    ├── chat.py           # 会话管理 + SSE/WS 双模式聊天 + 中断生成 + 历史查询 + 重置
     ├── models.py         # GET /api/models + POST /api/models/switch
     ├── skills.py         # GET /api/skills
     ├── commands.py       # GET /api/commands（斜杠命令列表 + 参数选项）
@@ -153,6 +154,34 @@ event: error
 data: {"error": "错误信息"}
 ```
 
+
+### WebSocket 模式
+
+`config.yaml` 配置 `web.transport: ws|sse`，默认 `ws`。
+
+- WS 模式：前端建立持久 WebSocket 连接，支持中断生成（`{"type": "abort"}`）
+- SSE 模式：纯 HTTP 流式，不支持中断，停止按钮不显示
+- 前端 WS 连接失败时自动回退到 SSE
+
+`WS /api/chat/ws` 消息协议：
+
+**客户端 → 服务端：**
+
+```json
+{"type": "chat", "message": "你好", "session_id": "xxx", "username": "xxx"}
+{"type": "abort"}
+```
+
+**服务端 → 客户端：** 事件格式与 SSE 相同（`{"event": "...", "data": {...}}`），新增 `aborted` 事件。
+
+### 中断机制
+
+1. 客户端点击"⏹ 停止"按钮（仅 WS 模式显示）→ 发送 `{"type": "abort"}`
+2. WebSocket 端收到后设置 `abort_event.set()`
+3. `_run_tool_loop_sync` 每轮循环检查 `abort_event.is_set()`
+4. 若已中断：推送 `{"event": "aborted"}`，丢弃当前不完整消息，不会进入下一轮工具调用
+5. 当前轮的 LLM 流式响应会跑完（requests 库限制），但不会触发下一轮
+
 ### API 接口
 
 | 接口 | 方法 | 说明 |
@@ -160,6 +189,7 @@ data: {"error": "错误信息"}
 | `/api/session` | POST | 创建新会话，body: `{"username": "xxx"}` |
 | `/api/sessions` | GET | 获取用户会话列表，参数: `username` |
 | `/api/chat` | POST | SSE 流式对话，body: `{"message": "...", "session_id": "xxx"}` |
+| `/api/chat/ws` | WS | WebSocket 持久连接，支持双向通信和中断生成 |
 | `/api/chat/history` | GET | 获取会话历史，参数: `session_id` |
 | `/api/chat/reset` | POST | 重置会话，body: `{"session_id": "xxx"}` |
 | `/api/models` | GET | 获取模型列表及当前激活模型 |
@@ -224,7 +254,6 @@ Vite 开发模式自动代理 `/api` 请求到 `http://localhost:8765`（后端�
 
 ## 待办
 
-- [ ] 会话文件持久化 — 后端重启后恢复 session（当前仅内存存储）
 - [ ] highlight.js 按需加载 — 仅加载常用语言包，减少前端体积
-- [ ] WebSocket 模式 — 替代 SSE，支持双向通信（进度、中断等）
+- [ ] 多用户并发安全 — 多用户同时会话可能互相影响（register_display 全局覆盖、MODEL_CONFIG 全局状态）
 - [ ] 多模态输入 — 支持图片/PDF 作为输入

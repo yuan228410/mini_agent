@@ -37,6 +37,7 @@ export interface ConfigResponse {
   history_count: number
   session_id: string
   username: string
+  transport: string
 }
 
 export interface CommandInfo {
@@ -72,15 +73,12 @@ export interface SessionsResponse {
   sessions: SessionInfo[]
 }
 
-function _usernameParam(): string {
-  const u = getUsername()
-  return u ? `&username=${encodeURIComponent(u)}` : ''
-}
-
 function _usernameBody(): object {
   const u = getUsername()
   return u ? { username: u } : {}
 }
+
+// ── SSE (回退) ──
 
 export async function* streamChat(message: string, sessionId?: string): AsyncGenerator<SSEEvent> {
   const body: any = { message, ..._usernameBody() }
@@ -128,6 +126,100 @@ export async function* streamChat(message: string, sessionId?: string): AsyncGen
     }
   }
 }
+
+// ── WebSocket (持久连接) ──
+
+let _ws: WebSocket | null = null
+let _wsConnected = false
+const _eventHandlers: ((event: SSEEvent) => void)[] = []
+
+function _wsUrl(): string {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${proto}//${location.host}/api/chat/ws`
+}
+
+export async function ensureWs(): Promise<boolean> {
+  if (_ws && _wsConnected && _ws.readyState === WebSocket.OPEN) return true
+
+  return new Promise<boolean>((resolve) => {
+    const ws = new WebSocket(_wsUrl())
+    _ws = ws
+    _wsConnected = false
+
+    ws.onopen = () => {
+      _wsConnected = true
+      resolve(true)
+    }
+
+    ws.onmessage = (e) => {
+      try {
+        const evt = JSON.parse(e.data)
+        for (const handler of _eventHandlers) {
+          handler(evt)
+        }
+      } catch {}
+    }
+
+    ws.onerror = () => {
+      _wsConnected = false
+      resolve(false)
+    }
+
+    ws.onclose = () => {
+      _wsConnected = false
+      _ws = null
+    }
+  })
+}
+
+export function onWsEvent(handler: (event: SSEEvent) => void): () => void {
+  _eventHandlers.push(handler)
+  return () => {
+    const idx = _eventHandlers.indexOf(handler)
+    if (idx >= 0) _eventHandlers.splice(idx, 1)
+  }
+}
+
+export function wsSend(data: object) {
+  if (_ws && _ws.readyState === WebSocket.OPEN) {
+    _ws.send(JSON.stringify(data))
+  }
+}
+
+export function wsChat(message: string, sessionId?: string) {
+  const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
+  if (sessionId) chatMsg.session_id = sessionId
+  wsSend(chatMsg)
+}
+
+export function abortChat() {
+  wsSend({ type: 'abort' })
+}
+
+export function closeWs() {
+  if (_ws) {
+    _ws.close()
+    _ws = null
+    _wsConnected = false
+  }
+}
+
+// ── Config ──
+
+let _transport: string | null = null
+
+export async function getTransport(): Promise<string> {
+  if (_transport) return _transport
+  try {
+    const c = await getConfig()
+    _transport = c.transport || 'ws'
+  } catch {
+    _transport = 'ws'
+  }
+  return _transport
+}
+
+// ── REST APIs ──
 
 export async function createSession(): Promise<{ session_id: string }> {
   const resp = await fetch('/api/session', {

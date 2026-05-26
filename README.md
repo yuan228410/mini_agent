@@ -62,7 +62,7 @@ mini-ai --web
 | pyyaml | 配置文件解析 |
 | rich | 终端 Markdown 渲染、思维链/工具调用展示 |
 | prompt-toolkit | 输入框 / 命令补全交互 |
-| fastapi | Web 后端框架（API + SSE 流式） |
+| fastapi | Web 后端框架（API + SSE/WebSocket 流式） |
 | uvicorn | ASGI 服务器（Web 模式运行） |
 
 ## 项目结构

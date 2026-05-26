@@ -1,10 +1,11 @@
-"""聊天 SSE 流式接口 — 多用户 + JSONL 持久化"""
+"""聊天接口 — SSE + WebSocket 双模式，多用户，JSONL 持久化"""
 import asyncio
 import json
+import threading
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from starlette.responses import StreamingResponse
 
 from ...config import DATA_DIR, MODEL_CONFIG, STREAMING
@@ -94,15 +95,25 @@ def _get_or_create_session(username: str, session_id: str | None) -> tuple[str, 
     return sid, user_sessions[sid]
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
-                         messages: list[dict], tools: list[dict], max_turns: int = 30):
+                         messages: list[dict], tools: list[dict],
+                         max_turns: int = 30, abort_event: threading.Event | None = None):
     disp = WebDisplay(queue, loop)
     register_display(disp)
 
     for turn in range(max_turns):
+        if abort_event and abort_event.is_set():
+            disp._push("aborted")
+            disp.text_end()
+            return None
+
         msg = None
         if STREAMING:
             thinking_seen = False
             for chunk in chat_stream(messages, tools=tools):
+                if abort_event and abort_event.is_set():
+                    disp._push("aborted")
+                    disp.text_end()
+                    return None
                 if chunk["type"] == "thinking_start":
                     disp.thinking_start()
                     thinking_seen = True
@@ -137,6 +148,8 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
     disp._push("error", {"error": f"工具循环达到上限 {max_turns} 轮"})
     return None
 
+# ── SSE endpoint ──
+
 @router.post("/session")
 async def create_session(body: dict):
     username = body.get("username", "default")
@@ -153,14 +166,14 @@ async def list_sessions(username: str = Query(default="default")):
     sessions = []
     for path in sorted(user_dir.glob("*.jsonl")):
         sid = path.stem
-        messages = _load_from_file(username, sid) or []
-        non_system = [m for m in messages if m["role"] != "system"]
+        msgs = _load_from_file(username, sid) or []
+        non_system = [m for m in msgs if m["role"] != "system"]
         first_user = next((m.get("content", "")[:50] for m in non_system if m["role"] == "user"), "")
         sessions.append({"session_id": sid, "message_count": len(non_system), "preview": first_user})
     return {"sessions": sessions}
 
 @router.post("/chat")
-async def chat_endpoint(body: dict):
+async def chat_sse_endpoint(body: dict):
     user_message = body.get("message", "").strip()
     username = body.get("username", "default")
     session_id = body.get("session_id")
@@ -179,7 +192,6 @@ async def chat_endpoint(body: dict):
             future = loop.run_in_executor(
                 None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs()
             )
-
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.2)
@@ -191,12 +203,10 @@ async def chat_endpoint(body: dict):
 
             msg = future.result()
             usage = _get_usage()
-
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
             for m in messages[start_idx:]:
                 _append_to_file(username, sid, m)
-
             done_data = {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
             yield f"event: done\ndata: {json.dumps(done_data, ensure_ascii=False)}\n\n"
         except Exception as e:
@@ -204,6 +214,122 @@ async def chat_endpoint(body: dict):
             yield f"event: error\ndata: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+# ── WebSocket endpoint ──
+
+@router.websocket("/chat/ws")
+async def chat_ws_endpoint(ws: WebSocket):
+    await ws.accept()
+
+    incoming: asyncio.Queue = asyncio.Queue()
+    ws_closed = False
+
+    async def _reader():
+        nonlocal ws_closed
+        try:
+            while not ws_closed:
+                try:
+                    raw = await asyncio.wait_for(ws.receive_text(), timeout=1.0)
+                    await incoming.put(raw)
+                except asyncio.TimeoutError:
+                    pass
+        except Exception:
+            pass
+        finally:
+            if not ws_closed:
+                await incoming.put(None)
+
+    reader_task = asyncio.create_task(_reader())
+
+    try:
+        while True:
+            raw = await incoming.get()
+            if raw is None:
+                break
+
+            try:
+                data = json.loads(raw)
+            except json.JSONDecodeError:
+                await ws.send_json({"event": "error", "data": {"error": "无效 JSON"}})
+                continue
+
+            msg_type = data.get("type")
+
+            if msg_type == "abort":
+                continue
+
+            if msg_type != "chat":
+                continue
+
+            user_message = data.get("message", "").strip()
+            username = data.get("username", "default")
+            session_id = data.get("session_id")
+            if not user_message:
+                await ws.send_json({"event": "error", "data": {"error": "消息不能为空"}})
+                continue
+
+            sid, messages = _get_or_create_session(username, session_id)
+            start_idx = len(messages)
+            messages.append({"role": "user", "content": user_message})
+
+            queue = asyncio.Queue()
+            loop = asyncio.get_event_loop()
+            abort_event = threading.Event()
+
+            future = loop.run_in_executor(
+                None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event
+            )
+
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=0.1)
+                        await ws.send_json(event)
+                        if event["event"] in ("done", "aborted", "error"):
+                            break
+                    except asyncio.TimeoutError:
+                        if future.done():
+                            break
+
+                    try:
+                        raw2 = incoming.get_nowait()
+                        d = json.loads(raw2) if raw2 else {}
+                        if d.get("type") == "abort":
+                            abort_event.set()
+                    except (asyncio.QueueEmpty, json.JSONDecodeError):
+                        pass
+
+                    if abort_event.is_set():
+                        await ws.send_json({"event": "aborted", "data": {}})
+                        break
+            except Exception as e:
+                logger.error(f"[Web] WS chat 错误: {e}")
+                await ws.send_json({"event": "error", "data": {"error": str(e)}})
+
+            try:
+                msg = future.result()
+            except Exception:
+                msg = None
+
+            usage = _get_usage()
+            if msg and msg.get("content"):
+                messages.append({"role": "assistant", "content": msg["content"]})
+            for m in messages[start_idx:]:
+                _append_to_file(username, sid, m)
+
+            final_event = "aborted" if abort_event.is_set() else "done"
+            done_data = {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
+            await ws.send_json({"event": final_event, "data": done_data})
+
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        logger.error(f"[Web] WS 错误: {e}")
+    finally:
+        ws_closed = True
+        reader_task.cancel()
+
+# ── History & Reset ──
 
 @router.get("/chat/history")
 async def chat_history(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default")):
