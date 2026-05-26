@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from starlette.responses import StreamingResponse
 
 from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, RequestContext, get_model_config
-from ...llm_base import get_usage
+from ...llm import get_usage
 from ...runner import run_tool_loop
 from ...tools import get_definitions
 from ...logger import logger

@@ -1,11 +1,9 @@
 """Web 模式共享依赖初始化"""
 import threading
 
-from ..compactor import Compactor
 from ..config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS
 from ..context import ContextBuilder
-from ..memory import MemoryStore
-from ..session import SessionManager
+from ..memory import MemoryStore, Compactor, SessionManager
 from ..skills import SkillLoader
 from ..subagents import SubagentLoader
 from ..team import Blackboard, MessageBus, TeammateManager

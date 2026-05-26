@@ -91,13 +91,20 @@ class ToolRegistry:
 
     def _execute_one(self, tc: dict, messages: list[dict], display=None) -> None:
         name = tc["function"]["name"]
-        args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
+        try:
+            args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
+        except (json.JSONDecodeError, TypeError):
+            args = {}
         logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
         args_summary = json.dumps(args, ensure_ascii=False)
         if display:
             display.tool_call_start(name, args_summary)
         t0 = time.monotonic()
-        output = self.dispatch(name, args)
+        try:
+            output = self.dispatch(name, args)
+        except Exception as e:
+            output = f"Error: {type(e).__name__}: {e}"
+            logger.error(f"[工具✗] {name} 异常: {e}")
         elapsed = time.monotonic() - t0
         if output is not None:
             output = _truncate(output)

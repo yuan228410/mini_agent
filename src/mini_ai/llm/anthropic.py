@@ -4,12 +4,12 @@ import time
 
 import requests
 
-from .config import TIMEOUTS, THINKING
-from .llm_base import (
+from ..config import TIMEOUTS, THINKING
+from .base import (
     get_api_url, get_api_key, get_model,
     get_usage, get_session, ensure_session_anthropic,
 )
-from .logger import logger
+from ..logger import logger
 
 
 def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -103,7 +103,7 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
 
 def chat(messages, tools=True, ctx=None):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
-    from .tools import get_definitions
+    from ..tools import get_definitions
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
@@ -157,7 +157,7 @@ def chat(messages, tools=True, ctx=None):
 
 def chat_stream(messages, tools=True, ctx=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
-    from .tools import get_definitions
+    from ..tools import get_definitions
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 

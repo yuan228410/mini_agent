@@ -1,5 +1,5 @@
 """斜杠命令处理"""
-from .logger import logger
+from ..logger import logger
 
 
 class CommandHandler:
@@ -58,7 +58,7 @@ class CommandHandler:
                 self.disp.info(f"消息数({len(non_system)})未超过保留阈值({self.compactor.keep_recent})，无需压缩")
                 return "continue"
             before = len(non_system)
-            from .llm import chat
+            from ..llm import chat
             messages[:] = self.compactor.compact(chat, messages, ctx=self.ctx)
             self.inject_fn(messages)
             after = len([m for m in messages if m["role"] != "system"])
@@ -77,7 +77,7 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/model":
-            from .config import AVAILABLE_MODELS, MODEL_CONFIG
+            from ..config import AVAILABLE_MODELS, MODEL_CONFIG
             current_model = MODEL_CONFIG.get("model", "?")
             self.disp.info(f"当前: {current_model}")
             for name in AVAILABLE_MODELS:
@@ -89,7 +89,7 @@ class CommandHandler:
             if not model_name:
                 self.disp.error("用法: /model <模型名称>")
                 return "continue"
-            from .config import AVAILABLE_MODELS, switch_model, MODEL_CONFIG
+            from ..config import AVAILABLE_MODELS, switch_model, MODEL_CONFIG
             if model_name not in AVAILABLE_MODELS:
                 self.disp.error(f"未知模型: {model_name}，可选: {', '.join(AVAILABLE_MODELS)}")
                 return "continue"
@@ -130,7 +130,7 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/skill":
-            from .tools import dispatch
+            from ..tools import dispatch
             self.disp.info(dispatch("list_skills", {}))
             return "continue"
 

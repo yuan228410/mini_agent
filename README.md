@@ -71,29 +71,42 @@ mini-ai --web
 mini_ai/
 ├── pyproject.toml             # 项目配置（uv/pip 安装，入口 mini-ai）
 ├── config.example.yaml        # 配置模板
+├── docs/                      # 设计文档
+│   └── multi-agent-orchestration.md  # 多 Agent 编排设计方案
+├── examples/                  # 功能示例
+│   └── team/                  #   多 Agent 编排示例
 ├── src/mini_ai/             # 包源码
 │   ├── __init__.py            #   包定义
 │   ├── __main__.py            #   python -m mini_ai 入口
 │   ├── main.py                #   主循环编排
 │   ├── config.py              #   配置加载（DATA_DIR / PACKAGE_DIR 分离）
-│   ├── llm.py                 #   LLM API 通信（OpenAI 协议）
-│   ├── anthropic.py           #   Anthropic Claude 适配层
-│   ├── display.py             #   终端 UI 渲染（Markdown/思维链/工具调用）
-│   ├── runner.py              #   可复用的 Agent 执行循环
+│   ├── llm/                   #   LLM 通信层
+│   │   ├── base.py            #     共享基础设施（session/usage/config）
+│   │   ├── openai.py          #     OpenAI 协议
+│   │   └── anthropic.py       #     Anthropic Claude 适配层
+│   ├── cli/                   #   CLI 交互层
+│   │   ├── display.py         #     终端 UI 渲染（Markdown/思维链/工具调用）
+│   │   └── commands.py        #     斜杠命令处理
+│   ├── runner.py              #   统一 Agent 执行循环（run_tool_loop）
 │   ├── context.py             #   系统提示词组装
-│   ├── memory.py              #   三层记忆存储
-│   ├── compactor.py           #   对话压缩归档
-│   ├── session.py             #   会话管理
+│   ├── memory/                #   记忆系统
+│   │   ├── store.py           #     三层记忆存储
+│   │   ├── compactor.py       #     对话压缩归档
+│   │   └── session.py         #     会话管理
 │   ├── skills.py              #   技能加载器（多路径搜索）
-│   ├── commands.py            #   斜杠命令处理
 │   ├── logger.py              #   日志模块
-│   ├── team_bus.py            #   队友消息总线
-│   ├── team_manager.py        #   队友管理器
-│   ├── team_loop.py           #   回禀等待/清理
+│   ├── team/                  #   多 Agent 编排子包
+│   │   ├── __init__.py        #     统一导出
+│   │   ├── bus.py             #     消息总线（文件 JSONL 邮箱 + Event 唤醒）
+│   │   ├── manager.py         #     队友生命周期管理（spawn/idle 超时/P2P）
+│   │   ├── loop.py            #     回禀等待/清理
+│   │   ├── blackboard.py      #     共享黑板（Agent 间 KV 存储）
+│   │   ├── task_graph.py      #     DAG 调度器（依赖/条件分支/重试）
+│   │   └── orchestrator.py    #     编排循环（DAG 驱动派遣）
 │   ├── character/             #   Agent 人设
 │   │   ├── SOUL.md            #     核心身份、能力、工作流程
 │   │   └── RULES.md           #     行为规范
-│   ├── tools/                 #   工具系统
+│   ├── tools/                 #   工具系统（ToolRegistry 类）
 │   │   ├── __init__.py        #     注册、分发、并行执行、结果截断
 │   │   ├── run_command.py     #     Shell 命令执行
 │   │   ├── web_fetch.py       #     网页抓取
@@ -103,8 +116,10 @@ mini_ai/
 │   │   ├── load_skill.py      #     加载技能内容
 │   │   ├── install_skill.py   #     安装技能
 │   │   ├── update_todos.py    #     任务规划与状态跟踪
-│   │   ├── dispatch_subagent.py #    子代理调度
-│   │   └── team_tools.py      #     Team 协作工具（5个）
+│   │   ├── dispatch_subagent.py #   子代理调度
+│   │   ├── team_tools.py      #     Team 工具（spawn/send/broadcast/dismiss）
+│   │   ├── blackboard_tools.py #    黑板工具（read/write/list）
+│   │   └── workflow_tools.py  #     工作流工具（run_workflow/status/load）
 │   └── subagents/             #   子代理定义
 │       ├── __init__.py        #     SubagentLoader
 │       ├── coder.md           #     代码工程师
@@ -112,9 +127,12 @@ mini_ai/
 └── ~/.mini_ai/  # 运行时数据目录（自动创建）
     ├── config.yaml            #   用户配置（含 API 密钥）
     ├── skills/                #   用户技能
+    ├── workflows/             #   工作流 YAML 模板
     ├── memory_data/           #   记忆数据
     ├── logs/                  #   运行日志
     └── .team/                 #   Team 协作数据
+        ├── inbox/             #     队友邮箱 JSONL
+        └── blackboard.json   #     共享黑板持久化
 ```
 
 ## 架构设计
@@ -123,11 +141,11 @@ mini_ai/
 
 ```
 用户输入 → /save /load /sessions? → 处理会话命令
-         → _run_tool_loop(LLM, 过滤后工具) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
+         → run_tool_loop(LLM, 过滤后工具) → 有 tool_calls? → 并行/串行执行工具 → 再次 chat
                                           ↓ 无
                                     wait_for_teammates? → Event 等待队友回禀 → 收到 → 注入对话 → 再次 chat
                                     ↓ 无活跃队友
-                               输出回复 → 存储 → 自动 shutdown 队友 → 检查压缩
+                               输出回复 → 存储 → 检查压缩
 ```
 
 ### 多模型支持 (config.yaml)
@@ -154,7 +172,7 @@ models:
 
 配置 `streaming: true` 后，LLM 文本回复逐字输出到终端，工具调用仍走批量模式。Anthropic 和 OpenAI 协议均支持流式。
 
-### 终端 UI (display.py)
+### 终端 UI (cli/display.py)
 
 基于 Rich + prompt_toolkit 的终端渲染层，统一管理所有用户可见输出：
 
@@ -162,11 +180,11 @@ models:
 
 **思维链展示**：支持三种模式（`/thinking <mode>` 切换）：
 
-| 模式 | 终端显示 | 查看详情 |
-|------|----------|----------|
-| collapsed（默认） | `💭 已思考 N 字 (Xs)` | `/thinking` 展开查看 |
-| expanded | 实时输出思考内容 + `💭 思考完毕 (Xs)` | 直接可见 |
-| hidden | 不显示 | `/thinking` 仍可查看 |
+| 模式　　　　　　　| 终端显示　　　　　　　　　　　　　　　| 查看详情　　　　　　 |
+| -------------------| ---------------------------------------| ----------------------|
+| collapsed（默认） | `💭 已思考 N 字 (Xs)`　　　　　　　　 | `/thinking` 展开查看 |
+| expanded　　　　　| 实时输出思考内容 + `💭 思考完毕 (Xs)` | 直接可见　　　　　　 |
+| hidden　　　　　　| 不显示　　　　　　　　　　　　　　　　| `/thinking` 仍可查看 |
 
 **工具调用展示**：三种粒度（`display.tool_detail` 配置）：
 
@@ -182,7 +200,7 @@ models:
 - Anthropic 协议：`thinking` content block + `thinking_delta` 流式块
 - OpenAI 协议（DeepSeek 等）：`reasoning_content` 字段 + 流式 `delta.reasoning_content`
 
-### 会话管理 (session.py)
+### 会话管理 (memory/session.py)
 
 在对话中使用命令管理会话：
 
@@ -249,31 +267,50 @@ max_turns: 10
 你是一个...（system prompt）
 ```
 
-### Team 协作系统 (team_bus.py + team_manager.py + team_loop.py + tools/team_tools.py)
+### Team 协作系统 (team/)
 
-召入持久队友组成 agent team，通过文件 JSONL 邮箱 + Event 唤醒协同工作：
+多 Agent 编排子包，支持持久队友、共享黑板、DAG 工作流、P2P 通信：
 
 | 工具 | 用途 |
 |------|------|
 | spawn_teammate | 召入/唤醒队友，指定名字、职司、首项任务 |
 | list_teammates | 列出所有队友及状态（idle/working/offline） |
-| send_message | 给队友或 lead 发 inbox 消息 |
-| read_inbox | 读取并清空自己的 inbox（仅队友内部使用，lead 不暴露此工具） |
+| send_message | 给队友或 lead 发 inbox 消息（支持 P2P） |
+| read_inbox | 读取并清空自己的 inbox（仅队友内部使用） |
 | broadcast | 向所有队友广播消息 |
+| dismiss_team | 主动解散所有活跃队友 |
+| blackboard_write | 向共享黑板写入数据 |
+| blackboard_read | 从共享黑板读取数据 |
+| blackboard_list | 列出黑板上的 key |
+| run_workflow | 提交 DAG 工作流并执行 |
+| workflow_status | 查看工作流执行状态 |
+| load_workflow | 加载预定义 YAML 工作流模板 |
 
 **特点：**
-- 持久队友：每个队友有独立 daemon 线程，spawn 后持续运行直到 shutdown
-- 文件邮箱：队友间通过 `.team/inbox/{name}.jsonl` 通信，进程重启不丢消息
-- Event 唤醒：lead 使用 `threading.Event` 等待回禀， teammate 发消息即唤醒，零延迟响应
-- 工具白名单：队友只能使用 `run_command`、`web_fetch`、`load_skill`、`send_message`、`read_inbox`
-- 回禀机制：`team_loop.py` 的 `wait_for_teammates` 自动等待并注入队友回禀，lead 无需手动轮询
-- 消息过滤：shutdown_response 自动忽略，短消息（<30字符且无关键词）静默丢弃
-- 自动 shutdown：每轮对话结束自动 shutdown 所有 idle/working 队友，清理残留 inbox
-- inbox 容量限制：单个 inbox 上限 100KB，防止无限膨胀
-- contextvars 身份识别：队友线程自动标记身份，工具调用时使用正确的发送者；并行执行时使用 `copy_context()` 保持上下文
+- 持久队友：spawn 后持续运行，空闲超时（`idle_timeout`）自动退出，无 auto-shutdown
+- P2P 通信：队友可通过 `send_message` 直接互通，`list_teammates` 发现彼此
+- 共享黑板：`Blackboard` 提供线程安全的 KV 存储，可选持久化到文件
+- DAG 编排：`run_workflow` 定义任务依赖图，Orchestrator 自动调度（并行/串行/条件分支）
+- 条件分支：DAG 节点支持 `condition` 表达式，不满足时跳过
+- 错误重试：DAG 节点支持 `max_retry`，失败后自动重试
+- 工作流模板：`~/.mini_ai/workflows/` 目录存放 YAML 模板，`load_workflow` 加载
+- Event 唤醒：`threading.Condition` 精确唤醒，零延迟响应
+- 工具白名单：队友可使用 `run_command`、`web_fetch`、`load_skill`、`send_message`、`list_teammates`、`blackboard_read/write/list`
 - 上下文安全阀：队友 prompt_tokens 超过 context_length × 88% 时自动终止并回禀
-- 并行 spawn：`spawn_teammate` 标记为可并行，模型可一次召入多个队友
-- 线程安全 token 统计：使用 `threading.local()` 隔离各线程的 token 用量，避免竞态
+- inbox 容量限制：单个 inbox 上限 100KB，防止无限膨胀
+
+**DAG 工作流示例：**
+```json
+{
+  "tasks": [
+    {"id": "search", "agent": "researcher", "prompt": "搜索 RAG 技术"},
+    {"id": "design", "agent": "architect", "prompt": "设计架构: {search}", "depends_on": ["search"]},
+    {"id": "code", "agent": "coder", "prompt": "实现: {design}", "depends_on": ["design"]}
+  ]
+}
+```
+
+详细使用说明见 [examples/team/](examples/team/)。
 
 ### 工具系统 (tools/)
 
@@ -298,13 +335,20 @@ max_turns: 10
 | spawn_teammate | 召入持久队友 |
 | send_message | 发 inbox 消息给队友/lead |
 | broadcast | 向所有队友广播消息 |
+| dismiss_team | 解散所有活跃队友 |
+| blackboard_write | 写入共享黑板 |
+| blackboard_read | 读取共享黑板 |
+| blackboard_list | 列出黑板 key |
+| run_workflow | 提交 DAG 工作流 |
+| workflow_status | 查看工作流状态 |
+| load_workflow | 加载 YAML 工作流模板 |
 
 **关键机制：**
 - 结果截断：工具输出超过 `max_result_chars` 时自动截断，防止上下文膨胀
 - 并行执行：无依赖的工具调用通过 ThreadPoolExecutor 并行运行
 - contextvars 传递：并行线程中通过 `copy_context()` 保持 `team_caller` 身份
 
-添加新工具：创建 `tools/新工具.py`，在 `tools/__init__.py` 的 `_ALL_TOOLS` 中注册。
+添加新工具：创建 `tools/新工具.py`，通过 `ToolRegistry` 注册。
 
 ### 日志系统 (logger.py)
 
@@ -312,7 +356,7 @@ max_turns: 10
 - 文件 `logs/YYYYMMDD.log`：DEBUG 级别全量记录，格式含进程/线程 ID（`[PID/TID]`），记录 LLM 请求响应、工具调用与返回、MSG 通信、队友状态等所有事件
 - 工具结果只记录名称和长度，不打印内容，避免日志膨胀
 
-### 记忆系统 (memory.py + compactor.py)
+### 记忆系统 (memory/)
 
 **三层存储模型：**
 
@@ -416,6 +460,7 @@ compactor:
 teammate:
   max_teammates: 10       # 最大队友数量
   max_turns: 20            # 队友每轮最大 LLM 调用次数
+  idle_timeout: 300        # 空闲超时自动退出（秒），0 表示不超时
   base_tools:              # 队友基础工具白名单
     - run_command
     - web_fetch
@@ -451,6 +496,115 @@ mini-ai --web --port 3000        # 自定义端口
 ```
 
 详细设计、API 接口、前端组件、开发模式等见 [WEB.md](WEB.md)。
+
+## 多 Agent 编排
+
+所有编排功能通过自然语言触发，模型自动选择合适的执行方式：
+
+```bash
+# 并行搜索
+你: 同时搜索 arxiv 和 GitHub 上关于 RAG 的最新内容
+
+# DAG 工作流（自动按依赖顺序执行）
+你: 先研究 WebSocket 技术，再设计聊天室架构，最后写代码实现
+
+# 条件分支
+你: 运行测试，如果失败就修复，通过就部署
+
+# 共享黑板
+你: 把搜索结果存到黑板，让 coder 读取后编码
+
+# 持久队友（跨多轮对话保持）
+你: 召入一个 coder 待命
+你: 让 coder 实现 JSON parser    ← 第二轮，coder 还在
+
+# P2P 协作
+你: 让 coder 写完后直接发给 reviewer 审查
+
+# 预定义工作流模板
+你: 用 research_and_code 模板，topic 是向量数据库
+```
+
+| 需求 | 模型自动使用 |
+|------|-------------|
+| 简单搜索/分析 | subagent（同步一次性） |
+| 并行多任务 | spawn_teammate 并行 |
+| 有依赖的多步骤 | run_workflow（DAG 编排） |
+| 多角色配合 | spawn + P2P 通信 |
+| 跨 Agent 传递数据 | blackboard 共享黑板 |
+| 失败自动重试 | DAG max_retry |
+
+### 工作流使用说明
+
+**DAG 工作流**让你定义有依赖关系的多步任务，系统自动编排执行：
+
+```
+你: 帮我先调研 RAG 技术，然后设计架构，最后写代码
+```
+
+模型自动生成并执行依赖图：`[research] → [design] → [code]`
+
+**核心机制：**
+- 无依赖的任务**自动并行**
+- `{task_id}` 占位符被替换为前置任务结果
+- 每个任务完成后结果自动写入共享黑板
+- 支持 `condition` 条件分支（不满足则跳过）
+- 支持 `max_retry` 失败自动重试
+
+**预定义模板**：将 YAML 放入 `~/.mini_ai/workflows/` 即可复用：
+
+```yaml
+# ~/.mini_ai/workflows/research_and_code.yaml
+tasks:
+  - id: research
+    agent: subagent:researcher
+    prompt: "搜索 {topic}"
+    depends_on: []
+  - id: code
+    agent: subagent:coder
+    prompt: "根据调研实现: {research}"
+    depends_on: [research]
+```
+
+使用：`你: 用 research_and_code 模板，topic 是向量数据库`
+
+### Team 队友使用说明
+
+**Team 模式**适合需要多轮交互、角色分工的场景：
+
+```
+你: 召入 coder 和 reviewer 两个队友
+你: 让 coder 实现 JSON parser，完成后发给 reviewer 审查
+```
+
+**核心机制：**
+- 队友持久存在（空闲超时 300s 自动退出，或用 `dismiss_team` 解散）
+- 队友间可 P2P 直接通信（不必经 lead 中转）
+- 通过共享黑板传递数据（`blackboard_write` / `blackboard_read`）
+
+**生命周期：**
+```
+spawn_teammate → working（执行任务）→ idle（等待）→ 收到消息 → working → ...
+                                        │
+                                        ├── idle 超时 (300s) → 自动退出
+                                        └── dismiss_team → 退出
+```
+
+- **创建**：Lead 调用 `spawn_teammate` 时。同名队友已存在则直接发新任务
+- **运行**：执行完任务后进入 idle，收到新消息再次 working，支持跨多轮对话
+- **销毁**：idle 超时 / `dismiss_team` 主动解散 / 收到 shutdown_request
+
+### Workflow vs Team 选型
+
+| 场景 | 推荐 | 原因 |
+|------|------|------|
+| A 结果传给 B | workflow | 自动传递 |
+| A 和 B 来回对话 | team | P2P 多轮通信 |
+| 固定流程复用 | workflow YAML | 一次定义多次用 |
+| 条件分支/重试 | workflow | 内置支持 |
+| 长期驻守的助手 | team | 跨轮保持 |
+
+详细使用说明、YAML 模板格式、condition 语法见 [examples/team/](examples/team/)。
 
 ## 自定义 Agent 人设
 

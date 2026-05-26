@@ -10,7 +10,7 @@ definition = {
         "description": (
             "创建或更新当前任务的待办列表，每次传入完整的列表（全量覆盖）。"
             "用于：拆解复杂任务、推进状态（pending→in_progress→completed）。"
-            "约束：同一时间最多一个 in_progress 任务。"
+            "并行任务可同时有多个 in_progress（最多 5 个）。"
         ),
         "parameters": {
             "type": "object",
@@ -52,8 +52,8 @@ class TodoStore:
             cleaned.append({"id": t.get("id", i), "content": content, "status": status})
 
         in_progress = sum(1 for t in cleaned if t["status"] == "in_progress")
-        if in_progress > 1:
-            return "Error: 同一时间只能有一个 in_progress 任务。"
+        if in_progress > 5:
+            return "Error: in_progress 任务过多（最多 5 个并行）。"
 
         self.items = cleaned
         return self.render()

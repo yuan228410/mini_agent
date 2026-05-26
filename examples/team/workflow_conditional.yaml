@@ -1,0 +1,27 @@
+# 条件分支工作流：检查 → 成功/失败走不同路径
+# 演示 condition 字段的使用
+
+tasks:
+  - id: check
+    agent: reviewer
+    prompt: "检查当前项目的代码质量，运行 lint 和 type check。如果有问题请在结果中包含 'ERROR' 关键字。"
+    depends_on: []
+
+  - id: fix
+    agent: coder
+    prompt: "修复以下代码质量问题:\n\n{check}"
+    depends_on: [check]
+    condition: "'ERROR' in check['result']"
+    max_retry: 2
+
+  - id: deploy
+    agent: coder
+    prompt: "代码质量检查通过，执行部署准备工作"
+    depends_on: [check]
+    condition: "'ERROR' not in check['result']"
+
+  - id: report
+    agent: reporter
+    prompt: "生成最终报告，总结检查和处理结果"
+    depends_on: [check, fix, deploy]
+    # 无条件 — 等所有前置完成或 skip 后执行

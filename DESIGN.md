@@ -12,19 +12,22 @@ mini_ai 是一个基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支�
 │  初始化 → 加载上下文 → 恢复历史/会话 → 主循环                    │
 │     │                                                         │
 │     ├── config.py (多模型切换 + 统一配置)                       │
+│     ├── llm/ (LLM 通信层: base + openai + anthropic)            │
 │     ├── context.py (SOUL + 记忆 + 技能 + RULES)                │
-│     ├── memory.py (三层存储)                                   │
-│     ├── compactor.py (压缩归档)                                │
-│     ├── session.py (会话保存/恢复)                              │
+│     ├── memory/ (三层存储 + 压缩 + 会话)                        │
+│     ├── cli/ (终端 UI + 斜杠命令)                               │
 │     ├── skills.py (技能加载)                                   │
 │     ├── subagents/ (子代理定义)                                │
-│     ├── team_bus.py (队友邮箱 + Event 唤醒)                    │
-│     ├── team_manager.py (队友管理)                             │
-│     └── team_loop.py (回禀等待 + 自动 shutdown + 清理)          │
+│     ├── team/bus.py (队友邮箱 + Condition 唤醒)                │
+│     ├── team/manager.py (队友管理 + idle 超时)                  │
+│     ├── team/loop.py (回禀等待 + 清理)                          │
+│     ├── team/blackboard.py (共享黑板)                           │
+│     ├── team/task_graph.py (DAG 调度)                          │
+│     └── team/orchestrator.py (编排循环)                         │
 │                                                               │
 │  主循环:                                                       │
 │    User Input → /save /load /sessions?                        │
-│              → _run_tool_loop(LLM, 过滤后工具)                 │
+│              → run_tool_loop(LLM, 过滤后工具)                  │
 │                  ├─ tool_calls → tools/__init__.py 分发        │
 │                  │   ├── run_command.py                        │
 │                  │   ├── web_fetch.py (智能 HTML 清洗)         │
@@ -43,7 +46,7 @@ mini_ai 是一个基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支�
 
 ## 模块设计
 
-### 1. LLM 通信 (llm.py + anthropic.py)
+### 1. LLM 通信 (llm/)
 
 **职责：** 对 OpenAI / Anthropic Chat API 的统一封装，支持流式输出。
 
@@ -55,8 +58,8 @@ mini_ai 是一个基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支�
 - `RequestException` 和 JSON 解析失败统一返回 None
 
 **双协议适配：**
-- `llm.py` — OpenAI Chat Completions API（`/v1/chat/completions`）
-- `anthropic.py` — Anthropic Messages API（`/v1/messages`），签名对齐 `chat()` / `chat_stream()`
+- `llm/openai.py` — OpenAI Chat Completions API（`/v1/chat/completions`）
+- `llm/anthropic.py` — Anthropic Messages API（`/v1/messages`），签名对齐 `chat()` / `chat_stream()`
 - `config.yaml` 的 `api_mode: openai | anthropic` 自动选择协议层
 
 ```python
@@ -66,7 +69,7 @@ def chat_stream(messages, tools=True) -> Generator     # 流式模式，yield ch
 
 ### 2. 工具系统 (tools/)
 
-**注册模式：** 模块级 `definition` + `execute(args)` 接口，`_ALL_TOOLS` 统一管理。
+**注册模式：** `ToolRegistry` 类管理工具注册/分发，模块级函数作为兼容包装。
 
 **注册流程：**
 ```
@@ -140,15 +143,20 @@ max_turns: 10
 作为系统提示词的正文...
 ```
 
-### 4. Team 协作系统 (team_bus.py + team_manager.py + team_loop.py + tools/team_tools.py)
+### 4. Team 协作系统 (team/)
 
-**定位：** 持久、可交互的角色协作系统。
+**定位：** 多 Agent 编排系统，支持持久队友、共享黑板、DAG 工作流。
 
 **核心组件：**
-- **MessageBus（team_bus.py）：** 基于文件 JSONL 的邮箱系统 + Event 唤醒 + inbox 容量限制
-- **TeammateManager（team_manager.py）：** 队友生命周期管理（spawn / 状态追踪 / 线程循环）
-- **Team 轮询（team_loop.py）：** lead 侧回禀等待、消息过滤、自动 shutdown、inbox 清理
-- **Team Tools（tools/team_tools.py）：** 5 个工具暴露给 LLM 操作 team
+- **MessageBus（team/bus.py）：** 基于文件 JSONL 的邮箱系统 + Condition 唤醒 + inbox 容量限制
+- **TeammateManager（team/manager.py）：** 队友生命周期管理（spawn / idle 超时 / P2P 通信）
+- **Team 轮询（team/loop.py）：** lead 侧回禀等待、消息过滤、inbox 清理
+- **Blackboard（team/blackboard.py）：** Agent 间共享 KV 存储（线程安全 + 可选文件持久化）
+- **TaskGraph（team/task_graph.py）：** 轻量 DAG 调度器（依赖解析 + 条件分支 + 重试）
+- **Orchestrator（team/orchestrator.py）：** DAG 驱动编排循环（并行派遣 + Condition 唤醒 + 结果汇总）
+- **Team Tools（tools/team_tools.py）：** 6 个 team 工具暴露给 LLM
+- **Blackboard Tools（tools/blackboard_tools.py）：** 3 个黑板工具
+- **Workflow Tools（tools/workflow_tools.py）：** 3 个工作流工具
 
 **消息流转：**
 ```
@@ -180,13 +188,19 @@ init (offline) → spawn → working → idle → ...
 | 决策 | 原因 |
 |------|------|
 | 文件邮箱 | 进程重启不丢消息，零外部依赖 |
-| Event 唤醒 | `bus.send()` 写入后 `Event.set()`，`wait(timeout)` 零延迟响应，替代 sleep 轮询 |
+| Condition 唤醒 | `threading.Condition` 精确唤醒，wait_for 无竞态，零延迟响应 |
+| 共享黑板 | Agent 间通过 Blackboard 传递数据，无需经 lead 中转 |
+| DAG 编排 | Orchestrator 纯代码调度，LLM 只负责定义 DAG 和执行节点 |
+| 条件分支 | TaskNode.condition 表达式求值，不满足则 skip |
+| 错误重试 | max_retry 控制失败后自动重试次数 |
+| idle 超时 | 队友空闲 N 秒后自动退出，替代原来的 auto-shutdown |
+| P2P 通信 | 队友可发现彼此并直接通信，不必经 lead 中转 |
 | contextvars 身份识别 | 队友线程 `set_caller(name)` 标记身份，工具自动使用正确发送者 |
 | `copy_context()` 并行保序 | ThreadPoolExecutor 中 `_cv.copy_context().run()` 保持 team_caller 上下文 |
 | Lead 工具过滤 | 排除 `read_inbox`/`list_teammates`，防止 LLM 空轮询浪费 token |
 | 队友不暴露 read_inbox | `_teammate_loop` 顶部代码层读取 inbox，LLM 不感知 |
 | 消息过滤 | shutdown_response 自动忽略；短消息（<30字符且无结果关键词）静默丢弃 |
-| 自动 shutdown | 每轮对话结束 `shutdown_teammates()` 关闭所有 idle/working 队友 |
+| 自动 shutdown | ~~每轮对话结束~~ → 改为 idle 超时（`idle_timeout`）+ `dismiss_team` 工具主动解散 |
 | inbox 清理 | `cleanup_inbox()` 延迟 0.5s 读取并丢弃残留的 shutdown_response |
 | inbox 容量限制 | `bus.send()` 检查收件人 inbox 文件大小，超过 100KB 拒绝写入 |
 | 上下文重置 | 每轮任务完成后 `messages = [messages[0]]`，防止无限增长 |
@@ -196,7 +210,7 @@ init (offline) → spawn → working → idle → ...
 | `_sessions_lock` | `threading.Lock` 保护 `_SESSIONS` 字典并发读写 |
 | 数量限制 | `config.yaml` 的 `teammate.max_teammates` 控制，默认 10 |
 
-**回禀等待流程（team_loop.py）：**
+**回禀等待流程（team/loop.py）：**
 ```python
 def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, store):
     while waited < lead_wait:
@@ -223,7 +237,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
 | 上下文 | 隔离 | 隔离（每轮重置） |
 | 适用场景 | 并行搜索、独立分析 | 编码+审查接力、多角色协作 |
 
-### 5. 记忆系统 (memory.py + compactor.py)
+### 5. 记忆系统 (memory/)
 
 **三层存储模型：**
 
@@ -254,7 +268,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
 - `load_unarchived` 从最后一个 compact_event 之后读取未归档消息
 - 启动时自动恢复上次会话的上下文
 
-### 6. 会话管理 (session.py)
+### 6. 会话管理 (memory/session.py)
 
 **职责：** 命名会话的保存、加载、列表。
 
@@ -323,24 +337,25 @@ models:
 |------|------|--------|----------|
 | — | `streaming` | false | main.py |
 | — | `active_model` | — | config.py |
-| models.* | `api_mode` | openai | llm.py / anthropic.py |
-| models.* | `api_url` | — | llm.py / anthropic.py |
-| models.* | `api_key` | — | llm.py / anthropic.py |
-| models.* | `model` | — | llm.py / anthropic.py |
-| models.* | `context_length` | 128000 | compactor / runner / team_manager |
-| timeouts | `llm` | 120 | llm.py / anthropic.py |
-| timeouts | `llm_retries` | 3 | llm.py |
-| timeouts | `llm_retry_delay` | 2 | llm.py |
-| timeouts | `teammate_recv` | 5 | team_manager.py |
-| timeouts | `lead_wait` | 1800 | team_loop.py |
-| timeouts | `lead_poll_interval` | 2 | team_loop.py |
+| models.* | `api_mode` | openai | llm/ |
+| models.* | `api_url` | — | llm/ |
+| models.* | `api_key` | — | llm/ |
+| models.* | `model` | — | llm/ |
+| models.* | `context_length` | 128000 | compactor / runner / team/manager |
+| timeouts | `llm` | 120 | llm/ |
+| timeouts | `llm_retries` | 3 | llm/openai.py |
+| timeouts | `llm_retry_delay` | 2 | llm/openai.py |
+| timeouts | `teammate_recv` | 5 | team/manager.py |
+| timeouts | `lead_wait` | 1800 | team/loop.py |
+| timeouts | `lead_poll_interval` | 2 | team/loop.py |
 | timeouts | `web_fetch` | 30 | tools/web_fetch.py |
-| compactor | `context_usage_threshold` | 0.8 | compactor.py |
-| compactor | `keep_recent` | 50 | compactor.py |
-| compactor | `char_threshold` | 20000 | compactor.py |
-| teammate | `max_teammates` | 10 | team_manager.py |
-| teammate | `max_turns` | 20 | team_manager.py |
-| teammate | `base_tools` | [3项] | team_manager.py |
+| compactor | `context_usage_threshold` | 0.8 | memory/compactor.py |
+| compactor | `keep_recent` | 50 | memory/compactor.py |
+| compactor | `char_threshold` | 20000 | memory/compactor.py |
+| teammate | `max_teammates` | 10 | team/manager.py |
+| teammate | `max_turns` | 20 | team/manager.py |
+| teammate | `idle_timeout` | 300 | team/manager.py |
+| teammate | `base_tools` | [3项] | team/manager.py |
 | tool | `max_result_chars` | 8000 | tools/__init__.py |
 | runner | `context_usage_limit` | 0.88 | runner.py |
 
@@ -364,27 +379,19 @@ models:
 
 ### 11. Agent 执行器 (runner.py)
 
-**可复用的对话循环：** 被主循环、子代理、队友三者复用。
+**统一的工具循环：** `run_tool_loop()` 被主循环、子代理、队友、Web 端复用。
 
 ```python
-def rumini_ai(messages, max_turns=10, tool_names=None, context_length=None) -> str | None
-    for _ in range(max_turns):
-        if prompt_tokens > context_length * context_usage_limit:
-            logger.warning("[上下文] 接近上限，提前退出")
-            return None
-        msg = chat(messages, tools=filtered_defs)
-        if not msg or "tool_calls" not in msg:
-            return msg.content
-        handle_tool_calls(msg, messages)
-    return None
+def run_tool_loop(messages, tools, *, streaming=False, display=None,
+                  inject_fn=None, abort_event=None, max_turns=30,
+                  context_length=None, ctx=None) -> tuple[dict | None, bool]
 ```
 
 **设计决策：**
-- 工具白名单通过 `tool_names` 参数传入，子代理和队友用不同的白名单
-- 轮次上限防止无限循环
-- 上下文安全阀：`prompt_tokens > context_length × context_usage_limit` 时提前退出
-- `context_length` 由调用方传入（从 `MODEL_CONFIG` 获取），不硬编码
-- 返回 None 时调用方负责容错处理
+- 支持流式/非流式、display 渲染、abort 中断、todos 注入
+- 上下文安全阀：`context_length` 设置后超阈值提前退出
+- 返回 `(final_msg, spawned)` 元组
+- `run_agent()` 作为轻量包装供子代理/队友调用
 
 ### 12. web_fetch 智能清洗 (tools/web_fetch.py)
 

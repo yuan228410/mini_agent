@@ -3,7 +3,7 @@ import threading
 
 import requests
 
-from .config import MODEL_CONFIG
+from ..config import MODEL_CONFIG
 
 
 def get_config(ctx=None):

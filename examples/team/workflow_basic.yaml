@@ -1,0 +1,28 @@
+# 基础工作流：研究 → 设计 → 编码 → 审查
+# 放入 ~/.mini_ai/workflows/ 目录后可通过 load_workflow 加载
+
+tasks:
+  - id: research
+    agent: researcher
+    prompt: "搜索并总结以下主题的最新进展和最佳实践: {topic}"
+    depends_on: []
+
+  - id: design
+    agent: architect
+    prompt: "基于以下调研结果，设计系统架构方案（包含模块划分、接口定义、技术选型）:\n\n{research}"
+    depends_on: [research]
+
+  - id: impl_core
+    agent: coder
+    prompt: "根据以下架构设计，实现核心模块代码:\n\n{design}"
+    depends_on: [design]
+
+  - id: impl_test
+    agent: coder
+    prompt: "为以下架构设计编写单元测试:\n\n{design}"
+    depends_on: [design]
+
+  - id: review
+    agent: reviewer
+    prompt: "审查以下代码实现和测试，检查正确性、风格、边界情况:\n\n实现:\n{impl_core}\n\n测试:\n{impl_test}"
+    depends_on: [impl_core, impl_test]

@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.text import Text
 
-from .logger import logger
+from ..logger import logger
 
 _IS_TTY = sys.stdout.isatty()
 
@@ -30,8 +30,8 @@ _SLASH_COMMANDS = [
 def _build_completions():
     items = list(_SLASH_COMMANDS)
     try:
-        from .skills import SkillLoader
-        from .config import DATA_DIR, SKILL_PATHS
+        from ..skills import SkillLoader
+        from ..config import DATA_DIR, SKILL_PATHS
         loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
         for name, skill in loader.skills.items():
             desc = skill["meta"].get("description", "")
@@ -39,7 +39,7 @@ def _build_completions():
     except Exception:
         pass
     try:
-        from .config import AVAILABLE_MODELS, MODEL_CONFIG
+        from ..config import AVAILABLE_MODELS, MODEL_CONFIG
         for name in AVAILABLE_MODELS:
             model_id = MODEL_CONFIG.get("model", "") if name == _raw_active() else _models_raw().get(name, {}).get("model", "")
             items.append((f"/model {name}", model_id))
@@ -48,11 +48,11 @@ def _build_completions():
     return items
 
 def _raw_active():
-    from .config import _raw
+    from ..config import _raw
     return _raw.get("active_model", "")
 
 def _models_raw():
-    from .config import _raw
+    from ..config import _raw
     return _raw.get("models", {})
 
 _ALL_COMPLETIONS = _build_completions()
@@ -77,7 +77,7 @@ class Display:
             return
         from rich.panel import Panel
         from rich import box
-        from . import __version__
+        from .. import __version__
         art_lines = [
             r" __  __ _       _    ___ _ ",
             r"|  \/  (_)_ __ | |_ / __| |",

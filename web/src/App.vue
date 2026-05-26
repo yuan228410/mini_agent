@@ -10,6 +10,7 @@ import SkillPanel from './components/SkillPanel.vue'
 
 const theme = ref<Theme>('light')
 const config = ref({
+  version: '',
   model: '?',
   context_length: 128000,
   prompt_tokens: 0,

@@ -69,6 +69,12 @@ def execute(args: dict) -> str:
         return "错误：缺少 url 参数"
     extract_mode = args.get("extract_mode", "text")
     max_chars = args.get("max_chars", 8000)
+    try:
+        max_chars = int(max_chars)
+    except (TypeError, ValueError):
+        max_chars = 8000
+    if max_chars <= 0:
+        max_chars = 8000
 
     logger.info(f"[抓取→] {url} mode={extract_mode}")
 

@@ -26,8 +26,7 @@ def run_tool_loop(
     ctx=None,
 ) -> tuple[dict | None, bool]:
     """统一工具循环。返回 (final_msg, spawned_teammate)。"""
-    from .llm import chat as llm_chat, chat_stream as llm_chat_stream
-    from .llm_base import get_usage
+    from .llm import chat as llm_chat, chat_stream as llm_chat_stream, get_usage
     from .tools import handle_tool_calls
 
     spawned = False

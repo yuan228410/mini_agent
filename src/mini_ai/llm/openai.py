@@ -3,13 +3,13 @@ import time
 
 import requests
 
-from .config import TIMEOUTS
-from .llm_base import (
+from ..config import TIMEOUTS
+from .base import (
     get_config, get_api_url, get_api_key, get_model, get_api_mode,
     get_usage, get_session, ensure_session_openai,
 )
-from .logger import logger
-from .tools import get_definitions
+from ..logger import logger
+from ..tools import get_definitions
 
 _get_usage = get_usage
 

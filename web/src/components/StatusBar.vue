@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 
 const props = defineProps<{
+  version: string
   model: string
   context_length: number
   prompt_tokens: number
@@ -20,6 +21,8 @@ const usagePct = computed(() => {
 
 <template>
   <div class="status-bar">
+    <span class="status-item">mini_ai v{{ version }}</span>
+    <span class="status-sep">│</span>
     <span class="status-item">⚙ {{ model }}</span>
     <span class="status-sep">│</span>
     <span class="status-item">ctx {{ usagePct }}% ({{ prompt_tokens }}/{{ context_length }})</span>

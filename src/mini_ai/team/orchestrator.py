@@ -13,8 +13,8 @@ class Orchestrator:
         self.graph = graph
         self.blackboard = blackboard
         self.context_length = context_length
-        self._completion_event = threading.Event()
-        self._results_lock = threading.Lock()
+        self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)
         self._pending_results: dict[str, str | None] = {}
 
     def run(self, timeout: int = 1800) -> str:
@@ -41,10 +41,9 @@ class Orchestrator:
                 )
                 thread.start()
 
-            self._completion_event.clear()
-            self._completion_event.wait(timeout=5)
+            self._wait_pending()
 
-            with self._results_lock:
+            with self._lock:
                 for task_id, result in list(self._pending_results.items()):
                     if result is not None:
                         self.graph.mark_done(task_id, result)
@@ -54,6 +53,15 @@ class Orchestrator:
                     del self._pending_results[task_id]
 
         return self._summarize()
+
+    def _wait_pending(self):
+        with self._condition:
+            self._condition.wait_for(
+                lambda: bool(self._pending_results) or not any(
+                    n.status == "running" for n in self.graph.nodes.values()
+                ),
+                timeout=30,
+            )
 
     def _execute_task(self, task: TaskNode, prompt: str):
         from ..runner import run_agent
@@ -65,14 +73,13 @@ class Orchestrator:
         else:
             result = self._run_teammate(task.agent, prompt)
 
-        with self._results_lock:
+        with self._condition:
             if result:
                 self._pending_results[task.id] = result
             else:
                 task.error = "执行返回空结果"
                 self._pending_results[task.id] = None
-
-        self._completion_event.set()
+            self._condition.notify()
 
     def _run_subagent(self, agent_type: str, prompt: str) -> str | None:
         from ..tools.dispatch_subagent import execute as dispatch_exec
