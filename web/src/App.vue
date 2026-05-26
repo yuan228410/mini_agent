@@ -7,6 +7,7 @@ import ThemeToggle from './components/ThemeToggle.vue'
 import StatusBar from './components/StatusBar.vue'
 import ModelSelector from './components/ModelSelector.vue'
 import SkillPanel from './components/SkillPanel.vue'
+import WorkspacePanel from './components/WorkspacePanel.vue'
 
 const theme = ref<Theme>('light')
 const config = ref({
@@ -21,6 +22,7 @@ const config = ref({
   username: '',
 })
 const showSkills = ref(false)
+const showWorkspaces = ref(false)
 const chatViewRef = ref<InstanceType<typeof ChatView>>()
 const needUsername = ref(false)
 const usernameInput = ref('')
@@ -91,6 +93,9 @@ function submitUsername() {
       </div>
       <div class="header-right">
         <ModelSelector :session-id="sessionId" @switched="onModelSwitched" />
+        <button class="skill-btn" @click="showWorkspaces = true" title="工作空间">
+          <span>📂</span>
+        </button>
         <button class="skill-btn" @click="showSkills = true" title="技能面板">
           <span>🔧</span>
         </button>
@@ -100,6 +105,7 @@ function submitUsername() {
     <ChatView ref="chatViewRef" @config-update="onConfigUpdate" />
     <StatusBar v-bind="config" />
     <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
+    <WorkspacePanel :visible="showWorkspaces" @close="showWorkspaces = false" />
   </template>
 </template>
 

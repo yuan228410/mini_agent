@@ -3,7 +3,7 @@ from ..logger import logger
 
 
 class CommandHandler:
-    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None):
+    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None):
         self.disp = disp
         self.store = store
         self.sessions = sessions
@@ -12,6 +12,7 @@ class CommandHandler:
         self.run_tool_fn = run_tool_fn
         self.lead_tools = lead_tools
         self.ctx = ctx
+        self.workspace_mgr = workspace_mgr
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
@@ -150,6 +151,42 @@ class CommandHandler:
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
                 self.store.append("assistant", msg["content"])
+            return "continue"
+
+        if user_input == "/workspace":
+            if self.workspace_mgr:
+                self.disp.info(self.workspace_mgr.render_list())
+            else:
+                self.disp.error("工作空间功能未启用")
+            return "continue"
+
+        if user_input.startswith("/workspace "):
+            if not self.workspace_mgr:
+                self.disp.error("工作空间功能未启用")
+                return "continue"
+            sub = user_input[11:].strip()
+            if sub.startswith("new "):
+                parts = sub[4:].strip().split(None, 1)
+                name = parts[0] if parts else ""
+                path = parts[1] if len(parts) > 1 else ""
+                self.disp.info(self.workspace_mgr.create(name, path))
+            elif sub.startswith("add "):
+                self.disp.info(self.workspace_mgr.add(sub[4:].strip()))
+            elif sub.startswith("remove "):
+                self.disp.info(self.workspace_mgr.remove(sub[7:].strip()))
+            elif sub.startswith("delete "):
+                self.disp.info(self.workspace_mgr.delete(sub[7:].strip()))
+            else:
+                ws = self.workspace_mgr.get(sub)
+                if not ws:
+                    self.disp.error(f"工作空间 '{sub}' 不存在")
+                else:
+                    from ..config import _raw, _config_path
+                    import yaml as _yaml
+                    _raw["active_workspace"] = sub
+                    _config_path.write_text(_yaml.dump(_raw, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+                    self.disp.info(f"已切换到工作空间 '{sub}'，正在重新加载...")
+                    return "reload_workspace"
             return "continue"
 
         return None

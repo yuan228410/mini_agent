@@ -1,10 +1,12 @@
 import argparse
 import threading
+from pathlib import Path
 
 from . import __version__
 from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, SessionManager
-from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, RequestContext
+from .memory.history_db import HistoryDB
+from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, RequestContext, _raw
 from .context import ContextBuilder
 from .llm import get_usage
 from .logger import logger
@@ -13,7 +15,8 @@ from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, cleanup_inbox
-from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, render_todos
+from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, register_history_tools, render_todos
+from .workspace import WorkspaceManager
 
 SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
@@ -72,19 +75,29 @@ def main():
         tool_detail=DISPLAY.get("tool_detail", "summary"),
     )
 
+    ws_mgr = WorkspaceManager(DATA_DIR)
+    cwd = Path.cwd()
+    cwd_name = cwd.name or "default"
+    ws = ws_mgr.get(cwd_name)
+    if not ws:
+        ws_mgr.create(cwd_name, str(cwd))
+        ws = ws_mgr.get(cwd_name)
+    ws_dir = ws.ws_dir
+    logger.info(f"[Workspace] {cwd_name} → {ws_dir} (project: {ws.project_path or cwd})")
+
     register(SKILL_LOADER)
     register_subagents(SUBAGENT_LOADER)
 
-    bus = MessageBus(DATA_DIR / ".team" / "inbox")
+    bus = MessageBus(ws_dir / ".team" / "inbox")
     team_mgr = TeammateManager(
-        team_dir=DATA_DIR / ".team",
+        team_dir=ws_dir / ".team",
         bus=bus,
-        project_dir=DATA_DIR,
+        project_dir=ws_dir,
     )
     register_team(bus, team_mgr)
     register_display(disp)
 
-    bb = Blackboard(persist_path=DATA_DIR / ".team" / "blackboard.json")
+    bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
     workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
     register_blackboard(bb, workflow_dirs=workflow_dirs)
 
@@ -93,9 +106,11 @@ def main():
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
 
-    store = MemoryStore(DATA_DIR / "memory_data")
-    sessions = SessionManager(DATA_DIR / "memory_data" / "sessions")
+    store = MemoryStore(ws_dir / "memory_data")
+    history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=cwd_name)
+    sessions = SessionManager(ws_dir / "memory_data" / "sessions")
     register_memory_tools(store)
+    register_history_tools(history_db)
     ctx = ContextBuilder(DATA_DIR)
 
     compactor = Compactor(
@@ -111,10 +126,10 @@ def main():
     cmd = CommandHandler(
         disp=disp, store=store, sessions=sessions, compactor=compactor,
         inject_fn=_inject_todos, run_tool_fn=_run_loop_compat,
-        lead_tools=_lead_tool_defs(), ctx=req_ctx,
+        lead_tools=_lead_tool_defs(), ctx=req_ctx, workspace_mgr=ws_mgr,
     )
 
-    system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER)
+    system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
     messages = [{"role": "system", "content": system_prompt}]
     _inject_todos(messages)
 
@@ -142,9 +157,28 @@ def main():
             break
         if result == "continue":
             continue
+        if result == "reload_workspace":
+            ws_name = _raw.get("active_workspace", "default")
+            ws = ws_mgr.get(ws_name)
+            if ws:
+                ws_dir = ws.ws_dir
+                store = MemoryStore(ws_dir / "memory_data")
+                history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
+                sessions = SessionManager(ws_dir / "memory_data" / "sessions")
+                system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
+                messages = [{"role": "system", "content": system_prompt}]
+                _inject_todos(messages)
+                unarchived = store.load_unarchived()
+                if unarchived:
+                    messages.extend(unarchived)
+                cmd.store = store
+                cmd.sessions = sessions
+                disp.info(f"工作空间 '{ws_name}' 已加载（{len(unarchived)} 条历史）")
+            continue
 
         messages.append({"role": "user", "content": user_input})
         store.append("user", user_input)
+        history_db.append("user", user_input)
 
         msg, _ = run_tool_loop(
             messages, _lead_tool_defs(),
@@ -165,6 +199,7 @@ def main():
         if msg and msg.get("content"):
             messages.append({"role": "assistant", "content": msg["content"]})
             store.append("assistant", msg["content"])
+            history_db.append("assistant", msg["content"])
 
         cleanup_inbox(bus)
 

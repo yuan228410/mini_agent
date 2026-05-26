@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
 from ..logger import logger
-from . import dispatch_subagent, read_file, run_command, update_todos, web_fetch, write_file
+from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file
 
 _MAX_RESULT_CHARS = TOOL["max_result_chars"]
 
@@ -162,11 +162,16 @@ class ToolRegistry:
         memory_tools.configure(memory_store=memory_store)
         self.add_tools(*memory_tools.ALL_MEMORY_TOOLS)
 
+    def register_history_tools(self, history_db):
+        from . import history_tools
+        history_tools.configure(history_db=history_db)
+        self.add_tools(*history_tools.ALL_HISTORY_TOOLS)
+
 
 # ── 模块级默认实例 ──
 
 _registry = ToolRegistry()
-_registry.add_tools(read_file, write_file, run_command, web_fetch, update_todos)
+_registry.add_tools(read_file, write_file, edit_file, run_command, search_files, list_dir, web_fetch, update_todos)
 
 
 # ── 向后兼容的模块级函数 ──
@@ -193,6 +198,10 @@ def register_blackboard(blackboard, workflow_dirs=None) -> None:
 
 def register_memory_tools(memory_store) -> None:
     _registry.register_memory_tools(memory_store)
+
+
+def register_history_tools(history_db) -> None:
+    _registry.register_history_tools(history_db)
 
 
 def get_definitions() -> list[dict]:

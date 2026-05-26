@@ -24,6 +24,11 @@ _SLASH_COMMANDS = [
     ("/thinking collapsed", "折叠模式（仅摘要）"),
     ("/thinking expanded", "展开模式（实时显示）"),
     ("/thinking hidden", "隐藏思考过程"),
+    ("/workspace", "列出所有工作空间"),
+    ("/workspace new", "创建新工作空间"),
+    ("/workspace add", "添加现有文件夹为工作空间"),
+    ("/workspace remove", "移除工作空间（保留数据）"),
+    ("/workspace delete", "删除工作空间（含数据）"),
     ("/exit", "退出"),
 ]
 

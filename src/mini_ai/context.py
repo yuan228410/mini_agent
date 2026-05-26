@@ -19,7 +19,7 @@ class ContextBuilder:
         from .config import PACKAGE_DIR
         self.character_dir = PACKAGE_DIR / "character"
 
-    def build(self, memory_store=None, skill_loader=None) -> str:
+    def build(self, memory_store=None, skill_loader=None, project_path: str = "") -> str:
         parts = []
 
         soul = self._read_doc("SOUL.md")
@@ -38,27 +38,30 @@ class ContextBuilder:
             if skills_text and skills_text != "(no skills available)":
                 parts.append(f"## 可用技能\n\n{skills_text}")
 
-        # 当前目录项目规范（CLAUDE.md / AGENTS.md）
-        cwd_docs = self._read_cwd_docs()
+        cwd_docs = self._read_project_docs(project_path)
         if cwd_docs:
             parts.append(cwd_docs)
 
-        # 系统运行指令放最后，优先级最低
         rules = self._read_doc("RULES.md")
         if rules:
             parts.append(rules)
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
-    def _read_cwd_docs(self) -> str | None:
+    def _read_project_docs(self, project_path: str = "") -> str | None:
         import os
-        cwd = Path(os.getcwd())
-        for name in ("CLAUDE.md", "AGENTS.md"):
-            path = cwd / name
-            if path.exists():
-                text = path.read_text(encoding="utf-8").strip()
-                if text:
-                    return f"## {name}\n\n{text}"
+        search_dirs = []
+        if project_path:
+            search_dirs.append(Path(project_path))
+        search_dirs.append(Path(os.getcwd()))
+
+        for d in search_dirs:
+            for name in ("CLAUDE.md", "AGENTS.md"):
+                path = d / name
+                if path.exists():
+                    text = path.read_text(encoding="utf-8").strip()
+                    if text:
+                        return f"## {name}\n\n{text}"
         return None
 
     def _read_doc(self, name: str) -> str | None:

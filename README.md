@@ -89,6 +89,7 @@ mini_ai/
 │   │   └── commands.py        #     斜杠命令处理
 │   ├── runner.py              #   统一 Agent 执行循环（run_tool_loop）
 │   ├── context.py             #   系统提示词组装
+│   ├── workspace.py           #   工作空间管理（创建/切换/添加/删除）
 │   ├── memory/                #   记忆系统
 │   │   ├── store.py           #     三层记忆存储
 │   │   ├── compactor.py       #     对话压缩归档
@@ -108,10 +109,13 @@ mini_ai/
 │   │   └── RULES.md           #     行为规范
 │   ├── tools/                 #   工具系统（ToolRegistry 类）
 │   │   ├── __init__.py        #     注册、分发、并行执行、结果截断
-│   │   ├── run_command.py     #     Shell 命令执行
+│   │   ├── run_command.py     #     Shell 命令执行（+timeout/cwd）
 │   │   ├── web_fetch.py       #     网页抓取
 │   │   ├── read_file.py       #     文件读取
-│   │   ├── write_file.py      #     文件写入
+│   │   ├── write_file.py      #     文件写入（+append 模式）
+│   │   ├── edit_file.py       #     部分编辑（search-and-replace）
+│   │   ├── search_files.py    #     文件搜索（grep + glob）
+│   │   ├── list_dir.py        #     目录列表
 │   │   ├── list_skills.py     #     列出可用技能
 │   │   ├── load_skill.py      #     加载技能内容
 │   │   ├── install_skill.py   #     安装技能
@@ -119,7 +123,9 @@ mini_ai/
 │   │   ├── dispatch_subagent.py #   子代理调度
 │   │   ├── team_tools.py      #     Team 工具（spawn/send/broadcast/dismiss）
 │   │   ├── blackboard_tools.py #    黑板工具（read/write/list）
-│   │   └── workflow_tools.py  #     工作流工具（run_workflow/status/load）
+│   │   ├── workflow_tools.py  #     工作流工具（run_workflow/status/load）
+│   │   ├── memory_tools.py    #     主动记忆（remember/recall/forget）
+│   │   └── history_tools.py   #     历史搜索（search_history）
 │   └── subagents/             #   子代理定义
 │       ├── __init__.py        #     SubagentLoader
 │       ├── coder.md           #     代码工程师
@@ -128,11 +134,16 @@ mini_ai/
     ├── config.yaml            #   用户配置（含 API 密钥）
     ├── skills/                #   用户技能
     ├── workflows/             #   工作流 YAML 模板
-    ├── memory_data/           #   记忆数据
     ├── logs/                  #   运行日志
-    └── .team/                 #   Team 协作数据
-        ├── inbox/             #     队友邮箱 JSONL
-        └── blackboard.json   #     共享黑板持久化
+    └── workspaces/            #   工作空间数据（按项目隔离）
+        └── <name>/            #     每个工作空间独立存储
+            ├── workspace.yaml #       元数据（关联项目路径）
+            ├── memory_data/   #       记忆 + 历史 DB + 会话
+            │   ├── history.db #         SQLite 历史（FTS 搜索）
+            │   ├── MEMORY.md  #         长期记忆
+            │   ├── USER.md    #         用户画像
+            │   └── sessions/  #         命名会话
+            └── .team/         #       Team 协作数据
 ```
 
 ## 架构设计
@@ -210,6 +221,11 @@ models:
 | `/load <名称>` | 加载已保存的会话，恢复上下文 |
 | `/sessions` | 列出所有已保存的会话 |
 | `/compact` | 手动触发对话压缩，归档旧消息 |
+| `/workspace` | 列出所有工作空间 |
+| `/workspace new <名称> [路径]` | 创建新工作空间 |
+| `/workspace add <路径>` | 添加现有文件夹为工作空间 |
+| `/workspace remove <名称>` | 移除工作空间（保留数据） |
+| `/workspace delete <名称>` | 删除工作空间（含数据） |
 | `/clear` | 清空当前会话的历史消息 |
 | `/history` | 查看历史消息列表 |
 | `/genskill <名称>` | 从当前对话总结生成技能 |
@@ -219,6 +235,25 @@ models:
 | `/model <名称>` | 切换模型（立即生效，持久化） |
 | `/thinking` | 查看最近一次思考过程 |
 | `/thinking <mode>` | 切换思考展示：collapsed / expanded / hidden |
+
+### 工作空间
+
+工作空间按项目隔离记忆、会话、历史数据：
+
+- **CLI 自动绑定**：在哪个目录运行 `mini-ai`，该目录名即为工作空间名（自动创建）
+- **Web 手动管理**：通过顶栏 📂 按钮打开工作空间面板
+- 每个工作空间有独立的 MEMORY.md、会话列表、历史 DB、Team 数据
+- 支持手动操作：`/workspace new`、`/workspace add`（关联现有目录）、`/workspace remove/delete`
+
+```bash
+cd ~/projects/my-app
+mini-ai                  # 自动使用/创建 "my-app" 工作空间
+
+cd ~/projects/another
+mini-ai                  # 自动使用/创建 "another" 工作空间，数据独立
+```
+
+数据存储：`~/.mini_ai/workspaces/<name>/`（memory_data/ + sessions/ + .team/）
 
 ### 终端 UI
 

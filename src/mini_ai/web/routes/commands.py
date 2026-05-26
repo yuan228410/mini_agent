@@ -13,6 +13,11 @@ _WEB_COMMANDS = [
     {"name": "/skill", "desc": "使用指定技能执行任务", "has_arg": True, "arg_name": "技能名称"},
     {"name": "/model", "desc": "切换模型", "has_arg": True, "arg_name": "模型名称"},
     {"name": "/thinking", "desc": "设置思考展示模式", "has_arg": True, "arg_name": "collapsed/expanded/hidden"},
+    {"name": "/workspace", "desc": "列出所有工作空间", "has_arg": False},
+    {"name": "/workspace new", "desc": "创建新工作空间", "has_arg": True, "arg_name": "名称 [路径]"},
+    {"name": "/workspace add", "desc": "添加现有文件夹为工作空间", "has_arg": True, "arg_name": "路径"},
+    {"name": "/workspace remove", "desc": "移除工作空间（保留数据）", "has_arg": True, "arg_name": "名称"},
+    {"name": "/workspace delete", "desc": "删除工作空间（含数据）", "has_arg": True, "arg_name": "名称"},
 ]
 
 @router.get("/commands")
