@@ -29,6 +29,8 @@ _SLASH_COMMANDS = [
     ("/workspace add", "添加现有文件夹为工作空间"),
     ("/workspace remove", "移除工作空间（保留数据）"),
     ("/workspace delete", "删除工作空间（含数据）"),
+    ("/plan", "进入计划模式（只规划不执行）"),
+    ("/act", "切换到执行模式"),
     ("/exit", "退出"),
 ]
 
@@ -102,18 +104,19 @@ class Display:
         self.console.print(panel)
         self.console.print()
 
-    def user_input(self) -> str:
+    def user_input(self, plan_mode: bool = False) -> str:
+        prompt_text = "mini-ai 📋> " if plan_mode else "mini-ai> "
         if _IS_TTY and sys.stdin.isatty():
-            return self._prompt_input()
+            return self._prompt_input(prompt_text)
         try:
-            line = input("mini-ai> ")
+            line = input(prompt_text)
         except EOFError:
             return "exit"
         if not line and not sys.stdin.isatty():
             return "exit"
         return line
 
-    def _prompt_input(self) -> str:
+    def _prompt_input(self, prompt_text: str = "mini-ai> ") -> str:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.completion import Completer, Completion
         from prompt_toolkit.formatted_text import FormattedText
@@ -141,6 +144,7 @@ class Display:
                     "completion-menu.meta": "bg:#222222 #888888",
                 }),
             )
+        self._session.message = FormattedText([("class:prompt", prompt_text)])
         try:
             return self._session.prompt()
         except (EOFError, KeyboardInterrupt):

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
-  ensureWs, onWsEvent, wsChat, abortChat, closeWs,
+  ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct,
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, getWorkspaces,
   type WsEvent, type HistoryMessage,
@@ -30,9 +30,10 @@ const _states = new Map<string, SessionState>()
 const activeSessionId = ref('')
 const messages = ref<Message[]>([])
 const isStreaming = ref(false)
+const planMode = ref(false)
 const chatContainer = ref<HTMLElement>()
 const props = defineProps<{ workspace?: string }>()
-const emit = defineEmits(['config-update', 'status-change'])
+const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change'])
 
 let _unsubWs: (() => void) | null = null
 
@@ -248,6 +249,10 @@ function _processEvent(s: SessionState, event: WsEvent) {
     case 'done':
       if (msg) msg.streaming = false
       break
+    case 'mode_change':
+      planMode.value = event.data.mode === 'plan'
+      emit('plan-mode-change', planMode.value)
+      break
     case 'aborted':
       if (msg) { msg.streaming = false; msg.content += '\n\n⚠ 已中断生成' }
       break
@@ -262,6 +267,18 @@ function _processEvent(s: SessionState, event: WsEvent) {
 async function sendMessage(text: string) {
   if (!text.trim() || isStreaming.value) return
 
+  if (text === '/plan') {
+    planMode.value = true
+    sendPlan(activeSessionId.value)
+    emit('plan-mode-change', true)
+    return
+  }
+  if (text === '/act') {
+    planMode.value = false
+    sendAct(activeSessionId.value)
+    emit('plan-mode-change', false)
+    return
+  }
   if (text.startsWith('/clear')) {
     await resetChat(activeSessionId.value)
     const s = _state(activeSessionId.value)
@@ -295,7 +312,7 @@ async function sendMessage(text: string) {
   let wsOk = false
   try { wsOk = await ensureWs() } catch { wsOk = false }
   if (wsOk) {
-    wsChat(text, sid, props.workspace)
+    wsChat(text, sid, props.workspace, planMode.value)
   } else {
     const s2 = _state(sid)
     const msg2 = s2.messages[s2.messages.length - 1]
@@ -334,7 +351,7 @@ async function switchToSession(sid: string, ws?: string) {
   await fetchConfig()
 }
 
-defineExpose({ useSkill, switchToSession, activeSessionId })
+defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
 </script>
 
 <template>

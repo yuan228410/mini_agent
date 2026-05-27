@@ -7,7 +7,7 @@ from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, SessionManager
 from .memory.history_db import HistoryDB
 from datetime import datetime
-from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, RequestContext, _raw
+from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, PLAN, RequestContext, _raw
 from .context import ContextBuilder
 from .llm import get_usage
 from .logger import logger
@@ -161,7 +161,7 @@ def main():
     )
 
     while True:
-        user_input = disp.user_input().strip()
+        user_input = disp.user_input(plan_mode=cmd.plan_mode).strip()
         if not user_input:
             continue
 
@@ -194,21 +194,40 @@ def main():
         history_db.append("user", user_input)
         disp.user_label(ts)
 
+        tools = [] if cmd.plan_mode else _lead_tool_defs()
         msg, _ = run_tool_loop(
-            messages, _lead_tool_defs(),
+            messages, tools,
             streaming=STREAMING,
             display=disp,
             inject_fn=_inject_todos,
             ctx=req_ctx,
         )
 
-        teammate_msg = wait_for_teammates(
-            bus, team_mgr, lead_event,
-            _run_loop_compat, messages, _lead_tool_defs(),
-            _inject_todos, disp, history_db=history_db, ctx=req_ctx,
-        )
-        if teammate_msg:
-            msg = teammate_msg
+        if cmd.plan_mode and msg and msg.get("content"):
+            if PLAN.get("approval", True):
+                msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
+            else:
+                cmd.plan_mode = False
+                msg["content"] += "\n\n⚡ 已自动切换到执行模式"
+                tools = _lead_tool_defs()
+                msg2, _ = run_tool_loop(
+                    messages, tools,
+                    streaming=STREAMING,
+                    display=disp,
+                    inject_fn=_inject_todos,
+                    ctx=req_ctx,
+                )
+                if msg2 and msg2.get("content"):
+                    msg = msg2
+
+        if not cmd.plan_mode:
+            teammate_msg = wait_for_teammates(
+                bus, team_mgr, lead_event,
+                _run_loop_compat, messages, _lead_tool_defs(),
+                _inject_todos, disp, history_db=history_db, ctx=req_ctx,
+            )
+            if teammate_msg:
+                msg = teammate_msg
 
         if msg and msg.get("content"):
             ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")

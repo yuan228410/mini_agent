@@ -14,6 +14,7 @@ class CommandHandler:
         self.ctx = ctx
         self.workspace_mgr = workspace_mgr
         self.history_db = history_db
+        self.plan_mode = False
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
@@ -190,6 +191,19 @@ class CommandHandler:
                     _config_path.write_text(_yaml.dump(_raw, default_flow_style=False, allow_unicode=True), encoding="utf-8")
                     self.disp.info(f"已切换到工作空间 '{sub}'，正在重新加载...")
                     return "reload_workspace"
+            return "continue"
+
+        if user_input == "/plan":
+            self.plan_mode = True
+            self.disp.info("已进入计划模式 📋 — 后续消息只规划不执行，输入 /act 开始执行")
+            return "continue"
+
+        if user_input == "/act":
+            if not self.plan_mode:
+                self.disp.info("当前已是执行模式")
+                return "continue"
+            self.plan_mode = False
+            self.disp.info("已切换到执行模式 ⚡")
             return "continue"
 
         return None

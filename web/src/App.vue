@@ -34,6 +34,7 @@ const needUsername = ref(false)
 const usernameInput = ref('')
 const currentUsername = ref('')
 const sessionId = ref('')
+const planMode = ref(false)
 
 onMounted(async () => {
   theme.value = initTheme()
@@ -55,6 +56,11 @@ function onToggleTheme() {
 function onConfigUpdate(c: any) {
   config.value = c
   if (c.session_id) sessionId.value = c.session_id
+  if (c.plan_mode !== undefined) planMode.value = c.plan_mode
+}
+
+function onPlanModeChange(mode: boolean) {
+  planMode.value = mode
 }
 
 function onModelSwitched() {
@@ -143,9 +149,9 @@ function submitUsername() {
         @toggle="toggleSidebar"
         @workspace-change="onWorkspaceChange"
       />
-      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" />
+      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" />
     </div>
-    <StatusBar v-bind="config" />
+    <StatusBar v-bind="config" :plan-mode="planMode" />
     <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
     <FileBrowserPanel :visible="showFiles" :workspace="activeWorkspace" @close="showFiles = false" />
   </template>

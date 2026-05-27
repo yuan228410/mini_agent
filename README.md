@@ -235,6 +235,8 @@ models:
 | `/model <名称>` | 切换模型（立即生效，持久化） |
 | `/thinking` | 查看最近一次思考过程 |
 | `/thinking <mode>` | 切换思考展示：collapsed / expanded / hidden |
+| `/plan` | 进入计划模式（只规划不执行，Agent 仅输出分析和步骤） |
+| `/act` | 切换到执行模式（按计划执行） |
 
 ### 工作空间
 
@@ -444,6 +446,26 @@ max_turns: 10
 - `remember(content, category)` — Agent 随时主动写入长期记忆（不需要等压缩触发）
 - `recall(keyword?)` — 检索长期记忆（模糊匹配）
 - `forget(keyword)` — 删除过期记忆
+
+### 计划模式
+
+通过 `/plan` 和 `/act` 切换对话模式：
+
+| 模式 | 说明 | 指令 |
+|------|------|------|
+| 执行模式（默认） | Agent 可自由调用工具、执行任务 | `/act` |
+| 计划模式 | Agent 只输出分析和步骤规划，不调用任何工具 | `/plan` |
+
+- 计划模式下 Agent 收到空工具列表，自然只输出文本
+- `plan.approval: true`（默认）：计划输出后暂停，用户确认 `/act` 后执行
+- `plan.approval: false`：计划输出后自动切换执行模式
+- CLI 提示符变化：`mini-ai>` → `mini-ai 📋>`
+- Web 端状态栏显示 📋 计划模式 / ⚡ 执行模式
+
+```yaml
+plan:
+  approval: true    # 计划模式下是否需要用户审批后才能执行
+```
 
 ### 上下文组装 (context.py)
 

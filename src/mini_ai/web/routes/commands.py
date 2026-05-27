@@ -7,6 +7,8 @@ from ...tools import dispatch
 router = APIRouter()
 
 _WEB_COMMANDS = [
+    {"name": "/plan", "desc": "进入计划模式（只规划不执行）", "has_arg": False},
+    {"name": "/act", "desc": "切换到执行模式", "has_arg": False},
     {"name": "/clear", "desc": "清空当前会话消息", "has_arg": False},
     {"name": "/compact", "desc": "手动触发对话压缩", "has_arg": False},
     {"name": "/genskill", "desc": "从对话生成技能", "has_arg": True, "arg_name": "技能名称"},

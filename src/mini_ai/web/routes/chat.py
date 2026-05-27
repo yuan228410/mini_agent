@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
-from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, WEB, RequestContext, get_model_config, user_data_dir
+from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, WEB, PLAN, RequestContext, get_model_config, user_data_dir
 from ...llm import get_usage, chat as llm_chat
 from ...runner import run_tool_loop
 from ...tools import get_definitions, register_memory_tools, register_history_tools
@@ -31,6 +31,7 @@ _SESSION_ABORTS: dict[str, threading.Event] = {}
 _META_CACHE: dict[str, dict] = {}
 _SESSION_COMPONENTS: dict[str, dict] = {}
 _SESSION_WORKSPACE: dict[str, str | None] = {}
+_SESSION_PLAN_MODE: dict[str, bool] = {}
 _DEFAULT_SESSION = "default"
 
 
@@ -316,6 +317,9 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             messages[0]["content"] = _build_system_prompt(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
 
         disp = WebDisplay(queue, loop)
+        plan_mode = _SESSION_PLAN_MODE.get(session_key, False)
+        if plan_mode:
+            tools = []
         cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
         ctx = RequestContext(model_config=cfg, display=disp)
 
@@ -338,6 +342,12 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             m.get("role") == "assistant" and m.get("content") == msg["content"]
             for m in messages[-3:]
         ):
+            if plan_mode:
+                if PLAN.get("approval", True):
+                    msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
+                else:
+                    _SESSION_PLAN_MODE[session_key] = False
+                    msg["content"] += "\n\n⚡ 已自动切换到执行模式，开始执行..."
             asst_ts = _now()
             messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts})
             asst_meta = {}

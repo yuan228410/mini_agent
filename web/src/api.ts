@@ -192,15 +192,28 @@ export function wsSend(data: object) {
   }
 }
 
-export function wsChat(message: string, sessionId?: string, workspace?: string) {
+export function wsChat(message: string, sessionId?: string, workspace?: string, planMode?: boolean) {
   const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
   if (sessionId) chatMsg.session_id = sessionId
   if (workspace) chatMsg.workspace = workspace
+  if (planMode) chatMsg.plan_mode = true
   wsSend(chatMsg)
 }
 
 export function abortChat(sessionId?: string) {
   const msg: any = { type: 'abort', ..._usernameBody() }
+  if (sessionId) msg.session_id = sessionId
+  wsSend(msg)
+}
+
+export function sendPlan(sessionId?: string) {
+  const msg: any = { type: 'plan', ..._usernameBody() }
+  if (sessionId) msg.session_id = sessionId
+  wsSend(msg)
+}
+
+export function sendAct(sessionId?: string) {
+  const msg: any = { type: 'act', ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
   wsSend(msg)
 }

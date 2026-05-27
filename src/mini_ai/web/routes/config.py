@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query
 
 from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config
-from .chat import _get_or_create_session, _DEFAULT_SESSION, _SESSION_MODELS, _LAST_USAGE
+from .chat import _get_or_create_session, _DEFAULT_SESSION, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE
 
 router = APIRouter()
 

@@ -26,6 +26,8 @@ display:
   thinking_mode: collapsed
   tool_detail: summary
 web:
+plan:
+  approval: true        # 计划模式下是否需要用户审批后才能执行
   history_limit: 200    # Web 端加载历史消息条数（前端展示），compactor.keep_recent 控制上下文构建量
 runner:
   context_usage_limit: 0.88

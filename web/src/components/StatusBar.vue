@@ -9,6 +9,7 @@ const props = defineProps<{
   completion_tokens: number
   system_prompt_chars: number
   history_count: number
+  planMode?: boolean
 }>()
 
 const usagePct = computed(() => {
@@ -21,7 +22,9 @@ const usagePct = computed(() => {
 
 <template>
   <div class="status-bar">
-    <span class="status-item">mini_ai v{{ version }}</span>
+    <span class="status-item" :class="{ 'plan-mode': planMode }">{{ planMode ? '📋 计划模式' : '⚡ 执行模式' }}</span>
+ <span class="status-sep">│</span>
+ <span class="status-item">mini_ai v{{ version }}</span>
     <span class="status-sep">│</span>
     <span class="status-item">⚙ {{ model }}</span>
     <span class="status-sep">│</span>

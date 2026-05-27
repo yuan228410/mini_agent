@@ -78,6 +78,7 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **会话持久化** — 刷新页面自动恢复历史消息（session_id 存 localStorage）
 - **工作空间管理** — 侧边栏顶部显示当前工作空间，支持创建/切换/删除/移除工作空间
 - **文件浏览** — 工作空间关联的项目目录文件列表预览
+- **计划模式** — /plan 进入只规划不执行模式，/act 切回执行模式，状态栏显示当前模式
 
 ## 前端组件
 
@@ -274,6 +275,8 @@ data: {"error": "错误信息"}
 | `/skill` | 技能名称 | 使用指定技能 |
 | `/model` | 模型名称 | 切换模型 |
 | `/thinking` | collapsed/expanded/hidden | 设置思考展示模式 |
+| `/plan` | — | 进入计划模式（只规划不执行） |
+| `/act` | — | 切换到执行模式 |
 
 `/model` 和 `/skill` 的参数选项从后端 API 动态获取。方向键导航，Tab/Enter 确认，Escape 取消。
 
