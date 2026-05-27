@@ -281,6 +281,11 @@ export async function getHistory(sessionId: string, workspace?: string): Promise
 
 // ── Workspace APIs ──
 
+export interface RemovedWorkspaceInfo {
+  name: string
+  project_path: string
+}
+
 export async function getWorkspaces(): Promise<WorkspacesResponse> {
   const resp = await _fetch(`/api/workspaces?username=${encodeURIComponent(_username())}`)
   return resp.json()
@@ -317,6 +322,27 @@ export async function switchWorkspace(name: string): Promise<any> {
 
 export async function removeWorkspace(name: string, deleteData: boolean = false): Promise<any> {
   const resp = await _fetch(`/api/workspaces/${encodeURIComponent(name)}?delete_data=${deleteData}&username=${encodeURIComponent(_username())}`, {
+    method: 'DELETE',
+  })
+  return resp.json()
+}
+
+export async function listRemovedWorkspaces(): Promise<{ removed: RemovedWorkspaceInfo[] }> {
+  const resp = await _fetch(`/api/workspaces/removed?username=${encodeURIComponent(_username())}`)
+  return resp.json()
+}
+
+export async function restoreWorkspace(name: string): Promise<any> {
+  const resp = await _fetch('/api/workspaces/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, ..._usernameBody() }),
+  })
+  return resp.json()
+}
+
+export async function deleteRemovedWorkspace(name: string): Promise<any> {
+  const resp = await _fetch(`/api/workspaces/removed/${encodeURIComponent(name)}?username=${encodeURIComponent(_username())}`, {
     method: 'DELETE',
   })
   return resp.json()
@@ -406,5 +432,129 @@ export async function searchHistory(keyword: string, sessionId?: string, workspa
   if (dateTo) params.set('date_to', dateTo)
   if (limit) params.set('limit', String(limit))
   const resp = await _fetch(`/api/chat/search?${params.toString()}`)
+  return resp.json()
+}
+
+
+// ── Settings APIs ──
+
+export interface SettingsResponse {
+  active_model: string
+  models: Record<string, {
+    api_url: string
+    api_mode: string
+    model: string
+    context_length: number
+    temperature?: number | null
+    max_tokens?: number | null
+    top_p?: number | null
+    reasoning_effort?: string | null
+    thinking?: { enabled?: boolean; budget_tokens?: number; type?: string } | null
+  }>
+  streaming: boolean
+  thinking: { enabled: boolean; budget_tokens: number; type: string }
+  display: { thinking_mode: string; tool_detail: string }
+  compactor: Record<string, any>
+  timeouts: Record<string, any>
+  runner: Record<string, any>
+  plan: Record<string, any>
+  web: Record<string, any>
+  logging: Record<string, any>
+  mcp: { enabled: boolean; servers?: Record<string, any> }
+}
+
+export async function getSettings(): Promise<SettingsResponse> {
+  const resp = await _fetch('/api/settings')
+  return resp.json()
+}
+
+export async function updateSettings(updates: Record<string, any>): Promise<any> {
+  const resp = await _fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(updates),
+  })
+  return resp.json()
+}
+
+
+export async function addModel(model: {
+  name: string
+  api_key: string
+  api_url: string
+  api_mode: 'openai' | 'anthropic'
+  model: string
+  context_length?: number
+  temperature?: number
+  headers?: Record<string, string>
+}): Promise<any> {
+  const resp = await _fetch('/api/settings/add_model', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(model),
+  })
+  return resp.json()
+}
+
+export async function removeModel(name: string): Promise<any> {
+  const resp = await _fetch('/api/settings/remove_model', {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return resp.json()
+}
+
+
+// ── MCP APIs ──
+
+export interface McpToolInfo {
+  name: string
+  description: string
+}
+
+export interface McpConnectedServer {
+  name: string
+  type: string
+  tools: McpToolInfo[]
+}
+
+export interface McpConfiguredServer {
+  name: string
+  type: string
+  disabled: boolean
+}
+
+export interface McpStatusResponse {
+  enabled: boolean
+  configured: McpConfiguredServer[]
+  connected: McpConnectedServer[]
+}
+
+export async function getMcpStatus(): Promise<McpStatusResponse> {
+  const resp = await _fetch('/api/mcp')
+  return resp.json()
+}
+
+export async function addMcpServer(server: {
+  name: string
+  type: 'stdio' | 'streamable_http' | 'sse'
+  command?: string
+  args?: string[]
+  url?: string
+  headers?: Record<string, string>
+}): Promise<any> {
+  const resp = await _fetch('/api/settings/mcp/add', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(server),
+  })
+  return resp.json()
+}
+
+export async function removeMcpServer(name: string): Promise<any> {
+  const resp = await _fetch(`/api/settings/mcp/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  })
   return resp.json()
 }

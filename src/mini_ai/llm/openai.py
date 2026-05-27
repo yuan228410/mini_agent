@@ -108,11 +108,18 @@ def chat(messages, tools=True, ctx=None):
         return None
 
     elapsed = time.monotonic() - t0
-    msg = result["choices"][0]["message"]
+    choices = result.get("choices", [])
+    if not choices:
+        logger.error(f"[LLM✗] API 返回空 choices: {result}")
+        return None
+    msg = choices[0].get("message", {})
+    if not msg:
+        logger.error(f"[LLM✗] API 返回空 message: {result}")
+        return None
     reasoning = msg.pop("reasoning_content", None)
     if reasoning:
         msg["thinking"] = reasoning
-    usage = result.get("usage", {})
+    usage = result.get("usage") or {}
     p_tok = usage.get("prompt_tokens", 0)
     c_tok = usage.get("completion_tokens", 0)
     usage_store = get_usage()
@@ -182,6 +189,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     in_thinking = False
     tool_call_buf: dict[int, dict] = {}
 
+    response.encoding = "utf-8"
     for line in response.iter_lines(decode_unicode=True):
         if abort_event and abort_event.is_set():
             break
@@ -195,9 +203,12 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         except (ValueError, __import__("json").JSONDecodeError):
             continue
 
-        delta = data.get("choices", [{}])[0].get("delta", {})
+        choices = data.get("choices", [])
+        if not choices:
+            continue
+        delta = choices[0].get("delta", {})
 
-        reasoning = delta.get("reasoning_content")
+        reasoning = delta.get("reasoning_content") or delta.get("reasoning")
         if reasoning:
             if not in_thinking:
                 in_thinking = True
@@ -205,39 +216,42 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
             collected_thinking += reasoning
             yield {"type": "thinking", "content": reasoning}
 
-        if "content" in delta and delta["content"]:
+        content_val = delta.get("content")
+        if content_val:
             if in_thinking:
                 yield {"type": "thinking_end"}
                 in_thinking = False
-            collected_content += delta["content"]
-            yield {"type": "text", "content": delta["content"]}
+            collected_content += content_val
+            yield {"type": "text", "content": content_val}
 
         if "tool_calls" in delta:
-            for tc in delta["tool_calls"]:
+            for tc in delta.get("tool_calls", []):
+                if not isinstance(tc, dict):
+                    continue
                 idx = tc.get("index", 0)
                 if idx not in tool_call_buf:
                     tool_call_buf[idx] = {"id": tc.get("id", ""), "function": {"name": "", "arguments": ""}}
                 buf = tool_call_buf[idx]
-                if "id" in tc and tc["id"]:
+                if tc.get("id"):
                     buf["id"] = tc["id"]
-                fn = tc.get("function", {})
-                if "name" in fn and fn["name"]:
+                fn = tc.get("function") or {}
+                if fn.get("name"):
                     buf["function"]["name"] = fn["name"]
-                if "arguments" in fn:
+                if "arguments" in fn and fn["arguments"] is not None:
                     buf["function"]["arguments"] += fn["arguments"]
 
-        usage = data.get("usage")
+        usage = data.get("usage") or {}
         if usage:
             usage_store = get_usage()
             usage_store["prompt_tokens"] = usage.get("prompt_tokens", 0)
             usage_store["completion_tokens"] = usage.get("completion_tokens", 0)
 
     elapsed = time.monotonic() - t0
-    tool_calls = [{"id": buf["id"], "type": "function", "function": buf["function"]}
-                  for buf in sorted(tool_call_buf.values(), key=lambda b: b.get("index", 0))
-                  if buf["function"]["name"]] if tool_call_buf else None
+    tool_calls = [{"id": buf.get("id", ""), "type": "function", "function": buf["function"]}
+                  for _, buf in sorted(tool_call_buf.items())
+                  if buf["function"].get("name")] if tool_call_buf else None
 
-    msg = {"role": "assistant", "content": collected_content or None}
+    msg = {"role": "assistant", "content": collected_content or None, "tool_calls": tool_calls} if tool_calls else {"role": "assistant", "content": collected_content or None}
     if tool_calls:
         msg["tool_calls"] = tool_calls
     if collected_thinking:

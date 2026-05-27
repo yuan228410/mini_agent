@@ -22,8 +22,9 @@ async def lifespan(app: FastAPI):
     ws = ws_mgr.get("default") or ws_mgr.get("default")
 
     if not ws.project_path:
-        cwd = os.getcwd()
-        ws.update_project_path(cwd)
+        default_dir = os.path.join(os.getcwd(), "default")
+        os.makedirs(default_dir, exist_ok=True)
+        ws.update_project_path(default_dir)
 
     chat.switch_session_base(ws.ws_dir / "web_sessions", "default")
 

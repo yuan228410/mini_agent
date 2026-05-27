@@ -85,6 +85,11 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **流式重试** — LLM 429 限流等错误自动重试 3 次，递增延迟
 - **日志配置** — `logging.level` 控制控制台级别（默认 WARNING），`logging.file_level` 控制文件级别（默认 DEBUG）
 - **工具参数安全** — LLM 传参缺失时返回错误信息而非抛异常
+- **配置面板** — 右侧 ⚙ 设置面板，可配置模型参数、thinking、显示、运行等
+- **模型管理** — 添加/删除模型，支持 OpenAI 和 Anthropic 两种协议
+- **工作空间恢复** — 已移除的工作空间可恢复，也可彻底删除
+- **消息时间戳** — 每条消息显示本地时间（精确到秒）
+- **兼容性增强** — 流式响应空 choices 容错、UTF-8 编码修复、Anthropic thinking adaptive 模式
 
 ## 前端组件
 
@@ -96,6 +101,7 @@ web/src/
 ├── style.css            # CSS 变量色板 + 噪点纹理 + 全局排版 + 动画
 └── components/
     ├── ChatView.vue     # 主聊天界面：消息列表 + 输入框，WebSocket 通信 + 中断 + session 持久化
+    ├── SettingsPanel.vue # 设置面板：模型参数、thinking、显示、运行等配置
     ├── MessageItem.vue  # 单条消息：Markdown 渲染 + 思维链 + 工具调用
     ├── SessionSidebar.vue # 左侧会话列表面板：工作空间切换 + 会话管理 + 收起/展开
     ├── ThinkingBlock.vue# 思维链折叠区：琥珀色竖线，点击展开/收起
@@ -233,10 +239,13 @@ data: {"error": "错误信息"}
 - 关联工作空间：`~/.mini_ai/users/<username>/workspaces/<ws>/web_sessions/<sid>/memory_data/history.db`
 
 **工作空间管理：**
-- 每个用户独立的工作空间列表，按 `~/.mini_ai/workspaces/<username>/` 隔离
+- 每个用户独立的工作空间列表，按 `~/.mini_ai/users/<username>/workspaces/` 隔离
 - 工作空间可关联项目目录（project_path），支持创建/切换/删除/移除
+- 添加工作空间：选择已有目录自动取目录名，或新建空工作空间
+- 已移除的工作空间数据备份，可恢复或彻底删除
 - 切换工作空间时重建系统提示词（含项目规范的 CLAUDE.md/AGENTS.md）
 - 同一工作空间下可创建多个会话，会话并行生成互不干扰
+- default 工作空间路径默认为 `<web启动目录>/<username>/`
 
 **会话列表：**
 - `GET /api/sessions?username=xxx&workspace=yyy` 返回该用户指定工作空间的会话及预览
@@ -291,6 +300,16 @@ data: {"error": "错误信息"}
 
 压缩触发时机：每轮对话后检查 `prompt_tokens` 或本地字符数超阈值，自动压缩并更新三层记忆。
 
+### 配置管理
+
+**`GET /api/settings`** — 返回所有配置（模型参数不含 API key）
+**`PUT /api/settings`** — 更新配置（支持 thinking/display/runner/plan/logging/streaming 等全局配置 + 单个模型参数覆盖）
+**`POST /api/settings/add_model`** — 添加新模型（名称、协议、API URL/Key、模型 ID 等）
+**`DELETE /api/settings/remove_model`** — 删除模型（至少保留一个）
+**`GET /api/workspaces/removed`** — 列出已移除的工作空间
+**`POST /api/workspaces/restore`** — 恢复已移除的工作空间
+**`DELETE /api/workspaces/removed/{name}`** — 彻底删除已移除的工作空间数据
+
 ### 斜杠命令
 
 前端输入 `/` 时弹出命令补全列表，支持：
@@ -332,3 +351,5 @@ Vite 开发模式自动代理 `/api` 请求到 `http://localhost:8765`（后端�
 
 - [ ] highlight.js 按需加载 — 仅加载常用语言包，减少前端体积
 - [ ] 多模态输入 — 支持图片/PDF 作为输入
+- [ ] MCP 机制完善 — 更丰富的 MCP 服务器支持
+- [ ] 计划任务机制 — 定时/周期性任务调度

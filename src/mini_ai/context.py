@@ -39,7 +39,7 @@ class ContextBuilder:
                 parts.append(f"## 可用技能\n\n{skills_text}")
 
         if project_path:
-            parts.append("## 当前工作空间\n\n项目路径: " + project_path + "\n\n所有文件操作（读写文件、执行命令）默认在此目录下进行")
+            parts.append("## 当前工作空间\n\n项目路径: " + project_path + "\n\n重要：执行命令时必须传 cwd=\"" + project_path + "\" 参数；读写文件使用绝对路径基于此目录。不要使用其他目录。")
 
         cwd_docs = self._read_project_docs(project_path)
         if cwd_docs:

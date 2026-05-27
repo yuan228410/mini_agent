@@ -3,6 +3,7 @@ import { ref, onMounted, reactive } from 'vue'
 import {
   getSessions, createSession, deleteSession, renameSession,
   getWorkspaces, createWorkspace, addWorkspace, removeWorkspace, switchWorkspace,
+  listRemovedWorkspaces, restoreWorkspace, deleteRemovedWorkspace,
   browseDirs,
   type SessionInfo, type WorkspaceInfo, type BrowseDir,
 } from '../api'
@@ -22,7 +23,10 @@ const contextMenu = ref<{ x: number; y: number; sid: string } | null>(null)
 const wsSessions: Record<string, SessionInfo[]> = reactive({})
 const wsCollapsed: Record<string, boolean> = reactive({})
 
-const showWsManager = ref(false)
+const showAddWsPopup = ref(false)
+const removedWorkspaces = ref<{name: string; project_path: string}[]>([])
+const showRemoved = ref(false)
+const wsMode = ref<'create' | 'add' | 'restore'>('add')
 const showCreateWs = ref(false)
 const newWsName = ref('')
 const newWsPath = ref('')
@@ -46,6 +50,7 @@ onMounted(() => {
 async function loadAll() {
   try { await loadWorkspaces() } catch {}
   loadAllSessions().catch(() => {})
+  loadRemoved().catch(() => {})
 }
 
 async function loadWorkspaces() {
@@ -203,6 +208,45 @@ async function addWs() {
   await loadAll()
 }
 
+async function loadRemoved() {
+  try {
+    const resp = await listRemovedWorkspaces()
+    removedWorkspaces.value = resp.removed || []
+    showRemoved.value = removedWorkspaces.value.length > 0
+  } catch {}
+}
+
+async function restoreWs(name: string) {
+  try {
+    const resp = await restoreWorkspace(name)
+    if (resp.error) { alert(resp.error); return }
+    await loadAll()
+    await loadRemoved()
+  } catch {}
+}
+
+async function deleteRemovedWs(name: string) {
+  if (!confirm(`确定彻底删除已移除的工作空间 "${name}"？此操作不可恢复！`)) return
+  try {
+    const resp = await deleteRemovedWorkspace(name)
+    if (resp.error) { alert(resp.error); return }
+    await loadRemoved()
+  } catch {}
+}
+
+async function addExistingWs() {
+  const path = addWsPath.value.trim()
+  if (!path) return
+  const name = newWsName.value.trim() || path.split('/').pop() || path
+  try {
+    await createWorkspace(name, path)
+    newWsName.value = ''
+    addWsPath.value = ''
+    showAddWsPopup.value = false
+    await loadAll()
+  } catch {}
+}
+
 function confirmDeleteWs(name: string) {
   if (confirm(`确定删除工作空间 "${name}" 及其所有数据？此操作不可恢复！`)) {
     deleteWs(name)
@@ -210,6 +254,7 @@ function confirmDeleteWs(name: string) {
 }
 
 async function removeWs(name: string) {
+  if (!confirm(`确定移除工作空间 "${name}"？数据将保留，可重新添加。`)) return
   await removeWorkspace(name, false)
   await loadAll()
 }
@@ -248,7 +293,66 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
   <div v-if="visible" class="sidebar" @click="closeContextMenu">
     <div class="sidebar-header">
       <span class="sidebar-brand">mini_ai</span>
-      <button class="ws-mgr-btn" @click="showWsManager = !showWsManager" title="管理工作空间">⚙ 管理</button>
+      <button class="ws-add-ws-btn" @click="showAddWsPopup = !showAddWsPopup; if (showAddWsPopup) { wsMode = 'add'; newWsName = ''; newWsPath = ''; addWsPath = '' }" title="添加工作空间">+ 空间</button>
+    </div>
+
+    <!-- Add workspace popup -->
+    <div v-if="showAddWsPopup" class="add-ws-popup">
+      <div class="add-ws-mode-tabs">
+        <button :class="['add-ws-tab', { active: wsMode === 'add' }]" @click="wsMode = 'add'">添加现有目录</button>
+        <button :class="['add-ws-tab', { active: wsMode === 'create' }]" @click="wsMode = 'create'">新建</button>
+        <button v-if="removedWorkspaces.length > 0" :class="['add-ws-tab', { active: wsMode === 'restore' }]" @click="wsMode = 'restore'">恢复</button>
+      </div>
+
+      <template v-if="wsMode === 'restore'">
+        <div v-for="r in removedWorkspaces" :key="r.name" class="removed-ws-item">
+          <div class="removed-ws-info">
+            <span class="removed-ws-name">{{ r.name }}</span>
+            <span v-if="r.project_path" class="removed-ws-path">{{ r.project_path }}</span>
+          </div>
+          <div class="removed-ws-actions">
+            <button class="removed-ws-btn-restore" @click="restoreWs(r.name)">恢复</button>
+            <button class="removed-ws-btn-delete" @click="deleteRemovedWs(r.name)" title="彻底删除">🗑</button>
+          </div>
+        </div>
+        <div v-if="removedWorkspaces.length === 0" class="removed-ws-empty">无已移除的工作空间</div>
+      </template>
+
+      <template v-if="wsMode === 'add'">
+        <div class="add-ws-field">
+          <label>选择目录</label>
+          <div class="add-ws-path-row">
+            <input v-model="addWsPath" placeholder="点击 📂 选择目录" class="add-ws-input add-ws-input-path" readonly />
+            <button class="add-ws-browse" @click="openDirPicker('add')" title="浏览">📂</button>
+          </div>
+        </div>
+        <div class="add-ws-field">
+          <label>名称（默认取目录名）</label>
+          <input v-model="newWsName" :placeholder="addWsPath ? addWsPath.split('/').pop() || '' : '自动取目录名'" class="add-ws-input" />
+        </div>
+        <div class="add-ws-actions">
+          <button class="add-ws-btn-add" @click="addExistingWs" :disabled="!addWsPath.trim()">添加</button>
+          <button class="add-ws-btn-ghost" @click="showAddWsPopup = false">取消</button>
+        </div>
+      </template>
+
+      <template v-else>
+        <div class="add-ws-field">
+          <label>名称</label>
+          <input v-model="newWsName" placeholder="my-project" class="add-ws-input" />
+        </div>
+        <div class="add-ws-field">
+          <label>项目路径（可选）</label>
+          <div class="add-ws-path-row">
+            <input v-model="newWsPath" placeholder="可选" class="add-ws-input add-ws-input-path" />
+            <button class="add-ws-browse" @click="openDirPicker('create')" title="浏览">📂</button>
+          </div>
+        </div>
+        <div class="add-ws-actions">
+          <button class="add-ws-btn-add" @click="createWs" :disabled="!newWsName.trim()">创建</button>
+          <button class="add-ws-btn-ghost" @click="showAddWsPopup = false">取消</button>
+        </div>
+      </template>
     </div>
 
     <div class="sidebar-body">
@@ -261,7 +365,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
           <div class="ws-actions">
             <button class="ws-add-btn" @click.stop="newSessionFor(ws.name)" title="新建会话">+</button>
             <button v-if="ws.name !== 'default'" class="ws-action-btn" @click.stop="removeWs(ws.name)" title="移除工作空间">✕</button>
-            <button v-if="ws.name !== 'default'" class="ws-action-btn ws-action-danger" @click.stop="confirmDeleteWs(ws.name)" title="删除工作空间及数据">🗑</button>
+            <button v-if="ws.name !== 'default'" class="ws-action-btn ws-action-danger" @click.stop="deleteWs(ws.name)" title="删除工作空间及数据">🗑</button>
           </div>
         </div>
         <div v-if="!wsCollapsed[ws.name]" class="ws-group-sessions">
@@ -303,58 +407,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
       </div>
     </Teleport>
 
-    <!-- Workspace manager -->
-    <Teleport to="body">
-      <div v-if="showWsManager" class="ws-mgr-overlay" @click="showWsManager = false">
-        <div class="ws-mgr-panel" @click.stop>
-          <div class="ws-mgr-header">
-            <h3 class="ws-mgr-title">工作空间</h3>
-            <button class="ws-mgr-close" @click="showWsManager = false">✕</button>
-          </div>
-          <div class="ws-mgr-list">
-            <div v-for="ws in workspaces" :key="ws.name" class="ws-mgr-item">
-              <div class="ws-mgr-info">
-                <span class="ws-mgr-item-name">{{ ws.name }}</span>
-                <span v-if="ws.project_path" class="ws-mgr-item-path">{{ ws.project_path }}</span>
-              </div>
-              <div v-if="ws.name !== 'default'" class="ws-mgr-actions">
-                <button class="ws-mgr-btn-sm" title="移除" @click="removeWs(ws.name)">✕</button>
-                <button class="ws-mgr-btn-sm ws-mgr-btn-danger" title="删除数据" @click="deleteWs(ws.name)">🗑</button>
-              </div>
-            </div>
-          </div>
-          <div class="ws-mgr-footer">
-            <div v-if="showCreateWs" class="ws-mgr-form">
-              <input v-model="newWsName" placeholder="名称" class="ws-mgr-input" @keyup.enter="createWs" />
-              <div class="ws-mgr-path-row">
-                <input v-model="newWsPath" placeholder="项目路径（可选）" class="ws-mgr-input ws-mgr-input-path" />
-                <button class="ws-mgr-browse-btn" @click="openDirPicker('create')" title="浏览目录">📂</button>
-              </div>
-              <div class="ws-mgr-form-actions">
-                <button class="ws-mgr-btn" @click="createWs">创建</button>
-                <button class="ws-mgr-btn ws-mgr-btn-ghost" @click="showCreateWs = false">取消</button>
-              </div>
-            </div>
-            <div v-else-if="showAddWs" class="ws-mgr-form">
-              <div class="ws-mgr-path-row">
-                <input v-model="addWsPath" placeholder="现有文件夹路径" class="ws-mgr-input ws-mgr-input-path" @keyup.enter="addWs" />
-                <button class="ws-mgr-browse-btn" @click="openDirPicker('add')" title="浏览目录">📂</button>
-              </div>
-              <div class="ws-mgr-form-actions">
-                <button class="ws-mgr-btn" @click="addWs">添加</button>
-                <button class="ws-mgr-btn ws-mgr-btn-ghost" @click="showAddWs = false">取消</button>
-              </div>
-            </div>
-            <div v-else class="ws-mgr-footer-actions">
-              <button class="ws-mgr-btn" @click="showCreateWs = true">+ 新建</button>
-              <button class="ws-mgr-btn ws-mgr-btn-ghost" @click="showAddWs = true">+ 添加现有</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    </Teleport>
-
-    <!-- Directory picker -->
+        <!-- Directory picker -->
     <Teleport to="body">
       <div v-if="showDirPicker" class="dir-overlay" @click="showDirPicker = false">
         <div class="dir-panel" @click.stop>
@@ -415,6 +468,117 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
   font-family: 'Playfair Display', serif; font-size: 1rem; font-weight: 600; color: var(--fg);
 }
 .sidebar-brand::after { content: '.'; color: var(--accent); }
+.ws-add-ws-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--accent);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  font-family: 'Source Sans 3', sans-serif;
+  transition: all 0.2s ease;
+}
+.ws-add-ws-btn:hover { border-color: var(--accent); background: var(--bg-thinking); }
+
+.add-ws-popup {
+  margin: 0 0.8rem 0.5rem;
+  padding: 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  animation: fadeIn 0.15s ease;
+}
+.add-ws-popup-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.6rem;
+}
+.add-ws-mode-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0.7rem;
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 2px;
+}
+.add-ws-tab {
+  flex: 1;
+  padding: 0.3rem 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.add-ws-tab.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+.add-ws-tab:not(.active):hover {
+  background: var(--bg-thinking);
+}
+.add-ws-field {
+  margin-bottom: 0.5rem;
+}
+.add-ws-field label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  margin-bottom: 0.15rem;
+}
+.add-ws-input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  box-sizing: border-box;
+}
+.add-ws-input:focus { border-color: var(--accent); }
+.add-ws-path-row { display: flex; gap: 0.3rem; }
+.add-ws-input-path { flex: 1; }
+.add-ws-browse {
+  width: 30px; height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.add-ws-browse:hover { border-color: var(--accent); }
+.add-ws-actions { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+.add-ws-btn-add {
+  padding: 0.3rem 0.8rem;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.add-ws-btn-add:disabled { opacity: 0.4; cursor: default; }
+.add-ws-btn-ghost {
+  padding: 0.3rem 0.6rem;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.add-ws-btn-ghost:hover { color: var(--fg); }
+
 .ws-mgr-btn {
   padding: 0.25rem 0.5rem; border: 0.5px solid var(--border); border-radius: 6px;
   background: var(--bg-card); color: var(--fg-muted); font-size: 0.75rem;
@@ -545,6 +709,117 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 .ws-mgr-input { width: 100%; padding: 0.5rem 0.7rem; border: 0.5px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); font-size: 0.85rem; font-family: 'JetBrains Mono', monospace; outline: none; transition: border-color 0.2s ease; }
 .ws-mgr-input:focus { border-color: var(--accent); }
 .ws-mgr-form-actions { display: flex; gap: 0.5rem; }
+.ws-add-ws-btn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-card);
+  color: var(--accent);
+  font-size: 0.78rem;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  font-family: 'Source Sans 3', sans-serif;
+  transition: all 0.2s ease;
+}
+.ws-add-ws-btn:hover { border-color: var(--accent); background: var(--bg-thinking); }
+
+.add-ws-popup {
+  margin: 0 0.8rem 0.5rem;
+  padding: 0.8rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  animation: fadeIn 0.15s ease;
+}
+.add-ws-popup-title {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.6rem;
+}
+.add-ws-mode-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 0.7rem;
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 2px;
+}
+.add-ws-tab {
+  flex: 1;
+  padding: 0.3rem 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.add-ws-tab.active {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+.add-ws-tab:not(.active):hover {
+  background: var(--bg-thinking);
+}
+.add-ws-field {
+  margin-bottom: 0.5rem;
+}
+.add-ws-field label {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--fg-dim);
+  margin-bottom: 0.15rem;
+}
+.add-ws-input {
+  width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', monospace;
+  outline: none;
+  box-sizing: border-box;
+}
+.add-ws-input:focus { border-color: var(--accent); }
+.add-ws-path-row { display: flex; gap: 0.3rem; }
+.add-ws-input-path { flex: 1; }
+.add-ws-browse {
+  width: 30px; height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.add-ws-browse:hover { border-color: var(--accent); }
+.add-ws-actions { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+.add-ws-btn-add {
+  padding: 0.3rem 0.8rem;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.add-ws-btn-add:disabled { opacity: 0.4; cursor: default; }
+.add-ws-btn-ghost {
+  padding: 0.3rem 0.6rem;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.add-ws-btn-ghost:hover { color: var(--fg); }
+
 .ws-mgr-btn { padding: 0.4rem 0.8rem; border: 0.5px solid var(--border); border-radius: 6px; background: var(--bg-card); color: var(--fg); font-size: 0.8rem; cursor: pointer; transition: all 0.2s ease; }
 .ws-mgr-btn:hover { background: var(--bg-thinking); }
 .ws-mgr-btn-ghost { background: transparent; border-color: transparent; color: var(--fg-dim); }
@@ -574,4 +849,38 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.removed-ws-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0;
+  border-bottom: 0.5px solid var(--border-light);
+}
+.removed-ws-item:last-child { border-bottom: none; }
+.removed-ws-info { flex: 1; min-width: 0; }
+.removed-ws-name { font-size: 0.85rem; font-weight: 500; color: var(--fg); }
+.removed-ws-path { font-size: 0.72rem; color: var(--fg-dim); display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.removed-ws-actions { display: flex; gap: 0.3rem; }
+.removed-ws-btn-restore {
+  padding: 0.2rem 0.6rem;
+  border: none;
+  border-radius: 5px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.removed-ws-btn-restore:hover { background: var(--accent-hover); }
+.removed-ws-btn-delete {
+  padding: 0.2rem 0.4rem;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.removed-ws-btn-delete:hover { color: #e55; opacity: 1; }
+.removed-ws-empty { font-size: 0.82rem; color: var(--fg-dim); text-align: center; padding: 0.8rem; }
 </style>

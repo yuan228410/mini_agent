@@ -47,7 +47,6 @@ class WorkspaceManager:
         ws_dir.mkdir(parents=True, exist_ok=True)
         (ws_dir / "memory_data").mkdir(exist_ok=True)
         (ws_dir / "memory_data" / "sessions").mkdir(exist_ok=True)
-        (ws_dir / ".team" / "inbox").mkdir(parents=True, exist_ok=True)
 
         meta = {"name": name, "project_path": project_path}
         (ws_dir / "workspace.yaml").write_text(
@@ -115,6 +114,43 @@ class WorkspaceManager:
             except Exception:
                 pass
         return Workspace(name=name, ws_dir=ws_dir, project_path=project_path)
+
+    def restore(self, name: str) -> str:
+        backup = self.workspaces_dir / f".{name}.removed"
+        if not backup.exists():
+            return f"Error: 未找到已移除的工作空间 '{name}'"
+        ws_dir = self.workspaces_dir / name
+        if ws_dir.exists():
+            return f"Error: 工作空间 '{name}' 已存在，无法恢复"
+        backup.rename(ws_dir)
+        logger.info(f"[Workspace] 恢复 '{name}'")
+        return f"已恢复工作空间 '{name}'"
+
+    def list_removed(self) -> list[dict]:
+        result = []
+        for d in sorted(self.workspaces_dir.iterdir()):
+            if not d.is_dir():
+                continue
+            if d.name.endswith(".removed"):
+                original_name = d.name[1:-len(".removed")]
+                meta_path = d / "workspace.yaml"
+                project_path = ""
+                if meta_path.exists():
+                    try:
+                        meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+                        project_path = meta.get("project_path", "")
+                    except Exception:
+                        pass
+                result.append({"name": original_name, "project_path": project_path})
+        return result
+
+    def delete_removed(self, name: str) -> str:
+        backup = self.workspaces_dir / f".{name}.removed"
+        if not backup.exists():
+            return f"Error: 未找到已移除的工作空间 '{name}'"
+        shutil.rmtree(backup)
+        logger.info(f"[Workspace] 彻底删除已移除的工作空间 '{name}'")
+        return f"已彻底删除 '{name}'"
 
     def list_all(self) -> list[dict]:
         result = []

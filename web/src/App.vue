@@ -9,6 +9,7 @@ import StatusBar from './components/StatusBar.vue'
 import ModelSelector from './components/ModelSelector.vue'
 import SkillPanel from './components/SkillPanel.vue'
 import FileBrowserPanel from './components/FileBrowserPanel.vue'
+import SettingsPanel from './components/SettingsPanel.vue'
 
 const SIDEBAR_KEY = 'mini-ai-sidebar-open'
 
@@ -27,6 +28,7 @@ const config = ref({
 const showSidebar = ref(true)
 const showSkills = ref(false)
 const showFiles = ref(false)
+const showSettings = ref(false)
 const activeWorkspace = ref('')
 const chatViewRef = ref<InstanceType<typeof ChatView>>()
 const sidebarRef = ref<InstanceType<typeof SessionSidebar>>()
@@ -149,8 +151,11 @@ function submitUsername() {
         <button class="skill-btn" @click="showFiles = true" title="文件浏览">
           <span>📄</span>
         </button>
-        <button class="skill-btn" @click="showSkills = true" title="技能面板">
+        <button class="skill-btn" @click="showSkills = true" title="工具面板">
           <span>🔧</span>
+        </button>
+        <button class="skill-btn" @click="showSettings = true" title="设置">
+          <span>⚙</span>
         </button>
         <ThemeToggle :theme="theme" @toggle="onToggleTheme" />
       </div>
@@ -176,6 +181,7 @@ function submitUsername() {
     <StatusBar v-bind="config" :plan-mode="planMode" />
     <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
     <FileBrowserPanel :visible="showFiles" :workspace="activeWorkspace" @close="showFiles = false" />
+    <SettingsPanel :visible="showSettings" @close="showSettings = false" />
   </template>
 </template>
 

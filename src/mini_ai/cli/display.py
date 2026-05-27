@@ -78,6 +78,7 @@ class Display:
         self._stream_buf = ""
         self._streaming = False
         self._stream_line_count = 0
+        self._need_prefix = True
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
         self._tool_start_time = 0.0
@@ -173,7 +174,7 @@ class Display:
             self._reset_stream()
             return
 
-        if self._had_thinking:
+        if self._had_thinking or self._need_prefix:
             self.console.print()
             ts = f" [{timestamp[2:].replace('T', ' ')}]" if timestamp else ""
             self.console.print(Text(f"Assistant{ts}", style="bold"))
@@ -337,4 +338,5 @@ class Display:
     def _reset_stream(self):
         self._stream_buf = ""
         self._streaming = False
+        self._need_prefix = True
         self._had_thinking = False

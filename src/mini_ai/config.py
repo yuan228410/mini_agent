@@ -72,7 +72,9 @@ TOOL = (_raw.get("tool") or {})
 API_MODE = MODEL_CONFIG.get("api_mode", "openai")
 STREAMING = _raw.get("streaming", False)
 RUNNER = (_raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 20})
-THINKING = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000})
+_global_thinking = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"})
+_model_thinking = MODEL_CONFIG.get("thinking") or {}
+THINKING = {**_global_thinking, **_model_thinking}
 DISPLAY = (_raw.get("display") or {"thinking_mode": "collapsed", "tool_detail": "summary"})
 WEB = (_raw.get("web") or {"history_limit": 200})
 LOGGING = (_raw.get("logging") or {})
@@ -117,4 +119,7 @@ def switch_model(name: str) -> str | None:
     MODEL_CONFIG.clear()
     MODEL_CONFIG.update(model_cfg)
     API_MODE = MODEL_CONFIG.get("api_mode", "openai")
+    global THINKING
+    _model_thinking = model_cfg.get("thinking") or {}
+    THINKING = {**_global_thinking, **_model_thinking}
     return None

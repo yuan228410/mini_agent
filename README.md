@@ -4,7 +4,7 @@
 
 **作者：笨笨** — 热爱编程与 AI 技术的探索者，喜欢折腾新技术、拆解新事物。对大语言模型之上那片神奇地带——Agentic AI 尤为着迷：工具调用、记忆管理、多模型协作、自主规划……这些让 LLM 从"能说话"变成"能做事"的机制，正是这个项目想要亲手弄明白的东西。项目从零手写，不依赖任何 Agent 框架，边学边造，只为深入理解 Agent 的每一个齿轮是如何咬合运转的。
 
-基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持工具调用、技能系统、记忆压缩、子代理派遣、Team 协作、流式输出、多模型切换、Web 界面（多用户 + 多会话并行 + 工作空间管理）。
+基于 OpenAI / Anthropic Chat API 的智能对话 Agent，支持工具调用、技能系统、三层记忆压缩、子代理派遣、Team 协作、流式输出、多模型切换、MCP 协议、计划模式、Web 界面（多用户 + 多会话并行 + 工作空间管理 + 在线配置）。
 
 项目从零手写，不依赖任何 Agent 框架，旨在深入理解 Agent 的核心机制：工具调用、记忆管理、上下文压缩、多模型适配、子代理协作等。代码结构清晰，模块职责单一，适合阅读和学习。
 
@@ -92,11 +92,12 @@ mini_ai/
 │   ├── workspace.py           #   工作空间管理（创建/切换/添加/删除）
 │   ├── memory/                #   记忆系统
 │   │   ├── store.py           #     记忆存储（情景层+长期层+画像）
-│   │   ├── compactor.py       #     对话压缩归档
+│   │   ├── compactor.py       #     对话压缩归档（Compactor）
 │   │   ├── history_db.py      #     历史搜索（SQLite 全文搜索）
 │   │   └── session.py         #     会话管理
 │   ├── skills.py              #   技能加载器（多路径搜索）
 │   ├── logger.py              #   日志模块
+│   ├── character/             #   Agent 人设（SOUL.md + RULES.md）
 │   ├── team/                  #   多 Agent 编排子包
 │   │   ├── __init__.py        #     统一导出
 │   │   ├── bus.py             #     消息总线（文件 JSONL 邮箱 + Event 唤醒）
@@ -596,8 +597,9 @@ tool:
   max_result_chars: 8000   # 工具返回值截断长度
 
 thinking:
-  enabled: true             # 启用思维链（Anthropic 协议自动加 thinking 参数）
-  budget_tokens: 10000     # Anthropic thinking 预算 token 数
+  enabled: true             # 启用思维链（仅支持 extended thinking 的模型生效）
+  budget_tokens: 10000     # thinking 预算 token 数
+  type: enabled             # Anthropic 协议：enabled（标准）| adaptive（Bedrock 兼容）
 
 display:
   thinking_mode: collapsed  # 思考展示：collapsed / expanded / hidden
@@ -617,7 +619,7 @@ skill_paths:                  # 额外技能搜索路径（只读，安装仍存
 
 ## Web 界面
 
-通过 `mini-ai --web` 启动 Web 对话界面（默认 `http://localhost:8765`），支持流式输出、思维链/工具调用展示、亮暗主题切换、多用户隔离、多会话并行、工作空间管理、会话持久化。Editorial 杂志编辑风设计，Markdown + 代码高亮渲染。
+通过 `mini-ai --web` 启动 Web 对话界面（默认 `http://localhost:8765`），支持流式输出、思维链/工具调用展示、亮暗主题切换、多用户隔离、多会话并行、工作空间管理、在线配置面板、模型增删、会话持久化。Editorial 杂志编辑风设计，Markdown + 代码高亮渲染。
 
 ```bash
 mini-ai --web                    # 启动 Web 模式

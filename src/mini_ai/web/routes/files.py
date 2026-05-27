@@ -9,12 +9,9 @@ from ...workspace import WorkspaceManager
 
 router = APIRouter()
 
-_ws_managers: dict[str, WorkspaceManager] = {}
-
 def _get_ws_mgr(username: str) -> WorkspaceManager:
-    if username not in _ws_managers:
-        _ws_managers[username] = WorkspaceManager(user_data_dir(username))
-    return _ws_managers[username]
+    from .workspaces import _get_mgr
+    return _get_mgr(username)
 
 _EXT_LANG = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".tsx": "tsx",

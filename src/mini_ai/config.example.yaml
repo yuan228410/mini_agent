@@ -29,6 +29,10 @@ models:
     context_length: 200000       # 建议：填模型实际上下文长度
     api_mode: anthropic
     temperature: 0.3             # 建议：代码/工具场景 0.3，更稳定
+    thinking:                    # 模型级覆盖（优先于全局 thinking 配置）
+      enabled: true
+      budget_tokens: 10000
+      type: enabled              # enabled（标准）| adaptive（Bedrock 兼容）
   glm:
     api_url: https://your-api.com/v1/chat/completions
     api_key: your-api-key
@@ -63,11 +67,12 @@ timeouts:
   web_fetch: 30         # web_fetch 工具超时（秒），默认 30
 
 # ── 思考模式 ──────────────────────────────────────────────────
-# 控制 LLM 是否产生思维链（仅支持 extended thinking 的模型生效，
-# 如 Claude、DeepSeek-R1；其他模型忽略此配置）
+# 全局默认思考配置，可在单个模型配置中覆盖（模型级 thinking 优先）
+# 仅支持 extended thinking 的模型生效（如 Claude、DeepSeek-R1）
 thinking:
   enabled: false         # 是否启用思考，默认 false，建议 true
   budget_tokens: 10000  # 思考 token 上限，默认 10000，建议 Claude 10000~30000
+  type: enabled          # 思考类型，仅 Anthropic 协议生效：enabled（标准）| adaptive（Bedrock 兼容）
 
 # ── 显示配置 ──────────────────────────────────────────────────
 # 控制终端 UI 展示方式（运行时可通过 /thinking 命令切换，无需重启）
@@ -104,8 +109,8 @@ tool:
 
 # ── 运行器配置 ────────────────────────────────────────────────
 runner:
-  context_usage_limit: 0.88  # 上下文安全阀比例
-  max_turns: 20              # 工具循环最大轮数，超出强制退出，默认 20  # 上下文使用率警戒线，超则提前退出，默认 0.88
+  context_usage_limit: 0.88  # 上下文使用率警戒线，超则提前退出，默认 0.88
+  max_turns: 20              # 工具循环最大轮数，超出强制退出，默认 20
 
 # ── 计划模式 ──────────────────────────────────────────────────
 # /plan 进入计划模式（只规划不执行），/act 切换回执行模式

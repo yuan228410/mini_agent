@@ -18,10 +18,13 @@ def _get_mgr(username: str) -> WorkspaceManager:
 @router.get("/workspaces")
 async def list_workspaces(username: str = ""):
     import os
-    mgr = _get_mgr(username or "default")
+    uname = username or "default"
+    mgr = _get_mgr(uname)
     ws = mgr.get("default")
     if ws and not ws.project_path:
-        ws.update_project_path(os.getcwd())
+        user_dir = os.path.join(os.getcwd(), uname)
+        os.makedirs(user_dir, exist_ok=True)
+        ws.update_project_path(user_dir)
     workspaces = mgr.list_all()
     return {"workspaces": workspaces, "active": "default"}
 
@@ -92,6 +95,35 @@ async def remove_workspace(name: str, delete_data: bool = False, username: str =
         result = mgr.delete(name)
     else:
         result = mgr.remove(name)
+    if result.startswith("Error"):
+        return {"error": result}
+    return {"status": "ok", "message": result}
+
+
+@router.get("/workspaces/removed")
+async def list_removed_workspaces(username: str = ""):
+    mgr = _get_mgr(username or "default")
+    removed = mgr.list_removed()
+    return {"removed": removed}
+
+
+@router.post("/workspaces/restore")
+async def restore_workspace(body: dict):
+    name = body.get("name", "").strip()
+    username = body.get("username", "default")
+    if not name:
+        return {"error": "名称不能为空"}
+    mgr = _get_mgr(username)
+    result = mgr.restore(name)
+    if result.startswith("Error"):
+        return {"error": result}
+    return {"status": "ok", "message": result}
+
+
+@router.delete("/workspaces/removed/{name}")
+async def delete_removed_workspace(name: str, username: str = ""):
+    mgr = _get_mgr(username or "default")
+    result = mgr.delete_removed(name)
     if result.startswith("Error"):
         return {"error": result}
     return {"status": "ok", "message": result}

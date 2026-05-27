@@ -4,13 +4,19 @@ import time
 
 import requests
 
-from ..config import TIMEOUTS, THINKING
+from ..config import TIMEOUTS, THINKING as _GLOBAL_THINKING
 from .base import (
     get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p,
     get_usage, get_session, ensure_session_anthropic,
 )
 from ..logger import logger
+
+
+def _get_thinking(ctx=None):
+    if ctx and ctx.model_config and 'thinking' in ctx.model_config:
+        return {**_GLOBAL_THINKING, **ctx.model_config['thinking']}
+    return _GLOBAL_THINKING
 
 
 def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
@@ -78,18 +84,20 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
     thinking_parts = []
 
     for block in ant_content:
+        if not isinstance(block, dict):
+            continue
         btype = block.get("type", "")
         if btype == "thinking":
             thinking_parts.append(block.get("thinking", ""))
         elif btype == "text":
-            text_parts.append(block["text"])
+            text_parts.append(block.get("text", ""))
         elif btype == "tool_use":
             tool_calls.append({
-                "id": block["id"],
+                "id": block.get("id", ""),
                 "type": "function",
                 "function": {
-                    "name": block["name"],
-                    "arguments": json.dumps(block["input"], ensure_ascii=False),
+                    "name": block.get("name", ""),
+                    "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
                 },
             })
 
@@ -125,17 +133,22 @@ def chat(messages, tools=True, ctx=None):
     if system_text:
         payload["system"] = system_text
 
-    if THINKING.get("enabled"):
-        budget = THINKING.get("budget_tokens", 10000)
-        payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    thinking_type = _get_thinking(ctx).get("type", "enabled")
+    if _get_thinking(ctx).get("enabled"):
+        budget = _get_thinking(ctx).get("budget_tokens", 10000)
+        if thinking_type == "adaptive":
+            payload["thinking"] = {"type": "adaptive"}
+        else:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         payload["max_tokens"] = budget + 4096
+        payload["temperature"] = 1
 
     if tools is True:
         payload["tools"] = _tools_openai_to_anthropic(get_definitions())
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
-    logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))}")
+    logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} thinking={thinking_type if _get_thinking(ctx).get('enabled') else 'off'}")
 
     t0 = time.monotonic()
     try:
@@ -150,7 +163,14 @@ def chat(messages, tools=True, ctx=None):
         logger.error(f"[Anth✗] HTTP {response.status_code}: {response.text[:500]}")
         return None
 
-    data = response.json()
+    try:
+        data = response.json()
+    except ValueError:
+        logger.error(f"[Anth✗] 响应解析失败: {response.text[:500]}")
+        return None
+    if not isinstance(data, dict):
+        logger.error(f"[Anth✗] 响应格式异常: {type(data)}")
+        return None
     usage = data.get("usage", {})
     us = get_usage()
     us["prompt_tokens"] = usage.get("input_tokens", 0)
@@ -180,17 +200,22 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     if system_text:
         payload["system"] = system_text
 
-    if THINKING.get("enabled"):
-        budget = THINKING.get("budget_tokens", 10000)
-        payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
+    thinking_type = _get_thinking(ctx).get("type", "enabled")
+    if _get_thinking(ctx).get("enabled"):
+        budget = _get_thinking(ctx).get("budget_tokens", 10000)
+        if thinking_type == "adaptive":
+            payload["thinking"] = {"type": "adaptive"}
+        else:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         payload["max_tokens"] = budget + 4096
+        payload["temperature"] = 1
 
     if tools is True:
         payload["tools"] = _tools_openai_to_anthropic(get_definitions())
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
-    logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} [stream]")
+    logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} thinking={thinking_type if _get_thinking(ctx).get('enabled') else 'off'} [stream]")
 
     t0 = time.monotonic()
     max_retries = TIMEOUTS.get("llm_retries", 3)
@@ -217,6 +242,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     current_block = None
     input_tokens = output_tokens = 0
 
+    response.encoding = "utf-8"
     for line in response.iter_lines(decode_unicode=True):
         if not line:
             continue
@@ -254,24 +280,30 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         elif evt_type == "content_block_delta":
             delta = data.get("delta", {})
             dtype = delta.get("type", "")
+            if not current_block:
+                current_block = {"type": "text", "index": 0, "text": ""}
             if dtype == "thinking_delta":
                 chunk_text = delta.get("thinking", "")
+                if "thinking" not in current_block:
+                    current_block["thinking"] = ""
                 current_block["thinking"] += chunk_text
                 yield {"type": "thinking", "content": chunk_text}
             elif dtype == "text_delta":
-                text = delta["text"]
+                text = delta.get("text", "")
                 if "text" not in current_block:
                     current_block["text"] = ""
                 current_block["text"] += text
                 yield {"type": "text", "content": text}
             elif dtype == "input_json_delta":
+                if "input_json" not in current_block:
+                    current_block["input_json"] = ""
                 current_block["input_json"] += delta.get("partial_json", "")
 
         elif evt_type == "content_block_stop":
             if current_block:
-                if current_block["type"] == "thinking":
+                if current_block.get("type") == "thinking":
                     yield {"type": "thinking_end"}
-                if current_block["type"] == "tool_use" and current_block["input_json"]:
+                if current_block.get("type") == "tool_use" and current_block.get("input_json"):
                     try:
                         current_block["input"] = json.loads(current_block["input_json"])
                     except (ValueError, json.JSONDecodeError):
@@ -280,11 +312,11 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
                 current_block = None
 
         elif evt_type == "message_delta":
-            usage = data.get("usage", {})
+            usage = data.get("usage") or {}
             output_tokens = usage.get("output_tokens", 0)
 
         elif evt_type == "message_start":
-            usage = data.get("message", {}).get("usage", {})
+            usage = data.get("message", {}).get("usage") or {}
             input_tokens = usage.get("input_tokens", 0)
 
     us = get_usage()

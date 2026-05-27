@@ -12,6 +12,7 @@ import InputBar from './InputBar.vue'
 interface Message {
   role: 'user' | 'assistant'
   content: string
+
   thinking?: { chars: number; elapsed: number; content: string }
   tools?: { name: string; args: string; result: string; elapsed: number }[]
   streaming?: boolean
@@ -26,6 +27,12 @@ interface SessionState {
 }
 
 const SESSION_KEY = 'mini-ai-session-id'
+
+function _localTs(): string {
+  const d = new Date()
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return [d.getFullYear(), pad(d.getMonth()+1), pad(d.getDate())].join('-') + 'T' + [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join(':')
+}
 const _states = new Map<string, SessionState>()
 const activeSessionId = ref('')
 const messages = ref<Message[]>([])
@@ -258,7 +265,7 @@ function _startNewAssistantMsg(s: SessionState) {
   s.messages[s.messages.length - 1] = { ...last, streaming: false, content: s._currentContent || last.content }
   s._currentContent = ''
   s._currentThinking = ''
-  s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: new Date().toISOString().slice(0, 19) })
+  s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs() })
 }
 
 function _processEvent(s: SessionState, event: WsEvent) {
@@ -364,7 +371,7 @@ async function sendMessage(text: string) {
   s._currentThinking = ''
   s.isStreaming = true
   isStreaming.value = true
-  s.messages = [...s.messages, { role: 'user', content: text, timestamp: new Date().toISOString().slice(0,19) }, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
+  s.messages = [...s.messages, { role: 'user', content: text, timestamp: _localTs() }, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
   messages.value = [...s.messages]
 
   emit('status-change', sid, 'generating')
