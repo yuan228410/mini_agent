@@ -172,11 +172,15 @@ models:
     api_key: sk-...
     model: Claude Opus 4.7
     context_length: 200000
+    temperature: 0.3        # 可选：采样温度，越低越确定，越高越随机
+    # max_tokens: 8192      # 可选：单次回复最大 token 数
+    # top_p: 0.9            # 可选：核采样概率阈值
   glm:
     api_mode: openai
     api_url: https://...
     model: glm-5.1
     context_length: 200000
+    reasoning_effort: high  # 可选：推理等级（OpenAI o 系列：low/medium/high）
 ```
 
 ### 流式输出
@@ -235,6 +239,7 @@ models:
 | `/model <名称>` | 切换模型（立即生效，持久化） |
 | `/thinking` | 查看最近一次思考过程 |
 | `/thinking <mode>` | 切换思考展示：collapsed / expanded / hidden |
+| `/mcp` | 查看 MCP 服务器连接状态和工具列表 |
 | `/plan` | 进入计划模式（只规划不执行，Agent 仅输出分析和步骤） |
 | `/act` | 切换到执行模式（按计划执行） |
 
@@ -466,6 +471,41 @@ max_turns: 10
 plan:
   approval: true    # 计划模式下是否需要用户审批后才能执行
 ```
+
+### MCP 协议支持
+
+支持连接 MCP（Model Context Protocol）服务器，自动获取远程工具并注册到工具系统。
+
+- 传输协议：stdio（本地进程）+ streamable_http（远程服务）
+- 工具自动注册，命名格式 `mcp_<服务器>_<工具名>`，与内置工具统一调度
+- `/mcp` 命令查看已连接服务器和工具列表
+- 同步/异步桥接：MCP SDK 异步调用通过后台 event loop 桥接到同步 ToolRegistry
+
+```yaml
+mcp:
+  enabled: true
+  connect_timeout: 10
+  execute_timeout: 60
+  sse_read_timeout: 120
+  servers:
+    memory:
+      type: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-memory"]
+    search:
+      type: streamable_http
+      url: https://mcp.example.com/sse
+      headers:
+        Authorization: Bearer xxx
+      disabled: true  # 可选，跳过此服务器
+```
+
+- 支持配置多个 MCP 服务器，每个服务器独立连接，工具名自动加 `mcp_<服务器名>_` 前缀避免冲突
+- 启动时连接所有已启用服务器，关闭时断开
+- 连接失败跳过该服务器，不影响其他工具和服务器
+- 调用超时返回错误信息，不阻塞主循环
+- 生成/工具执行中 Ctrl+C 优雅中断，回到输入提示符，不退出程序
+- 需要 `mcp` 包：`pip install mcp`
 
 ### 上下文组装 (context.py)
 

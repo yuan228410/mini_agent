@@ -51,6 +51,46 @@ class ContextBuilder:
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
+
+    def _build_self_info(self) -> str | None:
+        try:
+            from .config import _raw, AVAILABLE_MODELS, MODEL_CONFIG, MCP, STREAMING, THINKING, PLAN, COMPACTOR, DISPLAY, DATA_DIR, PACKAGE_DIR
+            from . import __version__
+            from .tools import get_definitions
+        except Exception:
+            return None
+
+        active = _raw.get("active_model", "?")
+        model_name = MODEL_CONFIG.get("model", "?")
+        ctx_len = MODEL_CONFIG.get("context_length", 128000)
+        api_mode = MODEL_CONFIG.get("api_mode", "openai")
+
+        tools = get_definitions()
+        tool_names = [t["function"]["name"] for t in tools]
+        mcp_tools = [n for n in tool_names if n.startswith("mcp_")]
+        builtin_tools = [n for n in tool_names if not n.startswith("mcp_")]
+
+        lines = [
+            f"你是 mini-ai v{__version__}，一个智能对话 Agent。",
+            f"当前模型: {active} ({model_name}, {api_mode}, context_length={ctx_len})",
+            f"可用模型: {', '.join(AVAILABLE_MODELS)}",
+            f"流式输出: {'是' if STREAMING else '否'}",
+            f"思考模式: {'启用' if THINKING.get('enabled') else '禁用'} (budget={THINKING.get('budget_tokens', 10000)})，显示: {DISPLAY.get('thinking_mode', 'collapsed')} (collapsed/expanded/hidden)",
+            f"计划模式审批: {'需要' if PLAN.get('approval', True) else '自动执行'}",
+            f"压缩阈值: keep_recent={COMPACTOR.get('keep_recent', 50)}, char_threshold={COMPACTOR.get('char_threshold', 20000)}",
+            f"MCP: {'启用' if MCP.get('enabled') else '禁用'} ({len(mcp_tools)} 个工具)" if MCP.get("enabled") else f"MCP: 禁用",
+            f"内置工具 ({len(builtin_tools)}): {', '.join(builtin_tools)}",
+        ]
+        if mcp_tools:
+            lines.append(f"MCP 工具 ({len(mcp_tools)}): {', '.join(mcp_tools)}")
+        lines.append(f"配置文件: {DATA_DIR}/config.yaml")
+        lines.append(f"源码目录: {PACKAGE_DIR}")
+        lines.append(f"项目文档: {PACKAGE_DIR.parent.parent}/README.md, {PACKAGE_DIR.parent.parent}/WEB.md, {PACKAGE_DIR.parent.parent}/DESIGN.md")
+        lines.append(f"配置示例文件: {PACKAGE_DIR}/config.example.yaml（包含所有配置项及详细说明，用 read_file 读取了解完整配置结构）")
+        lines.append("你可以用 read_file 读取自己的源码和文档（如源码目录下的 .py 文件、README.md 等），也可以用 config 工具读取/修改配置（action=list 查看结构，action=read path=xxx 读取值，action=write path=xxx value=yyy 修改值）")
+
+        return "## mini-ai 自身信息\n\n" + "\n".join(lines)
+
     def _read_project_docs(self, project_path: str = "") -> str | None:
         import os
         search_dirs = []

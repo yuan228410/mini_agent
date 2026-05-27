@@ -105,6 +105,18 @@ class CommandHandler:
             self.disp.info(f"已切换到模型: {model_name} ({MODEL_CONFIG.get('model', '?')})")
             return "continue"
 
+        if user_input == "/purge":
+            non_system = [m for m in messages if m["role"] != "system"]
+            if not non_system:
+                self.disp.info("没有历史消息需要删除")
+                return "continue"
+            count = len(non_system)
+            messages[:] = [messages[0]]
+            self.inject_fn(messages)
+            self.history_db.purge()
+            self.disp.info(f"已彻底删除 {count} 条历史消息（不可恢复）")
+            return "continue"
+
         if user_input == "/clear":
             non_system = [m for m in messages if m["role"] != "system"]
             if not non_system:
@@ -204,6 +216,30 @@ class CommandHandler:
                 return "continue"
             self.plan_mode = False
             self.disp.info("已切换到执行模式 ⚡")
+            return "continue"
+
+        if user_input == "/mcp":
+            from ..tools.mcp_loader import _MCP_ENABLED, _MCP_SERVERS
+            if not _MCP_ENABLED:
+                self.disp.info("MCP 未启用 (config.yaml → mcp.enabled: true)")
+                return "continue"
+            if not _MCP_SERVERS:
+                self.disp.info("MCP 已启用但未配置服务器 (config.yaml → mcp.servers)")
+                return "continue"
+            from ..main import _MCP_LOADER
+            if not _MCP_LOADER:
+                self.disp.info("MCP Loader 未初始化")
+                return "continue"
+            conns = _MCP_LOADER._connections
+            if not conns:
+                self.disp.info("MCP 无已连接服务器")
+                return "continue"
+            lines = []
+            for name, conn in conns.items():
+                tool_names = [t.name for t in conn.tools]
+                lines.append(f"  {name} ({conn.conn_type}): {len(tool_names)} 工具 — {', '.join(tool_names)}")
+            info_text = f"MCP 服务器 ({len(conns)}):" + "\n" + "\n".join(lines)
+            self.disp.info(info_text)
             return "continue"
 
         return None

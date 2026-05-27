@@ -15,7 +15,8 @@ _SLASH_COMMANDS = [
     ("/load", "加载已保存的会话"),
     ("/sessions", "列出所有已保存的会话"),
     ("/compact", "手动触发对话压缩"),
-    ("/clear", "清空历史消息"),
+    ("/clear", "清空历史消息（归档）"),
+    ("/purge", "彻底删除历史消息（不可恢复）"),
     ("/model", "切换模型"),
     ("/history", "查看历史消息"),
     ("/genskill", "从对话中总结生成技能"),
@@ -31,6 +32,7 @@ _SLASH_COMMANDS = [
     ("/workspace delete", "删除工作空间（含数据）"),
     ("/plan", "进入计划模式（只规划不执行）"),
     ("/act", "切换到执行模式"),
+    ("/mcp", "查看 MCP 服务器状态"),
     ("/exit", "退出"),
 ]
 
@@ -72,6 +74,7 @@ class Display:
         self.tool_detail = tool_detail
         self._stream_buf = ""
         self._streaming = False
+        self._stream_line_count = 0
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
         self._tool_start_time = 0.0
@@ -154,9 +157,10 @@ class Display:
         self._stream_buf += text
         if _IS_TTY:
             if not self._streaming:
-                sys.stdout.write("\033[s")
-                sys.stdout.flush()
+                self._stream_line_count = 0
                 self._streaming = True
+            lines = text.split("\n")
+            self._stream_line_count += len(lines) - 1
             print(text, end="", flush=True)
 
     def text_end(self, full_text: str | None = None, timestamp: str = ""):
@@ -172,7 +176,10 @@ class Display:
             self._had_thinking = False
 
         if _IS_TTY and self._streaming:
-            sys.stdout.write("\033[u")
+            line_count = getattr(self, '_stream_line_count', 0)
+            buf_lines = self._stream_buf.count("\n")
+            total_lines = max(line_count, buf_lines) + 2
+            sys.stdout.write(f"\033[{total_lines}A")
             sys.stdout.write("\033[J")
             sys.stdout.flush()
 

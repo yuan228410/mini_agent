@@ -87,6 +87,71 @@ class HistoryDB:
                 )
         logger.info(f"[HistoryDB] 已归档 workspace={self.workspace}")
 
+    def purge(self):
+        """彻底删除所有历史消息（不可恢复）"""
+        with self._lock:
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=?",
+                    (self.workspace,),
+                )
+        logger.info(f"[HistoryDB] 已清除 workspace={self.workspace}")
+
+
+    def delete_by_ids(self, ids: list[int]):
+        """按 ID 列表删除消息"""
+        if not ids:
+            return 0
+        placeholders = ",".join("?" * len(ids))
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    f"DELETE FROM messages WHERE workspace=? AND id IN ({placeholders})",
+                    [self.workspace] + list(ids),
+                )
+                for _id in ids:
+                    try:
+                        self._conn.execute("DELETE FROM messages_fts WHERE rowid=?", (_id,))
+                    except Exception:
+                        pass
+        logger.info(f"[HistoryDB] 删除 {cur.rowcount} 条消息")
+        return cur.rowcount
+
+    def delete_before(self, keep_count: int):
+        """保留最近 N 条消息，删除其余"""
+        with self._lock:
+            with self._conn:
+                row = self._conn.execute(
+                    "SELECT id FROM messages WHERE workspace=? AND archived=0 ORDER BY id DESC LIMIT 1 OFFSET ?",
+                    (self.workspace, keep_count),
+                ).fetchone()
+                if not row:
+                    return 0
+                cutoff_id = row[0]
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=? AND id < ?",
+                    (self.workspace, cutoff_id),
+                )
+                try:
+                    self._conn.execute("DELETE FROM messages_fts WHERE rowid < ?", (cutoff_id,))
+                except Exception:
+                    pass
+        logger.info(f"[HistoryDB] 保留最近 {keep_count} 条，删除 {cur.rowcount} 条旧消息")
+        return cur.rowcount
+
+    def list_for_review(self, limit: int = 100) -> list[dict]:
+        """列出消息供审核（含 id），用于选择性删除"""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, role, content, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
+                (self.workspace,),
+            ).fetchall()
+        results = []
+        for row in rows:
+            msg = {"id": row[0], "role": row[1], "content": row[2][:200], "ts": row[3]}
+            results.append(msg)
+        return results
+
     def search(self, keyword: str, date_from: str = "", date_to: str = "",
                workspace: str = "", limit: int = 20) -> list[dict]:
         ws = workspace or self.workspace
@@ -106,13 +171,13 @@ class HistoryDB:
 
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT ts, role, content FROM messages "
+                f"SELECT id, ts, role, content FROM messages "
                 f"WHERE {' AND '.join(conditions)} "
                 f"ORDER BY ts DESC LIMIT ?",
                 params + [limit],
             ).fetchall()
 
-        return [{"ts": ts, "role": role, "content": content} for ts, role, content in rows]
+        return [{"id": id, "ts": ts, "role": role, "content": content} for id, ts, role, content in rows]
 
     def load_all(self, session_id: str = "", limit: int = 0) -> list[dict]:
         with self._lock:

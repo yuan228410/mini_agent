@@ -190,6 +190,7 @@ data: {"error": "错误信息"}
 | `/api/models/switch` | POST | 切换模型，body: `{"name": "deepseek"}` |
 | `/api/skills` | GET | 获取技能列表 |
 | `/api/commands` | GET | 获取斜杠命令列表（含参数选项） |
+| `/api/mcp` | GET | MCP 服务器连接状态和工具列表 |
 | `/api/config` | GET | 获取状态信息，参数: `session_id`, `username` |
 | `/api/workspaces` | GET | 获取工作空间列表 |
 | `/api/workspaces` | POST | 创建工作空间 |
@@ -270,6 +271,7 @@ data: {"error": "错误信息"}
 | 命令 | 参数 | 说明 |
 |------|------|------|
 | `/clear` | — | 清空当前会话消息 |
+| `/purge` | — | 彻底删除历史消息（不可恢复） |
 | `/compact` | — | 手动触发对话压缩 |
 | `/genskill` | 技能名称 | 从对话生成技能 |
 | `/skill` | 技能名称 | 使用指定技能 |
@@ -277,6 +279,7 @@ data: {"error": "错误信息"}
 | `/thinking` | collapsed/expanded/hidden | 设置思考展示模式 |
 | `/plan` | — | 进入计划模式（只规划不执行） |
 | `/act` | — | 切换到执行模式 |
+| `/mcp` | — | 查看 MCP 服务器状态 |
 
 `/model` 和 `/skill` 的参数选项从后端 API 动态获取。方向键导航，Tab/Enter 确认，Escape 取消。
 

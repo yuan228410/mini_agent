@@ -7,7 +7,7 @@ from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, SessionManager
 from .memory.history_db import HistoryDB
 from datetime import datetime
-from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, PLAN, RequestContext, _raw
+from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw
 from .context import ContextBuilder
 from .llm import get_usage
 from .logger import logger
@@ -22,8 +22,34 @@ from .workspace import WorkspaceManager
 SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
+_MCP_LOADER = None
+
 _LEAD_TOOLS = None
 
+
+
+def _init_mcp():
+    global _MCP_LOADER, _LEAD_TOOLS
+    if not MCP.get("enabled") or not MCP.get("servers"):
+        return
+    try:
+        from .tools.mcp_loader import MCPLoader
+    except ImportError:
+        logger.warning("[MCP] mcp 包未安装，跳过 MCP 初始化 (pip install mcp)")
+        return
+    _MCP_LOADER = MCPLoader()
+    modules = _MCP_LOADER.start_sync()
+    if modules:
+        from .tools import _registry
+        _registry.add_tools(*modules)
+        _LEAD_TOOLS = None
+        logger.info(f"[MCP] 已注册 {len(modules)} 个 MCP 工具")
+
+def _shutdown_mcp():
+    global _MCP_LOADER
+    if _MCP_LOADER:
+        _MCP_LOADER.stop_sync()
+        _MCP_LOADER = None
 
 def _lead_tool_defs() -> list[dict]:
     global _LEAD_TOOLS
@@ -107,6 +133,8 @@ def main():
     )
     register_team(bus, team_mgr)
     register_display(disp)
+
+    _init_mcp()
 
     bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
     workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
@@ -194,62 +222,66 @@ def main():
         history_db.append("user", user_input)
         disp.user_label(ts)
 
-        tools = [] if cmd.plan_mode else _lead_tool_defs()
-        msg, _ = run_tool_loop(
-            messages, tools,
-            streaming=STREAMING,
-            display=disp,
-            inject_fn=_inject_todos,
-            ctx=req_ctx,
-        )
-
-        if cmd.plan_mode and msg and msg.get("content"):
-            if PLAN.get("approval", True):
-                msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
-            else:
-                cmd.plan_mode = False
-                msg["content"] += "\n\n⚡ 已自动切换到执行模式"
-                tools = _lead_tool_defs()
-                msg2, _ = run_tool_loop(
-                    messages, tools,
-                    streaming=STREAMING,
-                    display=disp,
-                    inject_fn=_inject_todos,
-                    ctx=req_ctx,
-                )
-                if msg2 and msg2.get("content"):
-                    msg = msg2
-
-        if not cmd.plan_mode:
-            teammate_msg = wait_for_teammates(
-                bus, team_mgr, lead_event,
-                _run_loop_compat, messages, _lead_tool_defs(),
-                _inject_todos, disp, history_db=history_db, ctx=req_ctx,
+        try:
+            tools = [] if cmd.plan_mode else _lead_tool_defs()
+            msg, _ = run_tool_loop(
+                messages, tools,
+                streaming=STREAMING,
+                display=disp,
+                inject_fn=_inject_todos,
+                ctx=req_ctx,
             )
-            if teammate_msg:
-                msg = teammate_msg
 
-        if msg and msg.get("content"):
-            ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-            messages.append({"role": "assistant", "content": msg["content"], "timestamp": ts2})
-            history_db.append("assistant", msg["content"])
+            if cmd.plan_mode and msg and msg.get("content"):
+                if PLAN.get("approval", True):
+                    msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
+                else:
+                    cmd.plan_mode = False
+                    msg["content"] += "\n\n⚡ 已自动切换到执行模式"
+                    tools = _lead_tool_defs()
+                    msg2, _ = run_tool_loop(
+                        messages, tools,
+                        streaming=STREAMING,
+                        display=disp,
+                        inject_fn=_inject_todos,
+                        ctx=req_ctx,
+                    )
+                    if msg2 and msg2.get("content"):
+                        msg = msg2
 
-        cleanup_inbox(bus)
+            if not cmd.plan_mode:
+                teammate_msg = wait_for_teammates(
+                    bus, team_mgr, lead_event,
+                    _run_loop_compat, messages, _lead_tool_defs(),
+                    _inject_todos, disp, history_db=history_db, ctx=req_ctx,
+                )
+                if teammate_msg:
+                    msg = teammate_msg
 
-        usage = get_usage()
-        disp.status_bar(
-            model=MODEL_CONFIG.get("model", "?"),
-            context_length=MODEL_CONFIG.get("context_length", 128000),
-            prompt_tokens=usage["prompt_tokens"],
-            completion_tokens=usage["completion_tokens"],
-            system_prompt_chars=len(messages[0]["content"]) if messages else 0,
-            history_count=len(history_db.load_unarchived()),
-        )
+            if msg and msg.get("content"):
+                ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+                messages.append({"role": "assistant", "content": msg["content"], "timestamp": ts2})
+                history_db.append("assistant", msg["content"])
 
-        if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
-            from .llm import chat
-            messages = compactor.compact(chat, messages)
-            _inject_todos(messages)
+            cleanup_inbox(bus)
+
+            usage = get_usage()
+            disp.status_bar(
+                model=MODEL_CONFIG.get("model", "?"),
+                context_length=MODEL_CONFIG.get("context_length", 128000),
+                prompt_tokens=usage["prompt_tokens"],
+                completion_tokens=usage["completion_tokens"],
+                system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+                history_count=len(history_db.load_unarchived()),
+            )
+
+            if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
+                from .llm import chat
+                messages = compactor.compact(chat, messages)
+                _inject_todos(messages)
+        except KeyboardInterrupt:
+            disp.info("⚠ 已中断")
+            cleanup_inbox(bus)
 
 
 if __name__ == "__main__":

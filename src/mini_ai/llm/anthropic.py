@@ -7,6 +7,7 @@ import requests
 from ..config import TIMEOUTS, THINKING
 from .base import (
     get_api_url, get_api_key, get_model,
+    get_temperature, get_max_tokens, get_top_p,
     get_usage, get_session, ensure_session_anthropic,
 )
 from ..logger import logger
@@ -101,6 +102,18 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
     return msg
 
 
+def _apply_model_params(payload: dict, ctx=None):
+    temperature = get_temperature(ctx)
+    if temperature is not None:
+        payload["temperature"] = temperature
+    max_tokens = get_max_tokens(ctx)
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    top_p = get_top_p(ctx)
+    if top_p is not None:
+        payload["top_p"] = top_p
+
+
 def chat(messages, tools=True, ctx=None):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
     from ..tools import get_definitions
@@ -108,6 +121,7 @@ def chat(messages, tools=True, ctx=None):
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
     payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": 4096}
+    _apply_model_params(payload, ctx)
     if system_text:
         payload["system"] = system_text
 
@@ -162,6 +176,7 @@ def chat_stream(messages, tools=True, ctx=None):
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
     payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": 4096, "stream": True}
+    _apply_model_params(payload, ctx)
     if system_text:
         payload["system"] = system_text
 

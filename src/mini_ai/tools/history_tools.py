@@ -68,4 +68,144 @@ class _ToolMod:
 
 search_history_mod = _ToolMod(_search_def, _search_exec)
 
-ALL_HISTORY_TOOLS = [search_history_mod]
+_manage_def = {
+    "type": "function",
+    "function": {
+        "name": "manage_history",
+        "description": (
+            "管理历史消息：查看、清理、删除。"
+            "支持：列出消息概览、保留最近N条删除旧消息、按关键词查找并删除匹配消息、彻底删除所有消息。"
+            "删除操作会先列出待删除内容供用户确认后再执行。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["list", "keep_recent", "delete_keyword", "delete_all"],
+                    "description": (
+                        "list=列出消息概览，"
+                        "keep_recent=保留最近N条删除其余，"
+                        "delete_keyword=删除包含关键词的消息，"
+                        "delete_all=彻底删除所有消息"
+                    ),
+                },
+                "keep_count": {
+                    "type": "integer",
+                    "description": "keep_recent 时保留的最近消息条数",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "delete_keyword 时匹配的关键词",
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": "用户确认执行删除，默认 false（先预览）",
+                },
+                "batch_size": {
+                    "type": "integer",
+                    "description": "分批删除时每批数量，默认 200",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+}
+
+def _manage_exec(args: dict) -> str:
+    if not _history_db:
+        return "Error: 历史数据库未初始化"
+
+    action = args.get("action", "list")
+    confirmed = args.get("confirmed", False)
+
+    if action == "list":
+        msgs = _history_db.list_for_review()
+        if not msgs:
+            return "没有历史消息"
+        lines = [f"共 {len(msgs)} 条消息："]
+        for m in msgs:
+            ts = m["ts"][:16] if m["ts"] else ""
+            content = m["content"][:80].replace("\n", " ")
+            lines.append(f"  [{m['id']}] [{ts}] {m['role']}: {content}")
+        return "\n".join(lines)
+
+    if action == "keep_recent":
+        keep_count = args.get("keep_count", 50)
+        try:
+            keep_count = int(keep_count)
+        except (TypeError, ValueError):
+            return "keep_count 必须是整数"
+        msgs = _history_db.list_for_review()
+        total = len(msgs)
+        if total <= keep_count:
+            return f"当前 {total} 条消息，无需清理（保留 {keep_count} 条）"
+        to_delete = total - keep_count
+        batch_size = args.get("batch_size", 200)
+        if not confirmed:
+            preview = msgs[:3]
+            lines = [f"将删除 {to_delete} 条旧消息，保留最近 {keep_count} 条。待删除的前 3 条："]
+            for m in preview:
+                content = m["content"][:60].replace("\n", " ")
+                lines.append(f"  [{m['id']}] {m['role']}: {content}")
+            lines.append("... 请用 confirmed=true 确认执行")
+            return "\n".join(lines)
+        total_deleted = 0
+        remaining = to_delete
+        while remaining > 0:
+            batch = min(batch_size, remaining)
+            _history_db.delete_before(keep_count + remaining - batch)
+            total_deleted += batch
+            remaining -= batch
+        return f"已删除 {total_deleted} 条旧消息，保留最近 {keep_count} 条"
+
+    if action == "delete_keyword":
+        keyword = args.get("keyword", "")
+        if not keyword:
+            return "请指定 keyword 参数"
+        results = _history_db.search(keyword, limit=100)
+        if not results:
+            return f"未找到包含 '{keyword}' 的消息"
+        ids = [r["id"] for r in results if "id" in r]
+        if not ids:
+            search_by_kw = _history_db.list_for_review()
+            ids = [m["id"] for m in search_by_kw if keyword.lower() in m["content"].lower()]
+            results = [{"id": m["id"], "role": m["role"], "content": m["content"][:60]} for m in search_by_kw if keyword.lower() in m["content"].lower()]
+        if not ids:
+            return f"未找到包含 '{keyword}' 的消息"
+        if not confirmed:
+            lines = [f"找到 {len(ids)} 条包含 '{keyword}' 的消息："]
+            for r in results[:5]:
+                content = (r.get("content") or "")[:60].replace("\n", " ")
+                lines.append(f"  [{r.get('id', '?')}] {r.get('role', '?')}: {content}")
+            if len(ids) > 5:
+                lines.append(f"  ... 还有 {len(ids) - 5} 条")
+            lines.append("请用 confirmed=true 确认执行")
+            return "\n".join(lines)
+        deleted = _history_db.delete_by_ids(ids)
+        return f"已删除 {deleted} 条包含 '{keyword}' 的消息"
+
+    if action == "delete_all":
+        msgs = _history_db.list_for_review()
+        total = len(msgs)
+        if total == 0:
+            return "没有历史消息需要删除"
+        if not confirmed:
+            return f"将彻底删除所有 {total} 条历史消息（不可恢复）。请用 confirmed=true 确认执行"
+        batch_size = args.get("batch_size", 200)
+        total_deleted = 0
+        while True:
+            msgs = _history_db.list_for_review()
+            if not msgs:
+                break
+            batch_ids = [m["id"] for m in msgs[:batch_size]]
+            _history_db.delete_by_ids(batch_ids)
+            total_deleted += len(batch_ids)
+            if len(msgs) <= batch_size:
+                break
+        return f"已彻底删除所有 {total_deleted} 条历史消息"
+
+    return f"未知 action: {action}"
+
+manage_history_mod = _ToolMod(_manage_def, _manage_exec)
+ALL_HISTORY_TOOLS = [search_history_mod, manage_history_mod]

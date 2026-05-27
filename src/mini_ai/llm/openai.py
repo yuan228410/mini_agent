@@ -6,6 +6,7 @@ import requests
 from ..config import TIMEOUTS
 from .base import (
     get_config, get_api_url, get_api_key, get_model, get_api_mode,
+    get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, get_session, ensure_session_openai,
 )
 from ..logger import logger
@@ -30,12 +31,28 @@ def _msg_summary(m: dict) -> str:
     return f"[{role}] {content}"
 
 
+def _apply_model_params(payload: dict, ctx=None):
+    temperature = get_temperature(ctx)
+    if temperature is not None:
+        payload["temperature"] = temperature
+    max_tokens = get_max_tokens(ctx)
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    top_p = get_top_p(ctx)
+    if top_p is not None:
+        payload["top_p"] = top_p
+    effort = get_reasoning_effort(ctx)
+    if effort is not None:
+        payload["reasoning_effort"] = effort
+
+
 def chat(messages, tools=True, ctx=None):
     ensure_session_openai(ctx)
     if get_api_mode(ctx) == "anthropic":
         from .anthropic import chat as anth_chat
         return anth_chat(messages, tools, ctx=ctx)
     payload = {"model": get_model(ctx), "messages": messages}
+    _apply_model_params(payload, ctx)
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -124,6 +141,7 @@ def chat_stream(messages, tools=True, ctx=None):
         yield from anth_stream(messages, tools, ctx=ctx)
         return
     payload = {"model": get_model(ctx), "messages": messages, "stream": True}
+    _apply_model_params(payload, ctx)
     tool_names = None
     if tools is True:
         defs = get_definitions()

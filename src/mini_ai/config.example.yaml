@@ -1,62 +1,145 @@
-timeouts:
-  llm: 120
-  llm_retries: 3
-  llm_retry_delay: 2
-  teammate_recv: 5
-  lead_wait: 1800
-  lead_poll_interval: 2
-  web_fetch: 30
-compactor:
-  context_usage_threshold: 0.8
-  keep_recent: 50
-  char_threshold: 20000
-teammate:
-  max_teammates: 10
-  max_turns: 20
-  base_tools:
-  - run_command
-  - web_fetch
-  - load_skill
-tool:
-  max_result_chars: 8000
-thinking:
-  enabled: true
-  budget_tokens: 10000
-display:
-  thinking_mode: collapsed
-  tool_detail: summary
-web:
-plan:
-  approval: true        # 计划模式下是否需要用户审批后才能执行
-  history_limit: 200    # Web 端加载历史消息条数（前端展示），compactor.keep_recent 控制上下文构建量
-runner:
-  context_usage_limit: 0.88
+# ═══════════════════════════════════════════════════════════════
+# mini-ai 配置文件 — ~/.mini_ai/config.yaml
+# ═══════════════════════════════════════════════════════════════
 
-# 额外技能搜索路径（只读），安装的技能仍存放到 ~/.mini_ai/skills/
-skill_paths:
-  #  - /opt/shared/skills
-  #  - ~/my-skills
-streaming: true
+# ── 当前激活模型（必须对应 models 下的某个 key）──────────────
 active_model: deepseek
+
+# ── 模型定义 ──────────────────────────────────────────────────
+# 每个 key 是模型名称（用于 /model 切换），包含以下字段：
+#
+#   必填：
+#     api_url            API 地址
+#     api_key            API 密钥
+#     model              模型标识名
+#
+#   可选：
+#     api_mode           协议模式，默认 openai，可选 anthropic
+#     context_length     上下文窗口大小，默认 128000，建议填实际值
+#     temperature        采样温度 0~2，默认 API 决定，建议代码任务 0.3、对话 0.7
+#     max_tokens         单次回复最大 token 数，默认 API 决定
+#     top_p              核采样概率阈值 0~1，默认 API 决定，和 temperature 二选一
+#     reasoning_effort   推理等级（仅 OpenAI o 系列），默认 API 决定，可选 low/medium/high
+#     headers            自定义请求头，键值对格式
 models:
   claude:
     api_url: https://your-api.com/v1/messages
     api_key: your-api-key
     model: Claude Opus 4.7
-    context_length: 200000
+    context_length: 200000       # 建议：填模型实际上下文长度
     api_mode: anthropic
+    temperature: 0.3             # 建议：代码/工具场景 0.3，更稳定
   glm:
-    api_mode: openai
     api_url: https://your-api.com/v1/chat/completions
     api_key: your-api-key
     model: glm-5.1
     context_length: 200000
+    # api_mode: openai           # 默认 openai，可省略
+    temperature: 0.3
   deepseek:
-    api_mode: openai
     api_url: https://your-api.com/v1/chat/completions
     api_key: your-api-key
     model: deepseek-v4-pro
     context_length: 128000
-    # headers:                  # 可选自定义请求头
+    temperature: 0.3
+    # max_tokens: 8192           # 限制单次回复长度，不设则用 API 默认
+    # reasoning_effort: high     # OpenAI o 系列：low=快速、medium=平衡、high=深度推理
+    # headers:                   # 可选：发送请求时附加自定义 HTTP 头
     #   X-Custom-Header: value
-    #   X-Another: foo
+
+# ── 流式输出 ──────────────────────────────────────────────────
+# true: 流式逐字输出（打字效果）；false: 等完整回复后一次显示
+# 默认 false，建议 true
+streaming: true
+
+# ── 超时配置 ──────────────────────────────────────────────────
+timeouts:
+  llm: 120              # LLM 单次请求超时（秒），默认 120，建议 120
+  llm_retries: 3        # LLM 请求失败重试次数，默认 3
+  llm_retry_delay: 2    # 重试间隔（秒），默认 2
+  teammate_recv: 5      # 队友消息接收超时（秒），默认 5
+  lead_wait: 1800       # lead 等待队友最长时间（秒），默认 1800
+  lead_poll_interval: 2 # lead 轮询间隔（秒），默认 2
+  web_fetch: 30         # web_fetch 工具超时（秒），默认 30
+
+# ── 思考模式 ──────────────────────────────────────────────────
+# 控制 LLM 是否产生思维链（仅支持 extended thinking 的模型生效，
+# 如 Claude、DeepSeek-R1；其他模型忽略此配置）
+thinking:
+  enabled: false         # 是否启用思考，默认 false，建议 true
+  budget_tokens: 10000  # 思考 token 上限，默认 10000，建议 Claude 10000~30000
+
+# ── 显示配置 ──────────────────────────────────────────────────
+# 控制终端 UI 展示方式（运行时可通过 /thinking 命令切换，无需重启）
+display:
+  thinking_mode: collapsed   # 思维链显示方式，默认 collapsed
+                              #   collapsed — 折叠，只显示摘要 "💭 已思考 N 字 (Xs)"
+                              #   expanded  — 展开，实时流式显示思考内容
+                              #   hidden    — 完全隐藏
+  tool_detail: summary        # 工具调用显示方式，默认 summary
+                              #   summary — 只显示工具名 + 耗时 + 结果摘要
+                              #   full    — 显示完整参数和结果
+
+# ── 对话压缩 ──────────────────────────────────────────────────
+# 上下文过长时自动压缩：提取关键信息形成长期记忆，归档旧消息
+compactor:
+  context_usage_threshold: 0.8   # prompt_tokens 占 context_length 比例超此值时触发，默认 0.8
+  keep_recent: 50                # 保留最近 N 条消息不压缩，默认 50
+  char_threshold: 20000          # 本地预估字符数超此值也触发（API 未返回 token 数时），默认 20000
+
+# ── 队友配置 ──────────────────────────────────────────────────
+# Team 协作模式下队友 Agent 的限制
+teammate:
+  max_teammates: 10    # 最多同时存在的队友数，默认 10
+  max_turns: 20        # 队友单次任务最大工具调用轮次，默认 20
+  base_tools:          # 队友默认可用的工具列表
+    - run_command
+    - web_fetch
+    - load_skill
+
+# ── 工具配置 ──────────────────────────────────────────────────
+tool:
+  max_result_chars: 8000  # 工具输出最大字符数，超出截断，默认 8000
+                          # 上下文大的模型可适当调大，如 16000
+
+# ── 运行器配置 ────────────────────────────────────────────────
+runner:
+  context_usage_limit: 0.88  # 上下文使用率警戒线，超则提前退出，默认 0.88
+
+# ── 计划模式 ──────────────────────────────────────────────────
+# /plan 进入计划模式（只规划不执行），/act 切换回执行模式
+plan:
+  approval: true       # true: 需用户 /act 确认才执行；false: 自动切换执行，默认 true
+
+# ── Web 界面 ──────────────────────────────────────────────────
+web:
+  history_limit: 200   # Web 端加载历史消息条数（前端展示），默认 200
+                        # compactor.keep_recent 控制上下文构建量，两者独立
+
+# ── 额外技能搜索路径 ─────────────────────────────────────────
+# 只读路径，安装的技能仍存放到 ~/.mini_ai/skills/
+# 默认为空列表
+skill_paths:
+  # - /opt/shared/skills
+  # - ~/my-skills
+
+# ── MCP (Model Context Protocol) 配置 ────────────────────────
+# 连接 MCP 服务器获取远程工具，自动注册为 mcp_<服务器名>_<工具名>
+mcp:
+  enabled: false           # 是否启用，默认 false
+  # connect_timeout: 10    # 连接超时（秒），默认 10
+  # execute_timeout: 60    # 工具执行超时（秒），默认 60
+  # sse_read_timeout: 120  # SSE 读取超时（秒），默认 120
+  # servers:                # MCP 服务器列表，支持配置多个
+  #   memory:               # 服务器名（自定义，用于工具名前缀）
+  #     type: stdio          # 传输协议：stdio（本地进程）或 streamable_http（远程服务）
+  #     command: npx         # stdio: 启动命令
+  #     args: ["-y", "@modelcontextprotocol/server-memory"]  # 命令参数
+  #     # env:               # 可选环境变量
+  #     #   API_KEY: xxx
+  #     # disabled: true     # 可选，true 则跳过此服务器
+  #   search:               # 另一个服务器示例
+  #     type: streamable_http
+  #     url: https://mcp.example.com/sse
+  #     headers:             # 可选请求头
+  #       Authorization: Bearer xxx

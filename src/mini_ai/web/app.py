@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .routes import chat, models, skills, config, commands, workspaces, files
-from .deps import init_components
+from .deps import init_components, shutdown_mcp
 from ..context import ContextBuilder
 from ..config import DATA_DIR, SKILL_PATHS, user_data_dir
 from ..memory import MemoryStore
@@ -28,6 +28,7 @@ async def lifespan(app: FastAPI):
     system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
     chat.set_system_prompt(system_prompt)
     yield
+    shutdown_mcp()
 
 def create_app() -> FastAPI:
     app = FastAPI(title="mini_ai", docs_url=None, redoc_url=None, lifespan=lifespan)

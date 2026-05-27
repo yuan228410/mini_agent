@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
 from ..logger import logger
-from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file
+from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool
 
 _MAX_RESULT_CHARS = TOOL["max_result_chars"]
 
@@ -171,7 +171,7 @@ class ToolRegistry:
 # ── 模块级默认实例 ──
 
 _registry = ToolRegistry()
-_registry.add_tools(read_file, write_file, edit_file, run_command, search_files, list_dir, web_fetch, update_todos)
+_registry.add_tools(read_file, write_file, edit_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool)
 
 
 # ── 向后兼容的模块级函数 ──
