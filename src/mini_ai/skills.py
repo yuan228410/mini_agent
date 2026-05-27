@@ -33,7 +33,7 @@ class SkillLoader:
         for path in paths:
             if not path.exists():
                 continue
-            for f in sorted(path.rglob("SKILL.md")):
+            for f in sorted(path.glob("*/SKILL.md")):
                 text = f.read_text(encoding="utf-8")
                 meta, body = self._parse_frontmatter(text)
                 name = meta.get("name", f.parent.name)
@@ -76,4 +76,5 @@ class SkillLoader:
             header += f'\n描述: {meta["description"]}'
         if meta.get("tags"):
             header += f'\n标签: {meta["tags"]}'
-        return f'<skill name="{name}">\n{header}\n\n{skill["body"]}\n</skill>'
+        skill_dir = str(Path(skill["path"]).parent)
+        return f'<skill name="{name}" dir="{skill_dir}">\n{header}\n\n{skill["body"]}\n</skill>\n\n技能目录: {skill_dir}，执行脚本时请使用绝对路径，如: python3 {skill_dir}/scripts/xxx.py'

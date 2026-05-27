@@ -39,11 +39,6 @@ max_turns: 10
 示例指令："请清理 ID 1-500 的历史消息，用 manage_history action=keep_recent keep_count=0 confirmed=true batch_size=200"
 
 ## 规范
-- 未收到确认绝不执行删除
-- 返回简洁的摘要信息
-- 使用中文回复
-
-## 规范
-- 未收到确认绝不执行删除
+- **绝对不能自行传 confirmed=true**，必须将预览结果展示给用户并等待用户明确确认后才能执行
 - 返回简洁的摘要信息
 - 使用中文回复
