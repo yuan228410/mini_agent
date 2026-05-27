@@ -51,6 +51,10 @@ class WebDisplay:
         self._push("text", {"content": text})
 
     def text_end(self, full_text: str | None = None):
+        if full_text:
+            self._stream_buf = ""
+            self._streaming = True
+            self._push("text", {"content": full_text})
         self._stream_buf = ""
         self._streaming = False
         self._had_thinking = False

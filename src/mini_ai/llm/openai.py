@@ -7,7 +7,7 @@ from ..config import TIMEOUTS
 from .base import (
     get_config, get_api_url, get_api_key, get_model, get_api_mode,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
-    get_usage, get_session, ensure_session_openai,
+    get_usage, update_usage, get_session, ensure_session_openai,
 )
 from ..logger import logger
 from ..tools import get_definitions
@@ -82,13 +82,21 @@ def chat(messages, tools=True, ctx=None):
 
     sess = get_session(ctx)
     t0 = time.monotonic()
-    last_error = None
+    response = None
     for attempt in range(max_retries + 1):
         try:
             response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
+            if response.status_code >= 400:
+                err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                if attempt < max_retries:
+                    delay = retry_delay * (attempt + 1)
+                    logger.warning(f"[LLM↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay}s 后重试")
+                    time.sleep(delay)
+                    continue
+                logger.error(f"[LLM✗] 请求失败(已重试{max_retries}次): {err_msg}")
+                return None
             break
         except requests.RequestException as e:
-            last_error = e
             if attempt < max_retries:
                 delay = retry_delay * (attempt + 1)
                 logger.warning(f"[LLM↻] 重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
@@ -123,8 +131,14 @@ def chat(messages, tools=True, ctx=None):
     p_tok = usage.get("prompt_tokens", 0)
     c_tok = usage.get("completion_tokens", 0)
     usage_store = get_usage()
-    usage_store["prompt_tokens"] = p_tok
-    usage_store["completion_tokens"] = c_tok
+    if p_tok:
+        usage_store["prompt_tokens"] = p_tok
+    else:
+        usage_store["prompt_tokens"] = sum(len(m.get("content", "") or "") for m in messages) // 3
+    if c_tok:
+        usage_store["completion_tokens"] += c_tok
+    elif msg.get("content"):
+        usage_store["completion_tokens"] += len(msg["content"]) // 3
 
     if "tool_calls" in msg:
         calls = msg["tool_calls"]
@@ -184,6 +198,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
                 yield {"type": "error", "error": str(e)}
                 return
 
+    get_usage()["_prev_completion"] = get_usage()["completion_tokens"]
     collected_content = ""
     collected_thinking = ""
     in_thinking = False
@@ -243,8 +258,12 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         usage = data.get("usage") or {}
         if usage:
             usage_store = get_usage()
-            usage_store["prompt_tokens"] = usage.get("prompt_tokens", 0)
-            usage_store["completion_tokens"] = usage.get("completion_tokens", 0)
+            p = usage.get("prompt_tokens", 0)
+            c = usage.get("completion_tokens", 0)
+            if p:
+                usage_store["prompt_tokens"] = p
+                usage_store["_api_prompt"] = True
+            if c: usage_store["completion_tokens"] += c
 
     elapsed = time.monotonic() - t0
     tool_calls = [{"id": buf.get("id", ""), "type": "function", "function": buf["function"]}
@@ -258,6 +277,20 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         msg["thinking"] = collected_thinking
 
     usage_store = get_usage()
+    prev_comp = usage_store.get("_prev_completion", 0)
+    call_comp = usage_store["completion_tokens"] - prev_comp
+    if not usage_store.get("_api_prompt"):
+        est_prompt = sum(len(m.get("content", "") or "") for m in messages) // 3
+        if tool_call_buf:
+            est_prompt += sum(len(buf["function"].get("arguments", "")) for buf in tool_call_buf.values()) // 3
+        usage_store["prompt_tokens"] = est_prompt
+    usage_store.pop("_api_prompt", None)
+    if call_comp == 0:
+        est_comp = len(collected_content) // 3
+        if collected_thinking:
+            est_comp += len(collected_thinking) // 3
+        usage_store["completion_tokens"] = prev_comp + est_comp
+    usage_store.pop("_prev_completion", None)
     p_tok = usage_store["prompt_tokens"]
     c_tok = usage_store["completion_tokens"]
 

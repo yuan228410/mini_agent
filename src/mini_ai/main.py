@@ -9,7 +9,7 @@ from .memory.history_db import HistoryDB
 from datetime import datetime
 from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw
 from .context import ContextBuilder
-from .llm import get_usage
+from .llm import get_usage, reset_usage
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
@@ -237,6 +237,7 @@ def main():
         disp.user_label(ts)
 
         try:
+            reset_usage()
             tools = [] if cmd.plan_mode else _lead_tool_defs()
             msg, _ = run_tool_loop(
                 messages, tools,

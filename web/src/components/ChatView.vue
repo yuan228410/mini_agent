@@ -237,10 +237,16 @@ function handleWsEvent(event: WsEvent) {
     if (isTerminal) {
       if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
       _doFlush()
+      if (event.data?.prompt_tokens !== undefined) {
+        emit('config-update', {
+          prompt_tokens: event.data.prompt_tokens,
+          completion_tokens: event.data.completion_tokens || 0,
+        })
+      }
       fetchConfig()
     } else {
       _scheduleFlush()
-      if (event.data?.prompt_tokens !== undefined) {
+      if (event.data?.prompt_tokens !== undefined && event.data.prompt_tokens > 0) {
         emit('config-update', {
           prompt_tokens: event.data.prompt_tokens,
           completion_tokens: event.data.completion_tokens || 0,

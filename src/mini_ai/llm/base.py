@@ -57,6 +57,16 @@ def get_usage() -> dict:
     return _local.last_usage
 
 
+def update_usage(prompt_tokens: int = 0, completion_tokens: int = 0):
+    usage = get_usage()
+    usage["prompt_tokens"] += prompt_tokens
+    usage["completion_tokens"] += completion_tokens
+
+
+def reset_usage():
+    _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+
 # ── Session management (thread-local for safety) ──
 
 

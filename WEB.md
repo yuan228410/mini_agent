@@ -90,6 +90,9 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **工作空间恢复** — 已移除的工作空间可恢复，也可彻底删除
 - **消息时间戳** — 每条消息显示本地时间（精确到秒）
 - **兼容性增强** — 流式响应空 choices 容错、UTF-8 编码修复、Anthropic thinking adaptive 模式
+- **MCP 服务器管理** — 设置面板添加/删除 MCP 服务器（stdio/streamable_http），工具面板查看连接状态和工具列表
+- **消息时间戳** — 每条消息显示本地时间（精确到秒），会话列表显示 updated_at
+- **工作空间恢复** — 已移除工作空间可恢复或彻底删除
 
 ## 前端组件
 
@@ -309,6 +312,8 @@ data: {"error": "错误信息"}
 **`GET /api/workspaces/removed`** — 列出已移除的工作空间
 **`POST /api/workspaces/restore`** — 恢复已移除的工作空间
 **`DELETE /api/workspaces/removed/{name}`** — 彻底删除已移除的工作空间数据
+**`POST /api/settings/mcp/add`** — 添加 MCP 服务器（name, type, command/url, args, headers）
+**`DELETE /api/settings/mcp/{name}`** — 删除 MCP 服务器
 
 ### 斜杠命令
 

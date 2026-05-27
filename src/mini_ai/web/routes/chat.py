@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, WEB, PLAN, RequestContext, get_model_config, user_data_dir
-from ...llm import get_usage, chat as llm_chat
+from ...llm import get_usage, reset_usage, chat as llm_chat
 from ...runner import run_tool_loop
 from ...tools import get_definitions, register_memory_tools, register_history_tools
 from ...logger import logger
@@ -330,6 +330,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
             comp["history_db"].append("user", last_user.get("content", ""), session_id=comp_key, metadata=json.dumps(user_meta) if user_meta else "")
 
+        reset_usage()
         logger.debug(f"[Web] run_tool_loop start key={session_key} plan={plan_mode} tools={len(tools)}")
         msg, _ = run_tool_loop(
             messages, tools,
@@ -379,8 +380,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             messages[0]["content"] = _build_system_prompt(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
             _inject_todos(messages)
 
-        logger.debug(f"[Web] pushing complete event key={session_key}")
-        loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {}}))
+        loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
         return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
     finally:
         _SESSION_STATUS[session_key] = "idle"
@@ -499,6 +499,7 @@ async def chat_ws_endpoint(ws: WebSocket):
             None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), 30, abort_event, model_name, s_lock, session_key, username, ws_name
         )
 
+        complete_usage = {"prompt_tokens": 0, "completion_tokens": 0}
         aborted = False
         try:
             while True:
@@ -508,6 +509,8 @@ async def chat_ws_endpoint(ws: WebSocket):
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.15)
                     event["data"]["session_id"] = sid
+                    if event["event"] == "complete" and event["data"].get("prompt_tokens"):
+                        complete_usage = {"prompt_tokens": event["data"]["prompt_tokens"], "completion_tokens": event["data"].get("completion_tokens", 0)}
                     await _send(event)
                     if event["event"] in ("done", "aborted", "error", "complete"):
                         break
@@ -526,12 +529,7 @@ async def chat_ws_endpoint(ws: WebSocket):
             except Exception:
                 pass
 
-        try:
-            result = future.result(timeout=2 if aborted else 5)
-            msg, usage = result if isinstance(result, tuple) else (result, {"prompt_tokens": 0, "completion_tokens": 0})
-        except Exception as e:
-            msg = None
-            usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        usage = complete_usage
 
         _LAST_USAGE[session_key] = usage
 

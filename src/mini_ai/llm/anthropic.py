@@ -8,7 +8,7 @@ from ..config import TIMEOUTS, THINKING as _GLOBAL_THINKING
 from .base import (
     get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p,
-    get_usage, get_session, ensure_session_anthropic,
+    get_usage, update_usage, get_session, ensure_session_anthropic,
 )
 from ..logger import logger
 
@@ -150,18 +150,33 @@ def chat(messages, tools=True, ctx=None):
 
     logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} thinking={thinking_type if _get_thinking(ctx).get('enabled') else 'off'}")
 
+    max_retries = TIMEOUTS.get("llm_retries", 3)
+    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
     t0 = time.monotonic()
-    try:
-        ensure_session_anthropic(ctx)
-        sess = get_session(ctx)
-        response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
-    except requests.RequestException as e:
-        logger.error(f"[Anth✗] 请求异常: {e}")
-        return None
-
-    if response.status_code != 200:
-        logger.error(f"[Anth✗] HTTP {response.status_code}: {response.text[:500]}")
-        return None
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            ensure_session_anthropic(ctx)
+            sess = get_session(ctx)
+            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
+            if response.status_code >= 400:
+                err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                if attempt < max_retries:
+                    delay = retry_delay * (attempt + 1)
+                    logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay}s 后重试")
+                    time.sleep(delay)
+                    continue
+                logger.error(f"[Anth✗] 请求失败(已重试{max_retries}次): {err_msg}")
+                return None
+            break
+        except requests.RequestException as e:
+            if attempt < max_retries:
+                delay = retry_delay * (attempt + 1)
+                logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
+                time.sleep(delay)
+            else:
+                logger.error(f"[Anth✗] 请求异常(已重试{max_retries}次): {e}")
+                return None
 
     try:
         data = response.json()
@@ -173,8 +188,19 @@ def chat(messages, tools=True, ctx=None):
         return None
     usage = data.get("usage", {})
     us = get_usage()
-    us["prompt_tokens"] = usage.get("input_tokens", 0)
-    us["completion_tokens"] = usage.get("output_tokens", 0)
+    inp = usage.get("input_tokens", 0)
+    out = usage.get("output_tokens", 0)
+    if inp:
+        us["prompt_tokens"] = inp
+    else:
+        us["prompt_tokens"] = sum(len(m.get("content", "") or "") for m in messages) // 3
+    if out:
+        us["completion_tokens"] += out
+    else:
+        content_text = data.get("content", [])
+        est = sum(len(b.get("text", "")) for b in content_text if isinstance(b, dict) and b.get("type") == "text") // 3
+        if est:
+            us["completion_tokens"] += est
 
     msg = _anthropic_to_openai_msg(data.get("content", []), data.get("stop_reason", ""))
 
@@ -238,6 +264,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
                 yield {"type": "error", "error": str(e)}
                 return
 
+    get_usage()["_prev_completion"] = get_usage()["completion_tokens"]
     blocks = []
     current_block = None
     input_tokens = output_tokens = 0
@@ -320,8 +347,24 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
             input_tokens = usage.get("input_tokens", 0)
 
     us = get_usage()
-    us["prompt_tokens"] = input_tokens
-    us["completion_tokens"] = output_tokens
+    prev_comp = us.get("_prev_completion", 0)
+    call_comp = us["completion_tokens"] - prev_comp
+    if input_tokens:
+        us["prompt_tokens"] = input_tokens
+        us["_api_prompt"] = True
+    elif not us.get("_api_prompt") and messages:
+        est = sum(len(m.get("content", "") or "") for m in messages) // 3
+        us["prompt_tokens"] = est
+    us.pop("_api_prompt", None)
+    if output_tokens:
+        pass
+    elif call_comp == 0 and blocks:
+        est = 0
+        for b in blocks:
+            if b.get("text"): est += len(b["text"]) // 3
+            if b.get("thinking"): est += len(b["thinking"]) // 3
+        us["completion_tokens"] = prev_comp + est
+    us.pop("_prev_completion", None)
 
     msg = _anthropic_to_openai_msg(blocks, "")
     elapsed = time.monotonic() - t0

@@ -137,6 +137,7 @@ skill_paths:
 
 # ── MCP (Model Context Protocol) 配置 ────────────────────────
 # 连接 MCP 服务器获取远程工具，自动注册为 mcp_<服务器名>_<工具名>
+# 也可通过 Web 设置面板在线添加/删除 MCP 服务器
 mcp:
   enabled: false           # 是否启用，默认 false
   # connect_timeout: 10    # 连接超时（秒），默认 10
