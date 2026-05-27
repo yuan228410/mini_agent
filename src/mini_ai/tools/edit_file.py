@@ -26,9 +26,14 @@ definition = {
 
 
 def execute(args: dict) -> str:
-    path = Path(args["path"])
-    old_string = args["old_string"]
-    new_string = args["new_string"]
+    path_str = args.get("path", "")
+    if not path_str:
+        return "Error: 缺少 path 参数"
+    path = Path(path_str)
+    old_string = args.get("old_string", "")
+    new_string = args.get("new_string", "")
+    if not old_string:
+        return "Error: 缺少 old_string 参数"
     replace_all = args.get("replace_all", False)
 
     if not path.exists():

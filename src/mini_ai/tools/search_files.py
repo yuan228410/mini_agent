@@ -28,7 +28,7 @@ definition = {
 
 
 def execute(args: dict) -> str:
-    pattern = args["pattern"]
+    pattern = args.get("pattern", "")
     path = args.get("path", ".")
     include = args.get("include", "")
     max_results = args.get("max_results", 50)

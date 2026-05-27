@@ -70,7 +70,7 @@ class TodoStore:
         with self._lock:
             items = list(self.items)
         if not items:
-            return "(当前无待办事项)"
+            return ""
         lines = []
         for t in items:
             icon = _ICONS.get(t["status"], "[?]")
@@ -78,7 +78,7 @@ class TodoStore:
                 lines.append(f"{icon} **{t['id']}. {t['content']}** ← 当前")
             else:
                 lines.append(f"{icon} {t['id']}. {t['content']}")
-        return "\n".join(lines)
+        return "📋TODO\n" + "\n".join(lines)
 
 
 _stores_lock = threading.Lock()
@@ -105,7 +105,9 @@ def set_session(session_id: str):
 
 
 def execute(args: dict) -> str:
-    todos = args["todos"]
+    todos = args.get("todos", [])
+    if not todos:
+        return "Error: 缺少 todos 参数"
     lines = []
     for t in todos:
         icon = _ICONS.get(t.get("status", "pending"), "[?]")

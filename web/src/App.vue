@@ -35,6 +35,8 @@ const usernameInput = ref('')
 const currentUsername = ref('')
 const sessionId = ref('')
 const planMode = ref(false)
+const todosContent = ref('')
+const todosCollapsed = ref(false)
 
 onMounted(async () => {
   theme.value = initTheme()
@@ -54,13 +56,26 @@ function onToggleTheme() {
 }
 
 function onConfigUpdate(c: any) {
-  config.value = c
+  config.value = { ...config.value, ...c }
   if (c.session_id) sessionId.value = c.session_id
   if (c.plan_mode !== undefined) planMode.value = c.plan_mode
 }
 
 function onPlanModeChange(mode: boolean) {
   planMode.value = mode
+}
+
+function onTodosUpdate(content: string) {
+  todosContent.value = content
+}
+
+function renderTodos() {
+  if (!todosContent.value) return ''
+  return todosContent.value.split('\n').map(line => {
+    if (line.includes('← 当前')) return `<div class="todo-item todo-active">${line}</div>`
+    if (line.startsWith('[x]')) return `<div class="todo-item todo-done">${line}</div>`
+    return `<div class="todo-item">${line}</div>`
+  }).join('')
 }
 
 function onModelSwitched() {
@@ -149,7 +164,14 @@ function submitUsername() {
         @toggle="toggleSidebar"
         @workspace-change="onWorkspaceChange"
       />
-      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" />
+      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" @todos-update="onTodosUpdate" />
+      <div class="todos-sidebar" v-if="todosContent">
+        <div class="todos-sidebar-header" @click="todosCollapsed = !todosCollapsed">
+          📋 任务计划
+          <span class="todos-toggle">{{ todosCollapsed ? '▸' : '▾' }}</span>
+        </div>
+        <div class="todos-sidebar-body" v-if="!todosCollapsed" v-html="renderTodos()"></div>
+      </div>
     </div>
     <StatusBar v-bind="config" :plan-mode="planMode" />
     <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
@@ -335,5 +357,56 @@ function submitUsername() {
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+
+.todos-sidebar {
+  width: 260px;
+  flex-shrink: 0;
+  border-left: 0.5px solid var(--border);
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.todos-sidebar-header {
+  padding: 0.8rem 1rem;
+  font-weight: 600;
+  font-size: 0.82rem;
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--accent, #E8912D);
+  border-bottom: 0.5px solid var(--border);
+}
+
+.todos-toggle {
+  font-size: 0.7rem;
+  margin-left: auto;
+}
+
+.todos-sidebar-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0.6rem 1rem;
+  font-family: 'Source Sans 3', sans-serif;
+}
+
+.todos-sidebar-body :deep(.todo-item) {
+  font-size: 0.8rem;
+  padding: 2px 0;
+  line-height: 1.5;
+}
+
+.todos-sidebar-body :deep(.todo-active) {
+  font-weight: 600;
+  color: var(--accent, #E8912D);
+}
+
+.todos-sidebar-body :deep(.todo-done) {
+  opacity: 0.5;
+  text-decoration: line-through;
 }
 </style>

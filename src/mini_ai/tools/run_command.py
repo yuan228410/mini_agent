@@ -22,7 +22,9 @@ definition = {
 
 
 def execute(args: dict) -> str:
-    command = args["command"]
+    command = args.get("command", "")
+    if not command or not isinstance(command, str):
+        return "Error: 缺少 command 参数"
     timeout = args.get("timeout", 30)
     cwd = args.get("cwd") or None
     try:

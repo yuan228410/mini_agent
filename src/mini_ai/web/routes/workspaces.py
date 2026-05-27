@@ -17,7 +17,11 @@ def _get_mgr(username: str) -> WorkspaceManager:
 
 @router.get("/workspaces")
 async def list_workspaces(username: str = ""):
+    import os
     mgr = _get_mgr(username or "default")
+    ws = mgr.get("default")
+    if ws and not ws.project_path:
+        ws.update_project_path(os.getcwd())
     workspaces = mgr.list_all()
     return {"workspaces": workspaces, "active": "default"}
 

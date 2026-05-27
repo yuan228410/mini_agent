@@ -169,7 +169,7 @@ def chat(messages, tools=True, ctx=None):
     return msg
 
 
-def chat_stream(messages, tools=True, ctx=None):
+def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
     from ..tools import get_definitions
 
@@ -193,15 +193,25 @@ def chat_stream(messages, tools=True, ctx=None):
     logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} [stream]")
 
     t0 = time.monotonic()
-    try:
-        ensure_session_anthropic(ctx)
-        sess = get_session(ctx)
-        response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.error(f"[Anth✗] 流式请求异常: {e}")
-        yield {"type": "error", "error": str(e)}
-        return
+    max_retries = TIMEOUTS.get("llm_retries", 3)
+    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            ensure_session_anthropic(ctx)
+            sess = get_session(ctx)
+            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+            response.raise_for_status()
+            break
+        except requests.RequestException as e:
+            if attempt < max_retries:
+                delay = retry_delay * (attempt + 1)
+                logger.warning(f"[Anth↻] 流式重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
+                time.sleep(delay)
+            else:
+                logger.error(f"[Anth✗] 流式请求异常(已重试{max_retries}次): {e}")
+                yield {"type": "error", "error": str(e)}
+                return
 
     blocks = []
     current_block = None
@@ -250,6 +260,8 @@ def chat_stream(messages, tools=True, ctx=None):
                 yield {"type": "thinking", "content": chunk_text}
             elif dtype == "text_delta":
                 text = delta["text"]
+                if "text" not in current_block:
+                    current_block["text"] = ""
                 current_block["text"] += text
                 yield {"type": "text", "content": text}
             elif dtype == "input_json_delta":

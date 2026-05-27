@@ -134,7 +134,7 @@ def chat(messages, tools=True, ctx=None):
     return msg
 
 
-def chat_stream(messages, tools=True, ctx=None):
+def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     ensure_session_openai(ctx)
     if get_api_mode(ctx) == "anthropic":
         from .anthropic import chat_stream as anth_stream
@@ -159,13 +159,23 @@ def chat_stream(messages, tools=True, ctx=None):
 
     sess = get_session(ctx)
     t0 = time.monotonic()
-    try:
-        response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
-        response.raise_for_status()
-    except requests.RequestException as e:
-        logger.error(f"[LLM✗] 流式请求异常: {e}")
-        yield {"type": "error", "error": str(e)}
-        return
+    max_retries = TIMEOUTS.get("llm_retries", 3)
+    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    response = None
+    for attempt in range(max_retries + 1):
+        try:
+            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+            response.raise_for_status()
+            break
+        except requests.RequestException as e:
+            if attempt < max_retries:
+                delay = retry_delay * (attempt + 1)
+                logger.warning(f"[LLM↻] 流式重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
+                time.sleep(delay)
+            else:
+                logger.error(f"[LLM✗] 流式请求异常(已重试{max_retries}次): {e}")
+                yield {"type": "error", "error": str(e)}
+                return
 
     collected_content = ""
     collected_thinking = ""
@@ -173,6 +183,8 @@ def chat_stream(messages, tools=True, ctx=None):
     tool_call_buf: dict[int, dict] = {}
 
     for line in response.iter_lines(decode_unicode=True):
+        if abort_event and abort_event.is_set():
+            break
         if not line or not line.startswith("data: "):
             continue
         data_str = line[6:]

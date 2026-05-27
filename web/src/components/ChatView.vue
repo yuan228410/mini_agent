@@ -31,11 +31,17 @@ const activeSessionId = ref('')
 const messages = ref<Message[]>([])
 const isStreaming = ref(false)
 const planMode = ref(false)
+const todosContent = ref('')
+
 const chatContainer = ref<HTMLElement>()
 const props = defineProps<{ workspace?: string }>()
-const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change'])
+const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change', 'todos-update'])
 
 let _unsubWs: (() => void) | null = null
+let _flushTimer: number | null = null
+let _scrollTimer: number | null = null
+const FLUSH_INTERVAL = 50
+const SCROLL_INTERVAL = 100
 
 function _state(sid: string): SessionState {
   if (!_states.has(sid)) {
@@ -59,6 +65,35 @@ function _load(sid: string) {
   }
 }
 
+function _scheduleFlush() {
+  if (_flushTimer !== null) return
+  _flushTimer = window.setTimeout(() => {
+    _flushTimer = null
+    _doFlush()
+  }, FLUSH_INTERVAL)
+}
+
+function _doFlush() {
+  const sid = activeSessionId.value
+  const s = _states.get(sid)
+  if (!s) return
+  const lastIdx = s.messages.length - 1
+  if (lastIdx >= 0) {
+    const old = s.messages[lastIdx]
+    s.messages[lastIdx] = { ...old, content: s._currentContent }
+  }
+  messages.value = [...s.messages]
+  isStreaming.value = s.isStreaming
+}
+
+function _scheduleScroll() {
+  if (_scrollTimer !== null) return
+  _scrollTimer = window.setTimeout(() => {
+    _scrollTimer = null
+    scrollToBottom()
+  }, SCROLL_INTERVAL)
+}
+
 let _initialized = false
 
 onMounted(async () => {
@@ -78,6 +113,8 @@ watch(() => props.workspace, (ws) => {
 onUnmounted(() => {
   if (_unsubWs) _unsubWs()
   closeWs()
+  if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
+  if (_scrollTimer !== null) { clearTimeout(_scrollTimer); _scrollTimer = null }
 })
 
 async function initSession(ws?: string) {
@@ -128,7 +165,7 @@ async function restoreHistory(sid: string, ws?: string) {
   try {
     const resp = await getHistory(sid, ws || props.workspace)
     const raw = (resp.history || []).filter((m: any) => m.role !== 'system' && m.role !== 'tool')
-      const merged: Message[] = []
+    const merged: Message[] = []
     for (const m of raw) {
       if (m.role === 'assistant' && merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
         const prev = merged[merged.length - 1]
@@ -163,7 +200,6 @@ async function restoreHistory(sid: string, ws?: string) {
     }
     const s = _state(sid)
     s.messages = merged
-    console.log('[restoreHistory DONE]', sid, 'ws=', ws, 'merged=', merged.length, 'active=', activeSessionId.value, 'content_lens=', merged.map((m:any) => (m.content||'').length))
     _load(sid)
     await nextTick()
     scrollToBottom()
@@ -186,24 +222,43 @@ function handleWsEvent(event: WsEvent) {
 
   _processEvent(s, event)
 
-  if (event.event === 'done' || event.event === 'aborted' || event.event === 'error') {
-    s.isStreaming = false
+  const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error'
+
+  if (isTerminal) s.isStreaming = false
+
+  if (sid === activeSessionId.value) {
+    if (isTerminal) {
+      if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
+      _doFlush()
+      fetchConfig()
+    } else {
+      _scheduleFlush()
+      if (event.data?.prompt_tokens !== undefined) {
+        emit('config-update', {
+          prompt_tokens: event.data.prompt_tokens,
+          completion_tokens: event.data.completion_tokens || 0,
+        })
+      }
+    }
+    _scheduleScroll()
+  }
+
+  if (isTerminal) {
     s._currentContent = ''
     s._currentThinking = ''
     emit('status-change', sid, 'idle')
   }
+}
 
-  if (sid === activeSessionId.value) {
-    // Force Vue reactivity: replace last message with a fresh object copy
-    const lastIdx = s.messages.length - 1
-    if (lastIdx >= 0) s.messages[lastIdx] = { ...s.messages[lastIdx] }
-    messages.value = [...s.messages]
-    isStreaming.value = s.isStreaming
-    if (event.event === 'done' || event.event === 'aborted' || event.event === 'error') {
-      fetchConfig()
-    }
-    nextTick(() => scrollToBottom())
-  }
+function _startNewAssistantMsg(s: SessionState) {
+  const last = s.messages[s.messages.length - 1]
+  if (!last || last.role !== 'assistant') return
+  const hasContent = last.content || (last.tools && last.tools.length) || s._currentContent
+  if (!hasContent) return
+  s.messages[s.messages.length - 1] = { ...last, streaming: false, content: s._currentContent || last.content }
+  s._currentContent = ''
+  s._currentThinking = ''
+  s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: new Date().toISOString().slice(0, 19) })
 }
 
 function _processEvent(s: SessionState, event: WsEvent) {
@@ -212,57 +267,71 @@ function _processEvent(s: SessionState, event: WsEvent) {
   switch (event.event) {
     case 'thinking_start':
       s._currentThinking = ''
+      _startNewAssistantMsg(s)
       break
     case 'thinking':
       s._currentThinking += event.data.content || ''
-      break
-    case 'thinking_end':
-      if (msg && msg.role === 'assistant') {
-        msg.thinking = {
-          chars: event.data.chars || s._currentThinking.length,
-          elapsed: event.data.elapsed || 0,
-          content: s._currentThinking,
+      {
+        const m = s.messages[s.messages.length - 1]
+        if (m && m.role === 'assistant') {
+          m.thinking = { chars: s._currentThinking.length, elapsed: 0, content: s._currentThinking }
         }
       }
-      s._currentThinking = ''
+      break
+    case 'thinking_end':
+      {
+        const m = s.messages[s.messages.length - 1]
+        if (m && m.role === 'assistant' && m.thinking) {
+          m.thinking.chars = event.data.chars || m.thinking.chars
+          m.thinking.elapsed = event.data.elapsed || 0
+        }
+      }
       break
     case 'text':
       s._currentContent += event.data.content || ''
-      if (msg && msg.role === 'assistant') {
-        msg.content = s._currentContent
-            } else {
-            }
       break
     case 'tool_start':
-      if (msg && msg.role === 'assistant') {
-        if (!msg.tools) msg.tools = []
-        msg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+      {
+        const m = s.messages[s.messages.length - 1]
+        if (m && m.role === 'assistant') {
+          if (!m.tools) m.tools = []
+          m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+        }
       }
       break
+    case 'todos':
+      todosContent.value = event.data.content || ''
+      emit('todos-update', todosContent.value)
+      break
     case 'tool_result':
-      if (msg && msg.role === 'assistant' && msg.tools && msg.tools.length > 0) {
-        const last = msg.tools[msg.tools.length - 1]
-        last.result = event.data.result || ''
-        last.elapsed = event.data.elapsed || 0
+      {
+        const m = s.messages[s.messages.length - 1]
+        if (m && m.role === 'assistant' && m.tools && m.tools.length > 0) {
+          const last = m.tools[m.tools.length - 1]
+          last.result = event.data.result || ''
+          last.elapsed = event.data.elapsed || 0
+        }
       }
       break
     case 'done':
-      if (msg) msg.streaming = false
+    case 'complete':
+      {
+        const m = s.messages[s.messages.length - 1]
+        if (m) m.streaming = false
+      }
       break
     case 'mode_change':
       planMode.value = event.data.mode === 'plan'
       emit('plan-mode-change', planMode.value)
       break
     case 'aborted':
-      if (msg) { msg.streaming = false; msg.content += '\n\n⚠ 已中断生成' }
+      s._currentContent += '\n\n⚠ 已中断生成'
       break
     case 'error':
-      if (msg) { msg.streaming = false; msg.content += `\n\n⚠ 错误: ${event.data.error || '未知错误'}` }
+      s._currentContent += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
       break
   }
 }
-
-
 
 async function sendMessage(text: string) {
   if (!text.trim() || isStreaming.value) return
@@ -325,6 +394,16 @@ async function sendMessage(text: string) {
 
 function stopGeneration() {
   abortChat(activeSessionId.value)
+  isStreaming.value = false
+  const s = _states.get(activeSessionId.value)
+  if (s) {
+    s.isStreaming = false
+    const last = s.messages[s.messages.length - 1]
+    if (last && last.streaming) {
+      s.messages[s.messages.length - 1] = { ...last, streaming: false, content: s._currentContent + '\n\n⚠ 已中断生成' }
+      messages.value = [...s.messages]
+    }
+  }
 }
 
 function useSkill(name: string) {
@@ -338,7 +417,6 @@ function scrollToBottom() {
 }
 
 async function switchToSession(sid: string, ws?: string) {
-  const s0 = _state(sid)
   _save()
   activeSessionId.value = sid
   localStorage.setItem(SESSION_KEY, sid)
@@ -364,7 +442,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
         <p class="empty-sub">开始一段对话</p>
       </div>
     </div>
-    <div class="messages" v-else>
+    <div class="messages">
       <MessageItem
         v-for="(msg, i) in messages"
         :key="i"
@@ -375,15 +453,18 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
     </div>
   </div>
   <div class="input-area">
-    <button v-if="isStreaming" class="stop-btn" @click="stopGeneration" title="停止生成">
-      ⏹ 停止
-    </button>
-    <InputBar :disabled="isStreaming" @send="sendMessage" />
+    <InputBar :disabled="isStreaming" :is-streaming="isStreaming" @send="sendMessage" @stop="stopGeneration" />
   </div>
   </div>
 </template>
 
 <style scoped>
+
+
+
+
+
+
 .chat-container {
   flex: 1;
   display: flex;
@@ -445,22 +526,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   background: var(--bg);
 }
 
-.stop-btn {
-  display: block;
-  margin: 0.5rem auto 0;
-  padding: 0.3rem 1rem;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-card);
-  color: var(--fg-muted);
-  font-size: 0.82rem;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
 
-.stop-btn:hover {
-  border-color: #e55;
-  color: #e55;
-  background: var(--bg-thinking);
-}
+
+
 </style>

@@ -175,7 +175,7 @@ def _install_from_archive(name: str, source: str, dest_dir: Path) -> str:
 
 
 def execute(args: dict) -> str:
-    name = args["name"]
+    name = args.get("name", "")
     source = args.get("source")
     content = args.get("content")
 

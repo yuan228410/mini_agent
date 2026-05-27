@@ -30,15 +30,18 @@ _EXT_LANG = {
 _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", ".tox", ".egg-info"}
 
 
+_WEB_CWD = Path.cwd()
+
 def _get_project_root(workspace: str, username: str = "default") -> Path | None:
     ws = _get_ws_mgr(username).get(workspace)
     if not ws:
         ws = _get_ws_mgr(username).get("default")
-    if not ws or not ws.project_path:
-        return None
-    root = Path(ws.project_path)
-    if root.exists() and root.is_dir():
-        return root
+    if ws and ws.project_path:
+        root = Path(ws.project_path)
+        if root.exists() and root.is_dir():
+            return root
+    if _WEB_CWD.exists() and _WEB_CWD.is_dir():
+        return _WEB_CWD
     return None
 
 

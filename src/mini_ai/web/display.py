@@ -17,8 +17,14 @@ class WebDisplay:
         self.tool_detail = "summary"
 
     def _push(self, event: str, data: dict | None = None):
+        from mini_ai.llm import get_usage
+        usage = get_usage()
+        if data is None:
+            data = {}
+        data["prompt_tokens"] = usage["prompt_tokens"]
+        data["completion_tokens"] = usage["completion_tokens"]
         self.loop.call_soon_threadsafe(
-            lambda: self.queue.put_nowait({"event": event, "data": data or {}})
+            lambda: self.queue.put_nowait({"event": event, "data": data})
         )
 
     def thinking_start(self):
@@ -56,6 +62,10 @@ class WebDisplay:
     def tool_result(self, name: str, result: str, elapsed: float | None = None):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
+        if result.startswith("📋TODO\n"):
+            self._push("todos", {"content": result[6:]})
+            self._push("tool_result", {"name": name, "result": result[:200], "elapsed": round(elapsed, 1)})
+            return
         self._push("tool_result", {"name": name, "result": result[:500], "elapsed": round(elapsed, 1)})
 
     def assistant_prefix(self):

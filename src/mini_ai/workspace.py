@@ -18,6 +18,15 @@ class Workspace:
         self.team_dir = ws_dir / ".team"
         self.history_db_path = ws_dir / "memory_data" / "history.db"
 
+    def update_project_path(self, path: str):
+        self.project_path = path
+        meta_path = self.ws_dir / "workspace.yaml"
+        meta = {"name": self.name, "project_path": path}
+        meta_path.write_text(
+            yaml.dump(meta, default_flow_style=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+
 
 class WorkspaceManager:
 
@@ -76,11 +85,12 @@ class WorkspaceManager:
         ws_dir = self.workspaces_dir / name
         if not ws_dir.exists():
             return f"Error: 工作空间 '{name}' 不存在"
-        meta_path = ws_dir / "workspace.yaml"
-        if meta_path.exists():
-            meta_path.unlink()
-        logger.info(f"[Workspace] 移除 '{name}'（数据保留）")
-        return f"已移除工作空间 '{name}'（数据文件保留在 {ws_dir}）"
+        backup = ws_dir.with_name(f".{name}.removed")
+        if backup.exists():
+            shutil.rmtree(backup)
+        ws_dir.rename(backup)
+        logger.info(f"[Workspace] 移除 '{name}'（数据备份到 {backup}）")
+        return f"已移除工作空间 '{name}'（数据备份到 {backup.name}）"
 
     def delete(self, name: str) -> str:
         if name == "default":
@@ -110,6 +120,8 @@ class WorkspaceManager:
         result = []
         for d in sorted(self.workspaces_dir.iterdir()):
             if not d.is_dir():
+                continue
+            if d.name.startswith(".") or d.name.endswith(".removed"):
                 continue
             meta_path = d / "workspace.yaml"
             project_path = ""

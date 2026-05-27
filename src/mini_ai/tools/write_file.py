@@ -26,8 +26,11 @@ definition = {
 
 
 def execute(args: dict) -> str:
-    path = Path(args["path"])
-    content = args["content"]
+    path_str = args.get("path", "")
+    if not path_str or not isinstance(path_str, str):
+        return "Error: write_file 缺少 path 参数（字符串类型），请提供完整的文件路径后重试，不要重复空调用"
+    content = args.get("content", "")
+    path = Path(path_str)
     mode = args.get("mode", "overwrite")
 
     path.parent.mkdir(parents=True, exist_ok=True)

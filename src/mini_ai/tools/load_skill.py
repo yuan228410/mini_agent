@@ -27,6 +27,6 @@ definition = {
 
 
 def execute(args: dict) -> str:
-    name = args["name"]
+    name = args.get("name", "")
     logger.info(f"[加载技能] {name}")
     return _loader.get_content(name)

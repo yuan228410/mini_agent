@@ -20,7 +20,7 @@ def run_tool_loop(
     display=None,
     inject_fn=None,
     abort_event: threading.Event | None = None,
-    max_turns: int = 30,
+    max_turns: int = 0,
     context_length: int | None = None,
     context_usage_limit: float = _CONTEXT_USAGE_LIMIT,
     ctx=None,
@@ -31,6 +31,10 @@ def run_tool_loop(
 
     spawned = False
 
+    if max_turns <= 0:
+        from .config import RUNNER
+        max_turns = RUNNER.get("max_turns", 20)
+    _consecutive_errors = 0
     try:
         for turn in range(max_turns):
             if abort_event and abort_event.is_set():
@@ -42,7 +46,7 @@ def run_tool_loop(
 
             if streaming:
                 thinking_seen = False
-                for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx):
+                for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
                     if abort_event and abort_event.is_set():
                         if display:
                             display.text_end()
@@ -64,6 +68,9 @@ def run_tool_loop(
                             display.text_chunk(chunk["content"])
                     elif chunk["type"] == "error":
                         logger.error(f"[LLM✗] 流式错误: {chunk['error']}")
+                        if display:
+                            display.text_end()
+                            display.tool_result("error", f"⚠ LLM 错误: {chunk['error']}", elapsed=0)
                         return None, spawned
                     elif chunk["type"] == "done":
                         msg = chunk["msg"]
@@ -90,6 +97,16 @@ def run_tool_loop(
 
             _disp = ctx.display if ctx else display
             tool_spawned = handle_tool_calls(msg, messages, display=_disp)
+            last_tool_msgs = [m for m in messages[-5:] if m.get("role") == "tool"]
+            if last_tool_msgs and last_tool_msgs[-1].get("content", "").startswith("Error:"):
+                _consecutive_errors += 1
+                if _consecutive_errors >= 3:
+                    logger.warning(f"[runner] 连续 {_consecutive_errors} 次工具错误，提前退出")
+                    if display:
+                        display.text_end()
+                    return msg, spawned
+            else:
+                _consecutive_errors = 0
             if tool_spawned:
                 spawned = True
 
@@ -104,14 +121,23 @@ def run_tool_loop(
                 usage = get_usage()
                 if usage["prompt_tokens"] > context_length * context_usage_limit:
                     logger.warning(f"[runner] 上下文将满 prompt_tokens={usage['prompt_tokens']} > {int(context_length * context_usage_limit)}，提前退出")
+                    if display:
+                        display.text_end()
                     return None, spawned
 
         logger.warning(f"[runner] 工具循环达到上限 {max_turns} 轮，强制退出")
+        if display:
+            display.text_end()
         return None, spawned
     except KeyboardInterrupt:
         if display:
             display.text_end()
         logger.info("[runner] 用户中断 (Ctrl+C)")
+        return None, spawned
+    except Exception as e:
+        logger.error(f"[runner] 未预期异常: {e}", exc_info=True)
+        if display:
+            display.text_end()
         return None, spawned
 
 

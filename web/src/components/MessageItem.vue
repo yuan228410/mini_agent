@@ -24,6 +24,7 @@ const props = defineProps<{
 const renderedContent = computed(() => {
   if (!props.message.content) return ''
   let html = marked.parse(props.message.content) as string
+  if (props.message.streaming) return html
   html = html.replace(/<pre><code(?: class="language-(\w+)")?>([\s\S]*?)<\/code><\/pre>/g,
     (_match: string, lang: string, code: string) => {
       const decoded = code.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')

@@ -50,12 +50,12 @@ def build_definition(subagent_list: str) -> dict:
 def execute(args: dict) -> str:
     from ..runner import run_agent
 
-    spec = _loader.get(args["type"])
+    spec = _loader.get(args.get("type", ""))
     if not spec:
         names = ", ".join(_loader.specs.keys())
         return f"未知子代理类型 '{args['type']}'，可用：{names}"
 
-    task = args["task"]
+    task = args.get("task", "")
     logger.info(f"[派遣→] {spec['name']}: {task}")
 
     messages = [

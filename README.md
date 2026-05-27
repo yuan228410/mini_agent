@@ -93,6 +93,7 @@ mini_ai/
 │   ├── memory/                #   记忆系统
 │   │   ├── store.py           #     记忆存储（情景层+长期层+画像）
 │   │   ├── compactor.py       #     对话压缩归档
+│   │   ├── history_db.py      #     历史搜索（SQLite 全文搜索）
 │   │   └── session.py         #     会话管理
 │   ├── skills.py              #   技能加载器（多路径搜索）
 │   ├── logger.py              #   日志模块
@@ -134,7 +135,7 @@ mini_ai/
     ├── config.yaml            #   用户配置（含 API 密钥）
     ├── skills/                #   用户技能
     ├── workflows/             #   工作流 YAML 模板
-    ├── logs/                  #   运行日志
+    ├── logs/                  #   运行日志（按日期轮转，级别可配置）
     └── workspaces/            #   工作空间数据（按项目隔离）
         └── <name>/            #     每个工作空间独立存储
             ├── workspace.yaml #       元数据（关联项目路径）

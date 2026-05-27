@@ -91,10 +91,12 @@ class ToolRegistry:
 
     def _execute_one(self, tc: dict, messages: list[dict], display=None) -> None:
         name = tc["function"]["name"]
+        raw_args = tc["function"].get("arguments", "")
         try:
-            args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
+            args = json.loads(raw_args) if raw_args else {}
         except (json.JSONDecodeError, TypeError):
             args = {}
+            logger.warning(f"[工具→] {name} JSON解析失败: {raw_args[:200]}")
         logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
         args_summary = json.dumps(args, ensure_ascii=False)
         if display:
@@ -104,7 +106,7 @@ class ToolRegistry:
             output = self.dispatch(name, args)
         except Exception as e:
             output = f"Error: {type(e).__name__}: {e}"
-            logger.error(f"[工具✗] {name} 异常: {e}")
+            logger.error(f"[工具✗] {name} 异常: {e}", exc_info=True)
         elapsed = time.monotonic() - t0
         if output is not None:
             output = _truncate(output)

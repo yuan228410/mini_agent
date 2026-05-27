@@ -17,8 +17,13 @@ from ..workspace import WorkspaceManager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_components()
+    import os
     ws_mgr = WorkspaceManager(user_data_dir("default"))
     ws = ws_mgr.get("default") or ws_mgr.get("default")
+
+    if not ws.project_path:
+        cwd = os.getcwd()
+        ws.update_project_path(cwd)
 
     chat.switch_session_base(ws.ws_dir / "web_sessions", "default")
 

@@ -27,6 +27,7 @@ src/mini_ai/            # 包源码
   memory/                 #   记忆系统
     store.py               #     记忆存储（情景层+长期层+画像）
     compactor.py           #     对话压缩归档（Compactor）
+    history_db.py          #     历史搜索（SQLite 全文搜索 + 归档标记）
     session.py             #     会话管理
   skills.py               #   技能加载器（多路径搜索）
   logger.py               #   日志模块
@@ -53,7 +54,7 @@ src/mini_ai/            # 包源码
   config.yaml             #   用户配置（含 API 密钥 + active_workspace）
   skills/                 #   用户技能
   workflows/              #   工作流 YAML 模板
-  logs/                   #   运行日志
+  logs/                   #   运行日志（按日期轮转，级别可配置）
   workspaces/             #   工作空间数据（按项目隔离）
     default/              #     默认工作空间
       memory_data/        #       记忆 + 历史 DB + 会话
@@ -69,6 +70,8 @@ src/mini_ai/            # 包源码
 - **工具系统**：ToolRegistry 类管理工具注册/分发。新工具 = `tools/xxx.py`（导出 `definition` + `execute(args)` + 可选 `configure(**kwargs)`），通过 Registry 注册。需要外部依赖的工具通过 `configure()` 注入
 - **MCP 协议**：`tools/mcp_loader.py` 实现 MCP 客户端，支持 stdio/streamable_http 连接 MCP 服务器。启动时连接获取工具列表，自动注册为 `mcp_<server>_<tool>` 前缀的 ToolModule。同步/异步桥接：后台 daemon 线程运行 asyncio event loop，`execute()` 通过 `run_coroutine_threadsafe` 提交调用
 - **结果截断**：工具输出超过 `max_result_chars` 自动截断，防止上下文膨胀
+- **循环保护**：工具循环 `max_turns`（默认 20）轮强制退出；连续 3 次工具错误提前退出，避免 LLM 重复空调用空转
+- **错误恢复**：LLM 请求 429/超时自动重试 3 次（递增延迟）；工具参数缺失/类型错误返回明确提示而非异常；LLM 无回复时推送错误事件到前端；所有异常均有 fallback 保障用户可继续交互
 - **配置分离**：所有运行时参数走 `DATA_DIR/config.yaml`，通过 `config.py` 加载，不硬编码。`PACKAGE_DIR` 存放只读包数据，`DATA_DIR`（默认 `~/.mini_ai/`）存放可写运行时数据。可选字段有默认值防护，配置文件缺失不崩溃。模型配置支持可选 `headers` 字段，发送请求时自动附加自定义请求头
 - **技能多路径**：`SkillLoader` 支持主目录 + `skill_paths` 额外搜索路径，同名技能主目录优先；安装技能写入主目录
 - **记忆系统**：MemoryStore（情景+长期+画像）+ HistoryDB（SQLite 对话历史+全文搜索）+ Compactor（按轮次摘要 + 闲聊过滤）+ remember/recall/forget 主动记忆工具。压缩触发：API prompt_tokens 或本地预估超阈值
@@ -81,7 +84,7 @@ src/mini_ai/            # 包源码
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
 - **终端 UI**：`cli/display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理；状态栏每轮对话后右对齐显示模型/上下文/token 信息
 - **项目规范自动加载**：`context.py` 自动读取当前目录的 `CLAUDE.md` 或 `AGENTS.md`（优先前者），注入系统提示词
-- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WebSocket 模式（支持中断生成）。`RequestContext` 实现多用户并发隔离：每请求独立 model_config/display/http_session，per-session 模型切换不修改全局配置。多会话并行（`_SESSIONS` 两级字典 username→session_id，`_SESSION_LOCKS` per-session 串行），多用户认证（用户名 + localStorage），`user_data_dir()` 按用户隔离数据根目录，工作空间管理（创建/切换/删除/移除），斜杠命令补全，技能面板抽屉，会话 JSONL 文件持久化（重启自动恢复）。Per-session 记忆/压缩/搜索：MemoryStore + HistoryDB + Compactor 按会话隔离，`/api/chat/search` 历史搜索，项目规范 per-workspace 共享。会话路径：`users/<username>/workspaces/<ws>/web_sessions/<sid>.jsonl`
+- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WebSocket 模式（支持中断生成）。多用户认证（用户名 + localStorage），`user_data_dir()` 按用户隔离数据根目录。多会话并行（`_SESSIONS` 两级字典 username→session_id，`_SESSION_LOCKS` per-session 串行），左侧 SessionSidebar + 右侧 TodosPanel 三栏布局。Per-session 记忆/压缩/搜索：MemoryStore + HistoryDB + Compactor 按会话隔离，项目规范 per-workspace 共享。消息持久化到 HistoryDB（SQLite），重启自动恢复。流式重试（429 等错误自动重试 3 次），工具参数安全（缺参返回错误而非异常），日志级别可配置（`logging.level`/`logging.file_level`），状态栏实时更新 token/上下文信息，多轮 LLM 输出按序独立消息显示，计划模式（/plan /act）
 
 ## 行为规则
 

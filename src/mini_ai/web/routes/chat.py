@@ -297,12 +297,13 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          messages: list[dict], tools: list[dict],
-                         max_turns: int = 30, abort_event=None,
+                         max_turns: int = 0, abort_event=None,
                          model_name=None, session_lock=None,
                          session_key: str = "default",
                          username: str = "default",
                          workspace: str | None = None) -> tuple:
     _SESSION_STATUS[session_key] = "generating"
+    logger.debug(f"[Web] _run_tool_loop_sync start key={session_key} workspace={workspace}")
     try:
         from ...tools.update_todos import set_session
         set_session(session_key)
@@ -329,6 +330,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
             comp["history_db"].append("user", last_user.get("content", ""), session_id=comp_key, metadata=json.dumps(user_meta) if user_meta else "")
 
+        logger.debug(f"[Web] run_tool_loop start key={session_key} plan={plan_mode} tools={len(tools)}")
         msg, _ = run_tool_loop(
             messages, tools,
             streaming=STREAMING,
@@ -338,6 +340,11 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             max_turns=max_turns,
             ctx=ctx,
         )
+        logger.debug(f"[Web] run_tool_loop done key={session_key} msg={'yes' if msg else 'None'} content={len(msg.get('content','')) if msg else 0}")
+        if not msg or not msg.get("content"):
+            err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
+            messages.append({"role": "assistant", "content": err_text, "timestamp": _now()})
+            loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "error", "data": {"error": err_text, "session_id": session_key}}))
         if msg and msg.get("content") and not any(
             m.get("role") == "assistant" and m.get("content") == msg["content"]
             for m in messages[-3:]
@@ -372,6 +379,8 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             messages[0]["content"] = _build_system_prompt(username, session_key.split(":")[-1] if ":" in session_key else session_key, base, workspace)
             _inject_todos(messages)
 
+        logger.debug(f"[Web] pushing complete event key={session_key}")
+        loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {}}))
         return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
     finally:
         _SESSION_STATUS[session_key] = "idle"
@@ -500,7 +509,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                     event = await asyncio.wait_for(queue.get(), timeout=0.15)
                     event["data"]["session_id"] = sid
                     await _send(event)
-                    if event["event"] in ("done", "aborted", "error"):
+                    if event["event"] in ("done", "aborted", "error", "complete"):
                         break
                 except asyncio.TimeoutError:
                     if future.done():
@@ -510,10 +519,15 @@ async def chat_ws_endpoint(ws: WebSocket):
             await _send({"event": "error", "data": {"error": str(e), "session_id": sid}})
 
         if aborted:
+            logger.info(f"[Web] chat aborted sid={sid}")
             await _send({"event": "aborted", "data": {"session_id": sid}})
+            try:
+                future.cancel()
+            except Exception:
+                pass
 
         try:
-            result = future.result(timeout=5)
+            result = future.result(timeout=2 if aborted else 5)
             msg, usage = result if isinstance(result, tuple) else (result, {"prompt_tokens": 0, "completion_tokens": 0})
         except Exception as e:
             msg = None
@@ -525,6 +539,7 @@ async def chat_ws_endpoint(ws: WebSocket):
         _update_meta_cache(username, sid, messages)
 
         if not aborted:
+            logger.debug(f"[Web] sending done sid={sid} usage={usage}")
             await _send({
                 "event": "done",
                 "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}

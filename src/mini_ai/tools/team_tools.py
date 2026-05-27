@@ -96,9 +96,9 @@ _send_def = {
 
 def _send(args: dict) -> str:
     caller = _sender()
-    to = args["to"]
+    to = args.get("to", "")
     logger.debug(f"[send→] caller={caller} to={to}")
-    return _bus.send(caller, to, args["content"],
+    return _bus.send(caller, to, args.get("content", ""),
                      args.get("msg_type", "message"))
 
 
@@ -140,7 +140,7 @@ _broadcast_def = {
 
 
 def _broadcast(args: dict) -> str:
-    return _bus.broadcast(_sender(), args["content"], _manager.member_names())
+    return _bus.broadcast(_sender(), args.get("content", ""), _manager.member_names())
 
 
 # ── 构建可注册的工具模块对象 ──

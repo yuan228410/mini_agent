@@ -4,6 +4,7 @@ import time
 
 from rich.console import Console
 from rich.markdown import Markdown
+from rich.rule import Rule
 from rich.text import Text
 
 from ..logger import logger
@@ -33,6 +34,7 @@ _SLASH_COMMANDS = [
     ("/plan", "进入计划模式（只规划不执行）"),
     ("/act", "切换到执行模式"),
     ("/mcp", "查看 MCP 服务器状态"),
+    ("/todos", "查看当前任务计划"),
     ("/exit", "退出"),
 ]
 
@@ -68,10 +70,11 @@ _ALL_COMPLETIONS = _build_completions()
 
 
 class Display:
-    def __init__(self, thinking_mode: str = "collapsed", tool_detail: str = "summary"):
+    def __init__(self, thinking_mode: str = "collapsed", tool_detail: str = "summary", on_status_update=None):
         self.console = Console()
         self.thinking_mode = thinking_mode
         self.tool_detail = tool_detail
+        self._on_status_update = on_status_update
         self._stream_buf = ""
         self._streaming = False
         self._stream_line_count = 0
@@ -80,6 +83,7 @@ class Display:
         self._tool_start_time = 0.0
         self._last_thinking = ""
         self._had_thinking = False
+        self._last_todos_render = ''
         self.show_banner()
 
     def show_banner(self):
@@ -236,6 +240,23 @@ class Display:
     def tool_result(self, name: str, result: str, elapsed: float | None = None):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
+        if self._on_status_update:
+            self._on_status_update()
+        if result.startswith("📋TODO\n"):
+            if result == self._last_todos_render:
+                return
+            self._last_todos_render = result
+            self.console.print()
+            self.console.print(Rule("📋 任务计划", style="amber", characters="─"))
+            todo_text = result[6:]
+            for line in todo_text.split("\n"):
+                if "← 当前" in line:
+                    self.console.print(Text(f"  {line}", style="bold yellow"))
+                elif line.startswith("[x]"):
+                    self.console.print(Text(f"  {line}", style="dim"))
+                else:
+                    self.console.print(Text(f"  {line}"))
+            return
         if self.tool_detail == "minimal":
             self.console.print(Text(f"    ✓ {elapsed:.1f}s", style="green"))
         elif self.tool_detail == "full":
@@ -294,7 +315,24 @@ class Display:
         info.append(f"sys {system_prompt_chars}", style="dim")
         info.append(" │ ")
         info.append(f"msg {history_count}", style="dim")
+        todo_sum = self.todo_summary()
+        if todo_sum:
+            info.append(" │ ")
+            info.append(todo_sum, style="bold yellow")
         self.console.print(info, justify="right")
+
+    def todo_summary(self) -> str:
+        try:
+            from ..tools import render_todos
+            text = render_todos()
+            if not text:
+                return ""
+            lines = text.split("\n")
+            total = sum(1 for l in lines if l.strip() and not l.startswith("📋"))
+            done = sum(1 for l in lines if l.strip().startswith("[x]"))
+            return f"📋 {done}/{total}"
+        except Exception:
+            return ""
 
     def _reset_stream(self):
         self._stream_buf = ""

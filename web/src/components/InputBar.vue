@@ -3,8 +3,8 @@ import { ref, computed } from 'vue'
 import SlashCommands from './SlashCommands.vue'
 import type { CommandInfo } from '../api'
 
-const props = defineProps<{ disabled?: boolean }>()
-const emit = defineEmits(['send'])
+const props = defineProps<{ disabled?: boolean; isStreaming?: boolean }>()
+const emit = defineEmits(['send', 'stop'])
 const textareaEl = ref<HTMLTextAreaElement>()
 const text = ref('')
 const slashRef = ref<InstanceType<typeof SlashCommands>>()
@@ -84,7 +84,10 @@ function onSlashSelect(cmd: CommandInfo) {
           ref="textareaEl"
         ></textarea>
       </div>
-      <button class="send-btn" :disabled="disabled || !text.trim()" @click="submit">
+      <button v-if="isStreaming" class="stop-btn" @click="$emit('stop')" title="停止生成">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+      </button>
+      <button v-else class="send-btn" :disabled="disabled || !text.trim()" @click="submit">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="22" y1="2" x2="11" y2="13"></line>
           <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -164,5 +167,26 @@ textarea::placeholder {
 .send-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.stop-btn {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  margin-bottom: 1px;
+  border: none;
+  border-radius: 8px;
+  background: #e55;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, transform 0.1s ease;
+}
+
+.stop-btn:hover {
+  background: #c44;
+  transform: scale(1.03);
 }
 </style>

@@ -107,9 +107,21 @@ def main():
         finally:
             signal.signal(signal.SIGINT, original_sigint)
         return
+    def _update_status():
+        usage = get_usage()
+        disp.status_bar(
+            model=MODEL_CONFIG.get("model", "?"),
+            context_length=MODEL_CONFIG.get("context_length", 128000),
+            prompt_tokens=usage["prompt_tokens"],
+            completion_tokens=usage["completion_tokens"],
+            system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+            history_count=len(history_db.load_unarchived()),
+        )
+
     disp = Display(
         thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
         tool_detail=DISPLAY.get("tool_detail", "summary"),
+        on_status_update=_update_status,
     )
 
     ws_mgr = WorkspaceManager(DATA_DIR, ensure_default=False)
@@ -119,6 +131,8 @@ def main():
     if not ws:
         ws_mgr.create(cwd_name, str(cwd))
         ws = ws_mgr.get(cwd_name)
+    if ws and not ws.project_path:
+        ws.update_project_path(str(cwd))
     ws_dir = ws.ws_dir
     logger.info(f"[Workspace] {cwd_name} → {ws_dir} (project: {ws.project_path or cwd})")
 

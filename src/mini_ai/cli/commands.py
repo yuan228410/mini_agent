@@ -242,4 +242,25 @@ class CommandHandler:
             self.disp.info(info_text)
             return "continue"
 
+        if user_input == "/todos":
+            from ..tools import render_todos
+            text = render_todos()
+            if not text:
+                self.disp.info("暂无任务计划")
+                return "continue"
+            from rich.rule import Rule
+            from rich.text import Text
+            self.disp.console.print()
+            self.disp.console.print(Rule("📋 任务计划", style="amber", characters="─"))
+            for line in text.split("\n"):
+                if not line.strip() or line.startswith("📋"):
+                    continue
+                if "← 当前" in line:
+                    self.disp.console.print(Text(f"  {line}", style="bold yellow"))
+                elif line.strip().startswith("[x]"):
+                    self.disp.console.print(Text(f"  {line}", style="dim"))
+                else:
+                    self.disp.console.print(Text(f"  {line}"))
+            return "continue"
+
         return None

@@ -32,7 +32,7 @@ _write_def = {
 def _write_exec(args: dict) -> str:
     from ..tools.team_tools import _sender
     author = _sender()
-    return _blackboard.put(args["key"], args["value"], author=author)
+    return _blackboard.put(args.get("key", ""), args.get("value", ""), author=author)
 
 
 # ── blackboard_read ──
@@ -54,7 +54,7 @@ _read_def = {
 
 
 def _read_exec(args: dict) -> str:
-    value = _blackboard.get(args["key"])
+    value = _blackboard.get(args.get("key", ""))
     if not value:
         return f"blackboard[{args['key']}] 不存在"
     return value

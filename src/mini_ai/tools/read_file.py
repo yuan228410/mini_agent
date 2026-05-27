@@ -22,7 +22,10 @@ definition = {
 
 
 def execute(args: dict) -> str:
-    path = Path(args["path"])
+    path_str = args.get("path", "")
+    if not path_str or not isinstance(path_str, str):
+        return "Error: read_file 缺少 path 参数（字符串类型），请提供正确的文件路径后重试"
+    path = Path(path_str)
     if not path.exists():
         return f"Error: 文件不存在: {path}"
     if not path.is_file():
