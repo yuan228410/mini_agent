@@ -1,4 +1,5 @@
 """LLM API 通信"""
+import json
 import time
 
 import requests
@@ -214,8 +215,8 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         if data_str == "[DONE]":
             break
         try:
-            data = __import__("json").loads(data_str)
-        except (ValueError, __import__("json").JSONDecodeError):
+            data = json.loads(data_str)
+        except (ValueError, json.JSONDecodeError):
             continue
 
         choices = data.get("choices", [])

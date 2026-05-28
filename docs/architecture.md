@@ -50,6 +50,17 @@ models:
 - `/model` 命令列出所有可用模型，补全列表自动包含模型名
 - LLM 通信层位于 `src/mini_ai/llm/`，分 `openai.py`（OpenAI 协议）和 `anthropic.py`（Anthropic Claude 协议），共享基础设施在 `base.py`
 
+### 设计决策
+
+| 决策 | 说明 |
+|------|------|
+| `requests.Session()` 长连接 | 复用 HTTP 连接，避免每次请求重新 TLS 握手 |
+| `threading.local()` token 统计 | 各线程独立 `_local.last_usage`，解决 lead/队友并发统计竞态 |
+| `tools` 参数三态 | `True`=全部工具，`list[dict]`=指定工具列表，`False`=无工具 |
+| 失败重试 | `llm_retries` 次，递增延迟 `llm_retry_delay` × attempt |
+| 容错 | `RequestException` 和 JSON 解析失败统一返回 `None`，不抛异常 |
+| token 估算 | API 未返回 `usage` 时按内容长度自动估算（字符数 / 3） |
+
 ---
 
 ## 流式输出
@@ -396,6 +407,66 @@ mcp:
 
 ---
 
+## web_fetch 智能清洗
+
+位于 `src/mini_ai/tools/web_fetch.py`。
+
+**问题：** 原始 HTML 包含大量 CSS/JS/SVG，传给 LLM 浪费大量 token。
+
+**解决方案：** `_TextExtractor`（HTMLParser 子类）在解析时跳过无用标签：
+
+- 跳过 `<style>`、`<script>`、`<noscript>`、`<svg>`、`<head>` 整个标签树
+- `_skip_depth` 跟踪跳过深度，避免误恢复
+- `_collapse_ws()` 将连续空白压缩为单个空格
+- 效果：典型网页从数万字符压缩到几千字符
+
+---
+
+## Agent 执行器 (runner.py)
+
+位于 `src/mini_ai/runner.py`。
+
+**定位：** `run_tool_loop()` 是统一的 Agent 执行循环，被主循环、子代理、队友、Web 端复用。
+
+```python
+def run_tool_loop(
+    messages, tools, *,
+    streaming=False, display=None, inject_fn=None,
+    abort_event=None, max_turns=20,
+    context_length=None, context_usage_limit=0.88, ctx=None,
+) -> tuple[dict | None, bool]:
+```
+
+**设计决策：**
+
+- **流式/非流式统一**：同一条代码路径处理 `streaming=True/False`，仅在流式时逐 chunk yield 到 display
+- **display 渲染**：流式 chunk 实时渲染到终端/Web，非流式等待完整返回后一次性渲染
+- **abort 中断**：每轮循环检查 `abort_event.is_set()`，支持 Web 端中断生成
+- **上下文安全阀**：`prompt_tokens > context_length × context_usage_limit` 时提前退出
+- **错误熔断**：连续 3 次工具调用返回 Error → 提前退出，避免 LLM 空循环
+- **轮次上限**：`max_turns`（默认 20）轮后强制退出，防止无限循环
+- **返回元组**：`(final_msg, spawned)` — `spawned` 标记是否有新队友被 spawn，主循环据此进入队友等待
+
+`run_agent()` 作为轻量包装，供子代理/队友内部调用，返回最终文本字符串。
+
+---
+
+## 关键设计原则
+
+1. **模块化** — 一个文件一个职责，接口简单（`definition` + `execute`）
+2. **工具白名单** — 子代理和队友有独立的工具访问权限，lead 按需过滤工具（排除 `read_inbox`/`list_teammates`）
+3. **上下文隔离** — 子代理/队友的对话历史不回传主循环
+4. **容错优先** — 并行工具单点异常不传染，队友超时有通知，LLM 请求自动重试
+5. **文件持久化** — 邮箱和记忆均基于文件，零外部依赖
+6. **依赖注入** — 工具通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
+7. **LLM 驱动压缩** — 用模型自身智能提取记忆，`prompt_tokens` 占比精准触发
+8. **零浪费轮询** — inbox 读取由代码层自动处理，不暴露给 LLM 避免空轮询
+9. **Event 驱动唤醒** — `threading.Event` 替代 sleep 轮询，有消息 0ms 响应
+10. **多模型可插拔** — `active_model` 一键切换，`api_mode` 适配不同协议，零代码改动
+11. **Web/CLI 双模式** — 同一套 LLM/工具/记忆逻辑，仅 Display 层不同；Web 模式同步代码在线程池运行，`RequestContext` 实现多用户并发隔离
+
+---
+
 > **子代理系统、Team 协作系统、记忆系统、会话管理的详细说明见各自的独立文档：**
 > - [记忆系统](memory-system.md)
 > - [多 Agent 编排](team-collaboration.md)
@@ -403,9 +474,6 @@ mcp:
 ---
 
 ## 项目结构总览
-
-```
-mini_ai/
 ├── pyproject.toml             # 项目配置（uv/pip 安装，入口 mini-ai）
 ├── config.example.yaml        # 配置模板
 ├── docs/                      # 设计文档

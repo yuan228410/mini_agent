@@ -72,4 +72,3 @@ src/mini_ai/
 | [docs/configuration.md](docs/configuration.md) | 所有配置项详细参考 |
 | [docs/quick-start.md](docs/quick-start.md) | 安装、配置、运行指南 |
 | [WEB.md](WEB.md) | Web 界面设计、API 接口、前端组件 |
-| [DESIGN.md](DESIGN.md) | 内部架构设计文档 |

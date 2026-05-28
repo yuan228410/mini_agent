@@ -5,33 +5,6 @@ from pathlib import Path
 
 _UTC8 = timezone(timedelta(hours=8))
 
-COMPACT_PROMPT = """将以下对话历史归档，输出三个部分：
-
-<episode>
-本次对话的关键记录（事实、结论、待办），用于每日回顾。保持简洁，只记录有价值的信息。
-</episode>
-
-<updated_memory>
-如果本次对话产生了值得长期记住的信息（用户目标、重要决策、关键偏好、项目背景），更新长期记忆。格式：先写保留的旧记忆要点，再写新增/更新的内容。若无需更新则写"(无需更新)"。
-</updated_memory>
-
-<updated_user>
-如果本次对话让你更了解用户的偏好、习惯、知识背景，更新用户画像。若无需更新则写"(无需更新)"。
-</updated_user>
-
-当前长期记忆：
-{current_memory}
-
-当前用户画像：
-{current_user}
-
-今天的已有记录：
-{today_episode}
-
-对话历史：
-{old_conversation}"""
-
-
 class MemoryStore:
     """记忆存储（情景层 + 长期层 + 用户画像）。
 
@@ -63,11 +36,7 @@ class MemoryStore:
         p = self._today_path()
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
-    def write_today(self, content: str) -> None:
-        p = self._today_path()
-        p.write_text(content.strip() + "\n", encoding="utf-8")
-
-    def append_today(self, content: str) -> None:
+    # ── 长期层 ──
         p = self._today_path()
         existing = p.read_text(encoding="utf-8") if p.exists() else f"# {p.stem}\n"
         p.write_text(existing.rstrip() + "\n\n" + content.strip() + "\n", encoding="utf-8")
