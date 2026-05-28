@@ -147,7 +147,7 @@ function submitUsername() {
         <span class="username-badge">{{ currentUsername }}</span>
       </div>
       <div class="header-right">
-        <ModelSelector :session-id="sessionId" @switched="onModelSwitched" />
+        <ModelSelector :session-id="sessionId" :workspace="activeWorkspace || undefined" @switched="onModelSwitched" />
         <button class="skill-btn" @click="showFiles = true" title="文件浏览">
           <span>📄</span>
         </button>

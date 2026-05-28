@@ -36,7 +36,7 @@ class MemoryStore:
         p = self._today_path()
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
-    # ── 长期层 ──
+    def append_today(self, content: str) -> None:
         p = self._today_path()
         existing = p.read_text(encoding="utf-8") if p.exists() else f"# {p.stem}\n"
         p.write_text(existing.rstrip() + "\n\n" + content.strip() + "\n", encoding="utf-8")

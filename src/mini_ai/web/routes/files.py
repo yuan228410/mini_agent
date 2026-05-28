@@ -29,7 +29,7 @@ _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", 
 
 _WEB_CWD = Path.cwd()
 
-def _get_project_root(workspace: str, username: str = "default") -> Path | None:
+def _get_project_root(workspace: str, username: str) -> Path | None:
     ws = _get_ws_mgr(username).get(workspace)
     if not ws:
         ws = _get_ws_mgr(username).get("default")
@@ -56,7 +56,7 @@ def _safe_resolve(root: Path, rel_path: str) -> Path | None:
 async def list_files(
     path: str = Query(default=""),
     workspace: str = Query(default=""),
-    username: str = Query(default="default"),
+    username: str = Query(...),
 ):
     root = _get_project_root(workspace, username)
     if not root:
@@ -109,7 +109,7 @@ async def list_files(
 async def read_file(
     path: str = Query(...),
     workspace: str = Query(default=""),
-    username: str = Query(default="default"),
+    username: str = Query(...),
     offset: int = Query(default=0),
     limit: int = Query(default=200),
 ):
@@ -153,7 +153,7 @@ async def read_file(
 
 
 @router.get("/files/browse")
-async def browse_dirs(path: str = Query(default=""), username: str = Query(default="default")):
+async def browse_dirs(path: str = Query(default=""), username: str = Query(...)):
     if not path:
         path = str(Path.home())
     root = Path(path).resolve()

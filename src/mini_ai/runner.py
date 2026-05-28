@@ -1,5 +1,9 @@
 """Agent 执行器 — 统一的 LLM 工具循环"""
 import threading
+from datetime import datetime, timezone, timedelta
+
+_UTC8 = timezone(timedelta(hours=8))
+def _now(): return datetime.now(_UTC8).strftime("%Y-%m-%dT%H:%M:%S")
 
 from .config import RUNNER, STREAMING
 from .logger import logger
@@ -19,17 +23,20 @@ def run_tool_loop(
     streaming: bool = False,
     display=None,
     inject_fn=None,
+    persist_fn=None,
     abort_event: threading.Event | None = None,
     max_turns: int = 0,
     context_length: int | None = None,
     context_usage_limit: float = _CONTEXT_USAGE_LIMIT,
     ctx=None,
 ) -> tuple[dict | None, bool]:
-    """统一工具循环。返回 (final_msg, spawned_teammate)。"""
+    """统一工具循环。返回 (final_msg, spawned_teammate)。
+    persist_fn: 可选回调 (msg_dict) -> None，每条新消息追加时调用。"""
     from .llm import chat as llm_chat, chat_stream as llm_chat_stream, get_usage
     from .tools import handle_tool_calls
 
     spawned = False
+    _persist = persist_fn or (lambda m: None)
 
     if max_turns <= 0:
         from .config import RUNNER
@@ -79,6 +86,9 @@ def run_tool_loop(
                     display.thinking_end()
 
                 if not msg or "tool_calls" not in msg:
+                    if msg:
+                        msg["timestamp"] = _now()
+                        _persist(msg)
                     if display:
                         display.text_end()
                     return msg, spawned
@@ -91,12 +101,15 @@ def run_tool_loop(
                     display.thinking_end()
 
                 if not msg or "tool_calls" not in msg:
+                    if msg:
+                        msg["timestamp"] = _now()
+                        _persist(msg)
                     if msg and msg.get("content") and display:
                         display.text_end(msg["content"])
                     return msg, spawned
 
             _disp = ctx.display if ctx else display
-            tool_spawned = handle_tool_calls(msg, messages, display=_disp)
+            tool_spawned = handle_tool_calls(msg, messages, display=_disp, persist_fn=_persist)
             last_tool_msgs = [m for m in messages[-5:] if m.get("role") == "tool"]
             if last_tool_msgs and last_tool_msgs[-1].get("content", "").startswith("Error:"):
                 _consecutive_errors += 1
@@ -125,7 +138,16 @@ def run_tool_loop(
                         display.text_end()
                     return None, spawned
 
-        logger.warning(f"[runner] 工具循环达到上限 {max_turns} 轮，强制退出")
+        # 记录每轮工具调用详情，便于排查循环原因
+        tool_summary = []
+        for m in messages[-max_turns*3:]:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    tool_summary.append(tc["function"]["name"])
+            elif m.get("role") == "tool":
+                content = (m.get("content") or "")[:60].replace("\n", " ")
+                tool_summary.append(f"→{content}")
+        logger.warning(f"[runner] 工具循环达到上限 {max_turns} 轮，强制退出。最近工具: {' | '.join(tool_summary[-20:])}")
         if display:
             display.text_end()
         return None, spawned

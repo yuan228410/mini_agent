@@ -1,13 +1,21 @@
 """主动记忆工具 — Agent 实时写入/读取长期记忆"""
+import threading
+
 from ..logger import logger
 
-_memory_store = None
+_memory_store = threading.local()
 
 
 def configure(memory_store=None):
-    global _memory_store
     if memory_store is not None:
-        _memory_store = memory_store
+        _memory_store.store = memory_store
+
+
+def _get_store():
+    try:
+        return _memory_store.store
+    except AttributeError:
+        return None
 
 
 # ── remember ──
@@ -40,19 +48,22 @@ _remember_def = {
 
 
 def _remember_exec(args: dict) -> str:
+    store = _get_store()
+    if not store:
+        return "Error: 记忆系统未初始化"
     content = args.get("content", "").strip()
     if not content:
         return "Error: content 不能为空"
     category = args.get("category", "general")
 
-    current = _memory_store.read_memory() or ""
+    current = store.read_memory() or ""
     entry = f"- [{category}] {content}"
 
     if entry in current:
         return f"已存在相同记忆，跳过"
 
     new_memory = current.rstrip() + "\n" + entry + "\n" if current else entry + "\n"
-    _memory_store.write_memory(new_memory)
+    store.write_memory(new_memory)
     logger.info(f"[记忆+] [{category}] {content[:60]}")
     return f"已记住: {content}"
 
@@ -81,8 +92,11 @@ _recall_def = {
 
 
 def _recall_exec(args: dict) -> str:
+    store = _get_store()
+    if not store:
+        return "Error: 记忆系统未初始化"
     keyword = args.get("keyword", "").strip()
-    memory = _memory_store.read_memory()
+    memory = store.read_memory()
     if not memory:
         return "长期记忆为空"
 
@@ -117,11 +131,14 @@ _forget_def = {
 
 
 def _forget_exec(args: dict) -> str:
+    store = _get_store()
+    if not store:
+        return "Error: 记忆系统未初始化"
     keyword = args.get("keyword", "").strip()
     if not keyword:
         return "Error: keyword 不能为空"
 
-    memory = _memory_store.read_memory()
+    memory = store.read_memory()
     if not memory:
         return "长期记忆为空，无需删除"
 
@@ -132,7 +149,7 @@ def _forget_exec(args: dict) -> str:
     if removed == 0:
         return f"未找到包含 '{keyword}' 的记忆"
 
-    _memory_store.write_memory("\n".join(remaining) + "\n" if remaining else "")
+    store.write_memory("\n".join(remaining) + "\n" if remaining else "")
     logger.info(f"[记忆-] 删除 {removed} 条包含 '{keyword}' 的记忆")
     return f"已删除 {removed} 条记忆"
 

@@ -33,6 +33,9 @@ function _localTs(): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return [d.getFullYear(), pad(d.getMonth()+1), pad(d.getDate())].join('-') + 'T' + [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join(':')
 }
+function _cacheKey(sid: string, ws?: string): string {
+  return `${ws || 'default'}:${sid}`
+}
 const _states = new Map<string, SessionState>()
 const activeSessionId = ref('')
 const messages = ref<Message[]>([])
@@ -51,14 +54,16 @@ const FLUSH_INTERVAL = 50
 const SCROLL_INTERVAL = 100
 
 function _state(sid: string): SessionState {
-  if (!_states.has(sid)) {
-    _states.set(sid, { messages: [], isStreaming: false, _currentContent: '', _currentThinking: '' })
+  const key = _cacheKey(sid, props.workspace)
+  if (!_states.has(key)) {
+    _states.set(key, { messages: [], isStreaming: false, _currentContent: '', _currentThinking: '' })
   }
-  return _states.get(sid)!
+  return _states.get(key)!
 }
 
 function _save() {
-  const s = _states.get(activeSessionId.value)
+  const key = _cacheKey(activeSessionId.value, props.workspace)
+  const s = _states.get(key)
   if (!s) return
   s.messages = [...messages.value]
   s.isStreaming = isStreaming.value
@@ -82,7 +87,8 @@ function _scheduleFlush() {
 
 function _doFlush() {
   const sid = activeSessionId.value
-  const s = _states.get(sid)
+  const key = _cacheKey(sid, props.workspace)
+  const s = _states.get(key)
   if (!s) return
   const lastIdx = s.messages.length - 1
   if (lastIdx >= 0) {
@@ -125,6 +131,7 @@ onUnmounted(() => {
 })
 
 async function initSession(ws?: string) {
+  console.time('[perf] initSession')
   const stored = localStorage.getItem(SESSION_KEY)
   if (stored) {
     activeSessionId.value = stored
@@ -133,15 +140,18 @@ async function initSession(ws?: string) {
     await newSession()
   }
   preloadAllSessions(ws || props.workspace || 'default')
+  console.timeEnd('[perf] initSession')
 }
 
 async function preloadAllSessions(ws?: string) {
+  console.time('[perf] preloadAllSessions')
   try {
     const resp = await getSessions(ws || undefined)
     const sessions = resp.sessions || []
     for (const s of sessions) {
       if (s.session_id === activeSessionId.value) continue
-      if (_states.has(s.session_id) && _states.get(s.session_id)!.messages.length > 0) continue
+      const key = _cacheKey(s.session_id, ws)
+      if (_states.has(key) && _states.get(key)!.messages.length > 0) continue
       restoreHistory(s.session_id, ws).catch(() => {})
     }
     const resp2 = await getWorkspaces()
@@ -149,11 +159,13 @@ async function preloadAllSessions(ws?: string) {
       if (w.name === ws) continue
       const resp3 = await getSessions(w.name)
       for (const s of resp3.sessions || []) {
-        if (_states.has(s.session_id) && _states.get(s.session_id)!.messages.length > 0) continue
+        const key = _cacheKey(s.session_id, w.name)
+        if (_states.has(key) && _states.get(key)!.messages.length > 0) continue
         restoreHistory(s.session_id, w.name).catch(() => {})
       }
     }
   } catch {}
+  console.timeEnd('[perf] preloadAllSessions')
 }
 
 async function newSession(ws?: string) {
@@ -169,6 +181,7 @@ async function newSession(ws?: string) {
 }
 
 async function restoreHistory(sid: string, ws?: string) {
+  const _t0 = performance.now()
   try {
     const resp = await getHistory(sid, ws || props.workspace)
     const raw = (resp.history || []).filter((m: any) => m.role !== 'system' && m.role !== 'tool')
@@ -176,33 +189,9 @@ async function restoreHistory(sid: string, ws?: string) {
     for (const m of raw) {
       if (m.role === 'assistant' && merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
         const prev = merged[merged.length - 1]
-        if (m.tool_calls) {
-          const tools = m.tool_calls.map((tc: any) => ({
-            name: tc.function?.name || '?',
-            args: tc.function?.arguments || '',
-            result: tc._result || '',
-            elapsed: 0,
-          }))
-          prev.tools = [...(prev.tools || []), ...tools]
-        }
         if (m.content) prev.content = (prev.content || '') + m.content
-        if (m.thinking && typeof m.thinking === 'object') prev.thinking = m.thinking
-        else if (m.thinking && typeof m.thinking === 'string') prev.thinking = { chars: m.thinking.length, elapsed: 0, content: m.thinking }
       } else {
-        const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' }
-        if (m.thinking) {
-          if (typeof m.thinking === 'object') msg.thinking = m.thinking
-          else if (typeof m.thinking === 'string') msg.thinking = { chars: m.thinking.length, elapsed: 0, content: m.thinking }
-        }
-        if (m.tool_calls && m.role === 'assistant') {
-          msg.tools = m.tool_calls.map((tc: any) => ({
-            name: tc.function?.name || '?',
-            args: tc.function?.arguments || '',
-            result: tc._result || '',
-            elapsed: 0,
-          }))
-        }
-        merged.push(msg)
+        merged.push({ role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' })
       }
     }
     const s = _state(sid)
@@ -218,7 +207,7 @@ async function restoreHistory(sid: string, ws?: string) {
 
 async function fetchConfig() {
   try {
-    const c = await getConfig(activeSessionId.value)
+    const c = await getConfig(activeSessionId.value, props.workspace || 'default')
     emit('config-update', c)
   } catch {}
 }
@@ -362,7 +351,7 @@ async function sendMessage(text: string) {
     return
   }
   if (text.startsWith('/clear')) {
-    await resetChat(activeSessionId.value)
+    await resetChat(activeSessionId.value, props.workspace)
     const s = _state(activeSessionId.value)
     s.messages = []
     messages.value = []
@@ -388,7 +377,7 @@ async function sendMessage(text: string) {
   const userMsgCount = s.messages.filter(m => m.role === 'user').length
   if (userMsgCount === 1) {
     const firstMsg = s.messages.find(m => m.role === 'user')
-    if (firstMsg) renameSession(sid, firstMsg.content.slice(0, 20)).catch(() => {})
+    if (firstMsg) renameSession(sid, firstMsg.content.slice(0, 20), props.workspace).catch(() => {})
   }
 
   let wsOk = false
@@ -406,9 +395,10 @@ async function sendMessage(text: string) {
 }
 
 function stopGeneration() {
-  abortChat(activeSessionId.value)
+  abortChat(activeSessionId.value, props.workspace)
   isStreaming.value = false
-  const s = _states.get(activeSessionId.value)
+  const key = _cacheKey(activeSessionId.value, props.workspace)
+  const s = _states.get(key)
   if (s) {
     s.isStreaming = false
     const last = s.messages[s.messages.length - 1]

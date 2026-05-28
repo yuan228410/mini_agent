@@ -12,9 +12,9 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def user_data_dir(username: str) -> Path:
-    """返回用户数据根目录。default 用户用 DATA_DIR 向后兼容，其他用户用 DATA_DIR/users/<name>"""
-    if not username or username == "default":
-        return DATA_DIR
+    """返回用户数据根目录。所有用户统一用 DATA_DIR/users/<name>"""
+    if not username:
+        username = "default"  # 保底，不应出现
     d = DATA_DIR / "users" / username
     d.mkdir(parents=True, exist_ok=True)
     return d

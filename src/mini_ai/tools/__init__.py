@@ -4,7 +4,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
+from datetime import datetime, timezone, timedelta
 from ..logger import logger
+
+_UTC8 = timezone(timedelta(hours=8))
+
+def _now(): return datetime.now(_UTC8).strftime("%Y-%m-%dT%H:%M:%S")
 from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 
 _MAX_RESULT_CHARS = TOOL["max_result_chars"]
@@ -65,9 +70,12 @@ class ToolRegistry:
         mod = self._by_name.get(name)
         return mod.execute(args) if mod else None
 
-    def handle_tool_calls(self, msg: dict, messages: list[dict], display=None) -> bool:
+    def handle_tool_calls(self, msg: dict, messages: list[dict], display=None, persist_fn=None) -> bool:
         calls = msg["tool_calls"]
-        messages.append({"role": "assistant", "content": None, "tool_calls": calls})
+        asst_msg = {"role": "assistant", "content": None, "tool_calls": calls, "timestamp": _now()}
+        messages.append(asst_msg)
+        if persist_fn:
+            persist_fn(asst_msg)
 
         _disp = display if display is not None else self._display
         spawned = False
@@ -84,14 +92,14 @@ class ToolRegistry:
                 while i < len(calls) and calls[i]["function"]["name"] in self._parallel_tools:
                     group.append(calls[i])
                     i += 1
-                self._execute_parallel(group, messages, _disp)
+                self._execute_parallel(group, messages, _disp, persist_fn)
             else:
-                self._execute_one(tc, messages, _disp)
+                self._execute_one(tc, messages, _disp, persist_fn)
                 i += 1
 
         return spawned
 
-    def _execute_one(self, tc: dict, messages: list[dict], display=None) -> None:
+    def _execute_one(self, tc: dict, messages: list[dict], display=None, persist_fn=None) -> None:
         name = tc["function"]["name"]
         raw_args = tc["function"].get("arguments", "")
         try:
@@ -111,13 +119,17 @@ class ToolRegistry:
             logger.error(f"[工具✗] {name} 异常: {e}", exc_info=True)
         elapsed = time.monotonic() - t0
         if output is not None:
-            output = _truncate(output)
+            full_output = output
             logger.debug(f"[工具←] {name} len={len(output)}")
-            messages.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
+            truncated = _truncate(output)
+            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": _now()}
+            if persist_fn:
+                persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": _now()})
+            messages.append(tool_msg)
         if display:
             display.tool_result(name, output or "", elapsed)
 
-    def _execute_parallel(self, calls: list[dict], messages: list[dict], display=None) -> None:
+    def _execute_parallel(self, calls: list[dict], messages: list[dict], display=None, persist_fn=None) -> None:
         import contextvars as _cv
         results = {}
         caller_val = _cv.copy_context()
@@ -147,8 +159,12 @@ class ToolRegistry:
 
         for tc in calls:
             if tc["id"] in results:
-                output = _truncate(results[tc["id"]])
-                messages.append({"role": "tool", "tool_call_id": tc["id"], "content": output})
+                full_output = results[tc["id"]]
+                truncated = _truncate(full_output)
+                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": tc["function"]["name"], "content": truncated, "timestamp": _now()}
+                if persist_fn:
+                    persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": tc["function"]["name"], "content": full_output, "timestamp": _now()})
+                messages.append(tool_msg)
 
     def render_todos(self) -> str:
         return update_todos._store.render()
@@ -216,8 +232,8 @@ def dispatch(name: str, args: dict) -> str | None:
     return _registry.dispatch(name, args)
 
 
-def handle_tool_calls(msg: dict, messages: list[dict], display=None) -> bool:
-    return _registry.handle_tool_calls(msg, messages, display)
+def handle_tool_calls(msg: dict, messages: list[dict], display=None, persist_fn=None) -> bool:
+    return _registry.handle_tool_calls(msg, messages, display, persist_fn)
 
 
 def render_todos() -> str:

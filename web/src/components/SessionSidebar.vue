@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, reactive } from 'vue'
 import {
-  getSessions, createSession, deleteSession, renameSession,
+  getSessions, createSession, deleteSession, batchDeleteSessions, renameSession,
   getWorkspaces, createWorkspace, addWorkspace, removeWorkspace, switchWorkspace,
   listRemovedWorkspaces, restoreWorkspace, deleteRemovedWorkspace,
   browseDirs,
@@ -18,7 +18,9 @@ const activeWorkspace = ref<string | null>(null)
 const activeSessionId = ref('')
 const editingSid = ref('')
 const editingName = ref('')
-const contextMenu = ref<{ x: number; y: number; sid: string } | null>(null)
+const contextMenu = ref<{ x: number; y: number; sid: string; ws: string } | null>(null)
+const batchMode = ref(false)
+const selectedSessions = ref(new Set<string>())
 
 const wsSessions: Record<string, SessionInfo[]> = reactive({})
 const wsCollapsed: Record<string, boolean> = reactive({})
@@ -57,6 +59,12 @@ async function loadWorkspaces() {
   try {
     const resp = await getWorkspaces()
     workspaces.value = resp.workspaces || []
+    // 如果 activeWorkspace 不在列表中，切回 default
+    if (activeWorkspace.value && !workspaces.value.some((w: any) => w.name === activeWorkspace.value)) {
+      activeWorkspace.value = 'default'
+      localStorage.setItem(WORKSPACE_KEY, 'default')
+      emit('workspace-change', 'default')
+    }
   } catch {}
 }
 
@@ -123,18 +131,68 @@ async function newSessionFor(wsName: string | null) {
   } catch {}
 }
 
-function onContextMenu(e: MouseEvent, sid: string) {
+function onContextMenu(e: MouseEvent, sid: string, wsName: string) {
   e.preventDefault()
-  contextMenu.value = { x: e.clientX, y: e.clientY, sid }
+  contextMenu.value = { x: e.clientX, y: e.clientY, sid, ws: wsName }
 }
 
 function closeContextMenu() {
   contextMenu.value = null
 }
 
+const _batchWsName = ref('')
+const batchTargetWs = ref('default')
+
+function enterBatchMode(wsName: string) {
+  if (batchMode.value && batchTargetWs.value === wsName) {
+    batchMode.value = false
+    selectedSessions.value = new Set()
+    return
+  }
+  batchMode.value = true
+  batchTargetWs.value = wsName
+  _batchWsName.value = wsName
+  selectedSessions.value = new Set()
+}
+
+function selectAllForWs() {
+  _batchWsName.value = batchTargetWs.value
+  doSelectAll()
+}
+
+function doSelectAll() {
+  const wsName = _batchWsName.value
+
+  const sessions = wsSessions[wsName] || []
+  const s = new Set<string>()
+  for (const ses of sessions) {
+    s.add(ses.session_id)
+  }
+  selectedSessions.value = s
+}
+
+function toggleSelect(sid: string) {
+  const s = new Set(selectedSessions.value)
+  if (s.has(sid)) { s.delete(sid) } else { s.add(sid) }
+  selectedSessions.value = s
+}
+
+
+
+async function batchDelete() {
+  if (selectedSessions.value.size === 0) return
+  if (!confirm(`确定删除选中的 ${selectedSessions.value.size} 个会话？`)) return
+  const ids = Array.from(selectedSessions.value)
+  await batchDeleteSessions(ids, activeWorkspace.value || undefined)
+  selectedSessions.value = new Set()
+  batchMode.value = false
+  batchTargetWs.value = "default"
+  await loadAllSessions()
+}
+
 async function doDelete(sid: string) {
   contextMenu.value = null
-  await deleteSession(sid)
+  await deleteSession(sid, activeWorkspace.value || undefined)
   await loadAllSessions()
   if (activeSessionId.value === sid) {
     const all = getAllSessions()
@@ -155,7 +213,7 @@ async function finishEdit(sid: string) {
   const name = editingName.value.trim()
   editingSid.value = ''
   if (!name) return
-  await renameSession(sid, name)
+  await renameSession(sid, name, activeWorkspace.value || undefined)
   await loadAllSessions()
 }
 
@@ -357,26 +415,32 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 
     <div class="sidebar-body">
       <!-- Workspace groups -->
-      <div v-for="ws in workspaces" :key="ws.name" class="ws-group">
+      <div v-for="(ws, wsIdx) in workspaces" :key="ws.name" class="ws-group">
         <div class="ws-group-header" @click="toggleCollapse(ws.name)">
           <span class="ws-collapse-icon">{{ wsCollapsed[ws.name] ? '▸' : '▾' }}</span>
           <span class="ws-group-icon">📂</span>
           <span class="ws-group-name">{{ ws.name }}</span>
           <div class="ws-actions">
             <button class="ws-add-btn" @click.stop="newSessionFor(ws.name)" title="新建会话">+</button>
+            <button class="ws-add-btn" @click.stop="enterBatchMode(ws.name)" :title="batchMode ? '取消批量' : '批量删除'" :style="{ color: batchMode && batchTargetWs === ws.name ? 'var(--accent)' : '' }">☷</button>
             <button v-if="ws.name !== 'default'" class="ws-action-btn" @click.stop="removeWs(ws.name)" title="移除工作空间">✕</button>
             <button v-if="ws.name !== 'default'" class="ws-action-btn ws-action-danger" @click.stop="deleteWs(ws.name)" title="删除工作空间及数据">🗑</button>
+          </div>
+          <div v-if="batchMode && batchTargetWs === ws.name" class="batch-inline-bar" @click.stop>
+            <button class="batch-btn" @click.stop="selectAllForWs">全选</button>
+            <button class="batch-btn danger" @click.stop="batchDelete" :disabled="selectedSessions.size === 0">删除 ({{ selectedSessions.size }})</button>
           </div>
         </div>
         <div v-if="!wsCollapsed[ws.name]" class="ws-group-sessions">
           <div v-for="s in (wsSessions[ws.name] || [])" :key="s.session_id"
-               class="session-item" :class="{ active: activeSessionId === s.session_id }"
-               @click="selectSession(s.session_id, ws.name)"
-               @contextmenu="onContextMenu($event, s.session_id)"
-               @dblclick="startEdit(s.session_id, s.name)">
+               class="session-item" :class="{ active: !batchMode && activeSessionId === s.session_id, selected: batchMode && batchTargetWs === ws.name && selectedSessions.has(s.session_id) }"
+               @click="batchMode && batchTargetWs === ws.name ? toggleSelect(s.session_id) : (!batchMode ? selectSession(s.session_id, ws.name) : null)"
+               @contextmenu="onContextMenu($event, s.session_id, ws.name)"
+               @dblclick="batchMode ? null : startEdit(s.session_id, s.name)">
             <div class="session-row">
-              <span v-if="s.status === 'generating'" class="session-dot generating"></span>
-              <span v-else class="session-dot idle"></span>
+              <span v-if="batchMode && batchTargetWs === ws.name" class="batch-check" :class="{ checked: selectedSessions.has(s.session_id) }">●</span>
+              <span v-else-if="!batchMode && s.status === 'generating'" class="session-dot generating"></span>
+              <span v-else-if="!batchMode" class="session-dot idle"></span>
               <template v-if="editingSid === s.session_id">
                 <input class="session-edit-input" v-model="editingName"
                        @keydown="handleEditKey($event, s.session_id)"
@@ -634,6 +698,13 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
   cursor: pointer; transition: background 0.15s ease; border-left: 2px solid transparent;
 }
 .session-item:hover { background: var(--bg-card); }
+.session-item.selected { background: rgba(232, 145, 45, 0.12); border-left-color: var(--accent); }
+.batch-check { font-size: 0.75rem; color: var(--border); flex-shrink: 0; }
+.batch-check.checked { color: var(--accent); }
+.batch-inline-bar { display: flex; gap: 0.4rem; padding: 0.2rem 0.6rem; border-bottom: 0.5px solid var(--border-light); background: rgba(232, 145, 45, 0.05); }
+.batch-btn { font-size: 0.7rem; padding: 0.2rem 0.5rem; border: 1px solid var(--border); border-radius: 4px; background: var(--bg-card); cursor: pointer; color: var(--fg-muted); }
+.batch-btn.danger { color: #e55; border-color: #e55; }
+.batch-btn:disabled { opacity: 0.4; cursor: default; }
 .session-item.active { border-left-color: var(--accent); background: var(--bg-thinking); }
 
 .session-row { display: flex; align-items: center; gap: 0.35rem; }

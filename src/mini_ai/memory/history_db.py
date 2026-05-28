@@ -117,6 +117,44 @@ class HistoryDB:
         logger.info(f"[HistoryDB] 删除 {cur.rowcount} 条消息")
         return cur.rowcount
 
+    def update_session_name(self, session_id: str, name: str):
+        """更新指定会话的 system 消息 metadata 中的 name"""
+        with self._lock:
+            with self._conn:
+                row = self._conn.execute(
+                    "SELECT id, metadata FROM messages WHERE workspace=? AND session_id=? AND role='system' ORDER BY id LIMIT 1",
+                    (self.workspace, session_id),
+                ).fetchone()
+                if row:
+                    mid, raw_meta = row
+                    try:
+                        meta = json.loads(raw_meta) if raw_meta else {}
+                    except json.JSONDecodeError:
+                        meta = {}
+                    meta["name"] = name
+                    self._conn.execute(
+                        "UPDATE messages SET metadata=? WHERE id=?",
+                        (json.dumps(meta, ensure_ascii=False), mid),
+                    )
+
+    def delete_by_session(self, session_id: str) -> int:
+        """删除指定会话的所有消息"""
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=? AND session_id=?",
+                    (self.workspace, session_id),
+                )
+                try:
+                    self._conn.execute(
+                        "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=? AND session_id=?)",
+                        (self.workspace, session_id),
+                    )
+                except Exception:
+                    pass
+        logger.info(f"[HistoryDB] 删除会话 '{session_id}' 的 {cur.rowcount} 条消息")
+        return cur.rowcount
+
     def delete_before(self, keep_count: int):
         """保留最近 N 条消息，删除其余"""
         with self._lock:

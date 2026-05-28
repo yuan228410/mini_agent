@@ -16,15 +16,20 @@ async def list_models():
 @router.post("/models/switch")
 async def switch_model_endpoint(body: dict):
     name = body.get("name", "").strip()
-    username = body.get("username", "default")
-    session_id = body.get("session_id", "default")
+    username = body.get("username", "")
+    session_id = body.get("session_id", "")
+    workspace = body.get("workspace", "")
+    if not username:
+        return {"error": "缺少 username"}
+    if not session_id:
+        session_id = "default"
     if name not in AVAILABLE_MODELS:
         return {"error": f"未知模型: {name}，可选: {', '.join(AVAILABLE_MODELS)}"}
     cfg = get_model_config(name)
     if not cfg:
         return {"error": f"模型配置无效: {name}"}
-    from .chat import _SESSION_MODELS
-    _SESSION_MODELS[f"{username}:{session_id}"] = name
+    from .chat import _SESSION_MODELS, _cache_key
+    _SESSION_MODELS[_cache_key(username, workspace or None, session_id)] = name
     return {"status": "ok", "active_name": name, "model": cfg.get("model", "?")}
 
 def _get_active_name():

@@ -126,7 +126,7 @@ def main():
 
     ws_mgr = WorkspaceManager(DATA_DIR, ensure_default=False)
     cwd = Path.cwd()
-    cwd_name = cwd.name or "default"
+    cwd_name = cwd.name
     ws = ws_mgr.get(cwd_name)
     if not ws:
         ws_mgr.create(cwd_name, str(cwd))

@@ -99,8 +99,10 @@ memory_data/
 
 Web 模式下每个会话独立初始化 MemoryStore + HistoryDB + Compactor 实例：
 
-- **MemoryStore** — 三层记忆，存放在 `<session_dir>/<sid>/memory_data/`
+- **MemoryStore** — 三层记忆（情景层/长期层/用户画像），存放在 `<session_dir>/<sid>/memory_data/`
 - **HistoryDB** — SQLite 历史存储，支持全文搜索（`/api/chat/search`）
 - **Compactor** — 复用 `config.yaml` 的 `compactor` 配置，上下文超阈值自动压缩
-- **历史加载量** — `web.history_limit`（默认 200）控制前端展示，`compactor.keep_recent`（默认 50）控制上下文构建
+- **实时持久化** — 通过 `persist_fn` 回调，每条消息（用户/助手/工具调用/工具结果）生成即写入 DB，工具结果完整保存不截断（仅 LLM 上下文截断）
+- **会话名称** — 持久化到 `<session_dir>/<sid>/meta.json`，重启后恢复
+- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.keep_recent`（默认 50）控制上下文构建量，两者独立配置
 - **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md

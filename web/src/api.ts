@@ -151,6 +151,8 @@ export async function ensureWs(): Promise<boolean> {
     ws.onopen = () => {
       clearTimeout(timer)
       _wsConnected = true
+      const u = getUsername()
+      if (u) ws.send(JSON.stringify({ type: 'login', username: u }))
       resolve(true)
     }
 
@@ -200,9 +202,10 @@ export function wsChat(message: string, sessionId?: string, workspace?: string, 
   wsSend(chatMsg)
 }
 
-export function abortChat(sessionId?: string) {
+export function abortChat(sessionId?: string, workspace?: string) {
   const msg: any = { type: 'abort', ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
+  if (workspace) msg.workspace = workspace
   wsSend(msg)
 }
 
@@ -252,20 +255,35 @@ export async function getSessions(workspace?: string): Promise<SessionsResponse>
   return resp.json()
 }
 
-export async function deleteSession(sessionId: string): Promise<any> {
+export async function deleteSession(sessionId: string, workspace?: string): Promise<any> {
+  const body: any = { session_id: sessionId, ..._usernameBody() }
+  if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/session', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, ..._usernameBody() }),
+    body: JSON.stringify(body),
   })
   return resp.json()
 }
 
-export async function renameSession(sessionId: string, name: string): Promise<any> {
+export async function batchDeleteSessions(sessionIds: string[], workspace?: string): Promise<any> {
+  const body: any = { session_ids: sessionIds, ..._usernameBody() }
+  if (workspace) body.workspace = workspace
+  const resp = await _fetch('/api/sessions/batch_delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  return resp.json()
+}
+
+export async function renameSession(sessionId: string, name: string, workspace?: string): Promise<any> {
+  const body: any = { session_id: sessionId, name, ..._usernameBody() }
+  if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/session/rename', {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ session_id: sessionId, name, ..._usernameBody() }),
+    body: JSON.stringify(body),
   })
   return resp.json()
 }
@@ -355,9 +373,10 @@ export async function getModels(): Promise<ModelsResponse> {
   return resp.json()
 }
 
-export async function switchModel(name: string, sessionId?: string): Promise<any> {
+export async function switchModel(name: string, sessionId?: string, workspace?: string): Promise<any> {
   const body: any = { name, ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
+  if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/models/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -366,18 +385,20 @@ export async function switchModel(name: string, sessionId?: string): Promise<any
   return resp.json()
 }
 
-export async function getConfig(sessionId?: string): Promise<ConfigResponse> {
+export async function getConfig(sessionId?: string, workspace?: string): Promise<ConfigResponse> {
   const params = new URLSearchParams()
   if (sessionId) params.set('session_id', sessionId)
   const u = _username()
   if (u) params.set('username', u)
+  if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/config?${params.toString()}`)
   return resp.json()
 }
 
-export async function resetChat(sessionId?: string): Promise<any> {
+export async function resetChat(sessionId?: string, workspace?: string): Promise<any> {
   const body: any = { ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
+  if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/chat/reset', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -412,6 +433,8 @@ export interface BrowseResponse {
 export async function browseDirs(path?: string): Promise<BrowseResponse> {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
+  const u = _username()
+  if (u) params.set('username', u)
   const resp = await _fetch(`/api/files/browse?${params.toString()}`)
   return resp.json()
 }

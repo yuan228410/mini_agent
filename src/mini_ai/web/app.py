@@ -8,31 +8,10 @@ from fastapi.staticfiles import StaticFiles
 
 from .routes import chat, models, skills, config, commands, workspaces, files
 from .deps import init_components, shutdown_mcp
-from ..context import ContextBuilder
-from ..config import DATA_DIR, SKILL_PATHS, user_data_dir
-from ..memory import MemoryStore
-from ..skills import SkillLoader
-from ..workspace import WorkspaceManager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_components()
-    import os
-    ws_mgr = WorkspaceManager(user_data_dir("default"))
-    ws = ws_mgr.get("default") or ws_mgr.get("default")
-
-    if not ws.project_path:
-        default_dir = os.path.join(os.getcwd(), "default")
-        os.makedirs(default_dir, exist_ok=True)
-        ws.update_project_path(default_dir)
-
-    chat.switch_session_base(ws.ws_dir / "web_sessions", "default")
-
-    store = MemoryStore(ws.ws_dir / "memory_data")
-    ctx = ContextBuilder(DATA_DIR)
-    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
-    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
-    chat.set_system_prompt(system_prompt)
     yield
     shutdown_mcp()
 

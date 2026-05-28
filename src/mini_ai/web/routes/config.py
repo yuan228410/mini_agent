@@ -1,18 +1,30 @@
 """状态配置接口"""
+import time
+
 from fastapi import APIRouter, Query
 
 from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config
-from .chat import _get_or_create_session, _DEFAULT_SESSION, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE
+from ...logger import logger
+from .chat import _get_or_create_session, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE
 
 router = APIRouter()
 
 @router.get("/config")
-async def get_config(session_id: str = Query(default=_DEFAULT_SESSION), username: str = Query(default="default")):
-    _, messages = _get_or_create_session(username, session_id, workspace=None)
-    usage = _LAST_USAGE.get(f"{username}:{session_id}", {"prompt_tokens": 0, "completion_tokens": 0})
-    model_name = _SESSION_MODELS.get(f"{username}:{session_id}")
+async def get_config(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")):
+    _t0 = time.time()
+    if not username:
+        return {"error": "缺少 username"}
+    if not session_id:
+        session_id = "default"
+    ws = workspace or None
+    from .chat import _cache_key
+    cache_key = _cache_key(username, ws, session_id)
+    _, messages = _get_or_create_session(username, session_id, workspace=ws)
+    usage = _LAST_USAGE.get(cache_key, {"prompt_tokens": 0, "completion_tokens": 0})
+    model_name = _SESSION_MODELS.get(cache_key)
     model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+    logger.info(f"[perf] get_config sid={session_id} ws={workspace} time={time.time()-_t0:.3f}s")
     return {
         "version": __version__,
         "model": model_cfg.get("model", "?"),

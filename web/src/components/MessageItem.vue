@@ -48,7 +48,10 @@ const timeLabel = computed(() => {
 
 <template>
   <div class="message" :class="{ 'message--user': isUser, 'message--assistant': !isUser }">
-    <div class="message-label">{{ label }}<span v-if="timeLabel" class="message-time">{{ timeLabel }}</span></div>
+    <div class="message-row">
+      <span class="message-label">{{ label }}</span>
+      <span v-if="timeLabel" class="message-time">{{ timeLabel }}</span>
+    </div>
     <ThinkingBlock v-if="message.thinking" :thinking="message.thinking" />
     <ToolCallBlock v-for="(tool, i) in message.tools" :key="i" :tool="tool" />
     <div v-if="message.content" class="message-body" v-html="renderedContent"></div>
@@ -58,10 +61,11 @@ const timeLabel = computed(() => {
 
 <style scoped>
 .message {
-  padding: 1.2rem 0;
+  padding: 0.15rem 0;
   border-bottom: 0.5px solid var(--border-light);
   animation: fadeInUp 0.3s ease forwards;
 }
+
 
 .message:last-child {
   border-bottom: none;
@@ -71,36 +75,46 @@ const timeLabel = computed(() => {
   text-align: right;
 }
 
+.message--user .message-row {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.message--assistant .message-row {
+  color: #5b8a5e;
+  font-weight: 500;
+}
+
 .message--user .message-time {
-  font-weight: 400;
-  font-size: 0.7rem;
-  margin-left: 0.5rem;
-  color: var(--fg-muted);
-  opacity: 0.6;
+  color: #c97a22;
+  opacity: 0.7;
+}
+
+.message--assistant .message-time {
+  color: #6a9e6d;
+  opacity: 0.8;
+}
+
+.message-row {
+  display: inline;
+  font-size: 0.65rem;
+  line-height: 1;
+  color: var(--fg-dim);
 }
 
 .message-label {
-  justify-content: flex-end;
+  font-weight: 500;
 }
 
 .message-time {
   font-weight: 400;
-  font-size: 0.7rem;
-  margin-left: 0.5rem;
+  margin-left: 0.3rem;
   color: var(--fg-muted);
   opacity: 0.6;
 }
 
-.message-label {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.75rem;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--fg-dim);
-  margin-bottom: 0.4rem;
+.message-body {
+  margin-top: 0.1rem;
 }
 
 .message-body {
@@ -125,7 +139,7 @@ const timeLabel = computed(() => {
 .message-body :deep(h3) { font-size: 1.1rem; }
 
 .message-body :deep(p) {
-  margin-bottom: 0.8em;
+  margin-bottom: 0.4em;
 }
 
 .message-body :deep(p:last-child) {

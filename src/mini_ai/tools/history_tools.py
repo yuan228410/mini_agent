@@ -1,13 +1,21 @@
 """历史搜索工具 — 跨会话全文检索"""
+import threading
+
 from ..logger import logger
 
-_history_db = None
+_history_db = threading.local()
 
 
 def configure(history_db=None):
-    global _history_db
     if history_db is not None:
-        _history_db = history_db
+        _history_db.store = history_db
+
+
+def _get_db():
+    try:
+        return _history_db.store
+    except AttributeError:
+        return None
 
 
 _search_def = {
@@ -33,7 +41,8 @@ _search_def = {
 
 
 def _search_exec(args: dict) -> str:
-    if not _history_db:
+    db = _get_db()
+    if not db:
         return "Error: 历史数据库未初始化"
 
     keyword = args.get("keyword", "")
@@ -45,7 +54,7 @@ def _search_exec(args: dict) -> str:
     except (TypeError, ValueError):
         limit = 20
 
-    results = _history_db.search(keyword, date_from=date_from, date_to=date_to, limit=limit)
+    results = db.search(keyword, date_from=date_from, date_to=date_to, limit=limit)
 
     if not results:
         return f"未找到包含 '{keyword}' 的历史记录"
@@ -114,14 +123,15 @@ _manage_def = {
 }
 
 def _manage_exec(args: dict) -> str:
-    if not _history_db:
+    db = _get_db()
+    if not db:
         return "Error: 历史数据库未初始化"
 
     action = args.get("action", "list")
     confirmed = args.get("confirmed", False)
 
     if action == "list":
-        msgs = _history_db.list_for_review()
+        msgs = db.list_for_review()
         if not msgs:
             return "没有历史消息"
         lines = [f"共 {len(msgs)} 条消息："]
@@ -137,7 +147,7 @@ def _manage_exec(args: dict) -> str:
             keep_count = int(keep_count)
         except (TypeError, ValueError):
             return "keep_count 必须是整数"
-        msgs = _history_db.list_for_review()
+        msgs = db.list_for_review()
         total = len(msgs)
         if total <= keep_count:
             return f"当前 {total} 条消息，无需清理（保留 {keep_count} 条）"
@@ -155,7 +165,7 @@ def _manage_exec(args: dict) -> str:
         remaining = to_delete
         while remaining > 0:
             batch = min(batch_size, remaining)
-            _history_db.delete_before(keep_count + remaining - batch)
+            db.delete_before(keep_count + remaining - batch)
             total_deleted += batch
             remaining -= batch
         return f"已删除 {total_deleted} 条旧消息，保留最近 {keep_count} 条"
@@ -164,12 +174,12 @@ def _manage_exec(args: dict) -> str:
         keyword = args.get("keyword", "")
         if not keyword:
             return "请指定 keyword 参数"
-        results = _history_db.search(keyword, limit=100)
+        results = db.search(keyword, limit=100)
         if not results:
             return f"未找到包含 '{keyword}' 的消息"
         ids = [r["id"] for r in results if "id" in r]
         if not ids:
-            search_by_kw = _history_db.list_for_review()
+            search_by_kw = db.list_for_review()
             ids = [m["id"] for m in search_by_kw if keyword.lower() in m["content"].lower()]
             results = [{"id": m["id"], "role": m["role"], "content": m["content"][:60]} for m in search_by_kw if keyword.lower() in m["content"].lower()]
         if not ids:
@@ -183,11 +193,11 @@ def _manage_exec(args: dict) -> str:
                 lines.append(f"  ... 还有 {len(ids) - 5} 条")
             lines.append("请用 confirmed=true 确认执行")
             return "\n".join(lines)
-        deleted = _history_db.delete_by_ids(ids)
+        deleted = db.delete_by_ids(ids)
         return f"已删除 {deleted} 条包含 '{keyword}' 的消息"
 
     if action == "delete_all":
-        msgs = _history_db.list_for_review()
+        msgs = db.list_for_review()
         total = len(msgs)
         if total == 0:
             return "没有历史消息需要删除"
@@ -196,11 +206,11 @@ def _manage_exec(args: dict) -> str:
         batch_size = args.get("batch_size", 200)
         total_deleted = 0
         while True:
-            msgs = _history_db.list_for_review()
+            msgs = db.list_for_review()
             if not msgs:
                 break
             batch_ids = [m["id"] for m in msgs[:batch_size]]
-            _history_db.delete_by_ids(batch_ids)
+            db.delete_by_ids(batch_ids)
             total_deleted += len(batch_ids)
             if len(msgs) <= batch_size:
                 break
