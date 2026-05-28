@@ -96,7 +96,7 @@ src/mini_ai/            # 包源码
 - **依赖注入**：工具模块通过 `configure(**kwargs)` 注入外部依赖，避免模块级可变赋值
 - **终端 UI**：`cli/display.py` 统一管理所有终端输出，main.py 不直接 print；流式先纯文本后重渲 Markdown；思维链/工具调用/命令补全均由 display 层处理；状态栏每轮对话后右对齐显示模型/上下文/token 信息
 - **项目规范自动加载**：`context.py` 自动读取当前目录的 `CLAUDE.md` 或 `AGENTS.md`（优先前者），注入系统提示词
-- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WebSocket 模式（支持中断生成）。多用户认证（用户名 + localStorage），`user_data_dir()` 按用户隔离数据根目录。多会话并行（`_SESSIONS` 两级字典 username→session_id，`_SESSION_LOCKS` per-session 串行），左侧 SessionSidebar + 右侧 TodosPanel 三栏布局。Per-session 记忆/压缩/搜索：MemoryStore + HistoryDB + Compactor 按会话隔离，项目规范 per-workspace 共享。消息持久化到 HistoryDB（SQLite），重启自动恢复。流式重试（429 等错误自动重试 3 次），工具参数安全（缺参返回错误而非异常），日志级别可配置（`logging.level`/`logging.file_level`），状态栏实时更新 token/上下文信息，多轮 LLM 输出按序独立消息显示，计划模式（/plan /act）。在线配置面板（模型参数/thinking/显示/运行/MCP等），模型增删管理（OpenAI/Anthropic 两种协议），MCP 服务器增删管理（stdio/streamable_http），工作空间恢复/彻底删除，消息时间戳（本地时区精确到秒）。thinking 配置支持全局默认 + 模型级覆盖。SSE 已移除，仅 WebSocket 模式
+- **Web 界面**：`mini-ai --web` 启动 FastAPI + Vue 3 前端，WebSocket 模式（支持中断生成）。多用户认证（用户名 + localStorage），`user_data_dir()` 按用户隔离数据根目录。多会话并行（`_SESSIONS` 两级字典 username→session_id，`_SESSION_LOCKS` per-session 串行），左侧 SessionSidebar + 右侧 TodosPanel 三栏布局。Per-session 记忆/压缩/搜索：MemoryStore + HistoryDB + Compactor 按会话隔离，项目规范 per-workspace 共享。消息持久化到 HistoryDB（SQLite），重启自动恢复。流式重试（429 等错误自动重试 3 次），工具参数安全（缺参返回错误而非异常），日志级别可配置（`logging.level`/`logging.file_level`），状态栏实时更新 token/上下文信息，多轮 LLM 输出按序独立消息显示，计划模式（/plan /act）。在线配置面板（模型参数/thinking/显示/运行/MCP等），模型增删管理（OpenAI/Anthropic 两种协议），MCP 服务器增删管理（stdio/streamable_http），工作空间恢复/彻底删除，消息时间戳（本地时区精确到秒）。thinking 配置支持全局默认 + 模型级覆盖。
 
 ## 行为规则
 

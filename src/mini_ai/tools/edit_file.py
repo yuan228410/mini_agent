@@ -7,10 +7,7 @@ definition = {
     "type": "function",
     "function": {
         "name": "edit_file",
-        "description": (
-            "对文件进行部分编辑（搜索替换），无需重写整个文件。"
-            "找到 old_string 并替换为 new_string。如果 old_string 出现多次，只替换第一个。"
-        ),
+        "description": "对文件进行部分编辑（搜索替换），无需重写整个文件。找到 old_string 替换为 new_string，只替换第一个匹配。",
         "parameters": {
             "type": "object",
             "properties": {

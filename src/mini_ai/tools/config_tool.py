@@ -115,7 +115,7 @@ def _build_self_overview() -> str:
         lines.append(f"MCP 工具 ({len(mcp_tools)}): {', '.join(mcp_tools)}")
     lines.append(f"配置文件: {DATA_DIR}/config.yaml")
     lines.append(f"源码目录: {PACKAGE_DIR}")
-    lines.append(f"项目文档: {PACKAGE_DIR.parent.parent}/README.md, {PACKAGE_DIR.parent.parent}/WEB.md, {PACKAGE_DIR.parent.parent}/DESIGN.md")
+    lines.append(f"项目文档: {PACKAGE_DIR.parent.parent}/docs/, {PACKAGE_DIR.parent.parent}/WEB.md")
     lines.append(f"配置示例: {PACKAGE_DIR}/config.example.yaml（包含所有配置项及详细说明）")
     lines.append("可用 read_file 读取源码/文档，可用 config 工具读取/修改配置")
     return "\n".join(lines)

@@ -119,13 +119,11 @@ class TeammateManager:
         set_caller(name)
 
         system_prompt = (
-            f"你是 agent team 中的固定队友，名叫 {name}，职司是 {role}。\n"
+            f"你是 agent team 中的队友，名叫 {name}，职司 {role}。\n"
             f"工作区：{self.project_dir}。\n"
-            "可用工具：run_command、web_fetch、load_skill、send_message、list_teammates、"
-            "blackboard_read、blackboard_write、blackboard_list。\n"
-            "收到 inbox 任务后独立完成，完成后用 send_message 回禀 lead。\n"
-            "你可以通过 send_message 与其他队友直接通信协作。\n"
-            "用 blackboard_write 保存重要结果供其他 agent 读取，用 blackboard_read 获取他人成果。\n"
+            "收到任务后独立完成，完成后用 send_message 回禀 lead。\n"
+            "可通过 send_message 与其他队友直接通信协作。\n"
+            "用 blackboard_write 保存结果供他人读取，用 blackboard_read 获取他人成果。\n"
         )
 
         tool_names = list(_BASE_TOOL_NAMES) + [

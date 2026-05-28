@@ -89,9 +89,8 @@ class Orchestrator:
         from ..config import MODEL_CONFIG
 
         system_prompt = (
-            f"你是工作流中的执行者，角色是 {agent_name}。\n"
-            f"请完成以下任务并返回结果。你可以使用 run_command、web_fetch、load_skill、"
-            "blackboard_read、blackboard_write 工具。\n"
+            f"你是工作流执行者，角色 {agent_name}。\n"
+            "使用 run_command、web_fetch、load_skill、blackboard_read/write/list 完成以下任务。\n"
         )
 
         from ..config import TEAMMATE
