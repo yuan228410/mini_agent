@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
 from ..logger import logger
-from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool
+from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 
 _MAX_RESULT_CHARS = TOOL["max_result_chars"]
 
@@ -46,6 +46,8 @@ class ToolRegistry:
             definition=dispatch_subagent.build_definition(subagent_list),
         )
         self.add_tools(dispatch_subagent)
+        register_subagent.configure(loader=subagent_loader)
+        self.add_tools(register_subagent)
 
     def register_team(self, bus, manager):
         from . import team_tools

@@ -1,4 +1,4 @@
-"""子代理调度工具"""
+"""子代理调度工具 — 支持 inputs 参数链式传递结果"""
 import copy
 
 from ..logger import logger
@@ -30,6 +30,11 @@ _BASE_DEFINITION = {
             "properties": {
                 "type": {"type": "string", "description": "子代理类型"},
                 "task": {"type": "string", "description": "委派给子代理的任务描述"},
+                "inputs": {
+                    "type": "object",
+                    "description": "可选：前置结果引用，key 为引用名称，value 为前置任务的结果文本。在 task 中用 {key} 引用",
+                    "additionalProperties": {"type": "string"},
+                },
             },
             "required": ["type", "task"],
         },
@@ -40,10 +45,12 @@ definition = copy.deepcopy(_BASE_DEFINITION)
 
 
 def build_definition(subagent_list: str) -> dict:
+    global definition
     d = copy.deepcopy(_BASE_DEFINITION)
     d["function"]["description"] = d["function"]["description"].format(
         subagent_list=subagent_list
     )
+    definition = d
     return d
 
 
@@ -56,7 +63,18 @@ def execute(args: dict) -> str:
         return f"未知子代理类型 '{args['type']}'，可用：{names}"
 
     task = args.get("task", "")
-    logger.info(f"[派遣→] {spec['name']}: {task}")
+    inputs = args.get("inputs") or {}
+
+    # 替换 task 中的 {key} 占位符为 inputs 中对应的值
+    if inputs:
+        for key, value in inputs.items():
+            placeholder = "{" + key + "}"
+            if placeholder in task:
+                task = task.replace(placeholder, value)
+
+    logger.info(f"[派遣→] {spec['name']}: {task[:200]}")
+    if inputs:
+        logger.info(f"[派遣→] inputs: {list(inputs.keys())}")
 
     messages = [
         {"role": "system", "content": spec["system_prompt"]},

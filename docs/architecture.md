@@ -163,7 +163,8 @@ models:
 | `load_skill` | 加载技能内容 |
 | `install_skill` | 安装技能（压缩包 URL/本地路径 或 内联内容） |
 | `update_todos` | 任务规划与状态跟踪 |
-| `dispatch_subagent` | 派遣子代理执行任务 |
+| `dispatch_subagent` | 派遣子代理执行任务，支持 inputs 参数链式传递 |
+| `register_subagent` | 对话中动态创建并注册新的子代理类型 |
 | `remember` | 主动写入长期记忆 |
 | `recall` | 检索长期记忆 |
 | `forget` | 删除过期记忆 |
@@ -525,7 +526,10 @@ def run_tool_loop(
 │   └── subagents/             # 子代理定义
 │       ├── __init__.py        # SubagentLoader
 │       ├── coder.md           # 代码工程师
-│       └── researcher.md      # 信息检索员
+│       ├── planner.md         # 方案设计师
+│       ├── researcher.md      # 信息检索员
+│       ├── reviewer.md        # 代码审查员
+│       └── tester.md          # 测试工程师
 └── ~/.mini_ai/                # 运行时数据目录
     ├── config.yaml            # 用户配置
     ├── skills/                # 用户技能

@@ -19,9 +19,13 @@ class SubagentLoader:
     """
 
     def __init__(self, subagents_dir: Path):
-        self.subagents_dir = Path(subagents_dir)
+        self._dir = Path(subagents_dir)
         self.specs: dict[str, dict] = {}
         self._load_all()
+
+    @property
+    def subagents_dir(self) -> Path:
+        return self._dir
 
     def _load_all(self):
         if not self.subagents_dir.exists():

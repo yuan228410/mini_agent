@@ -27,9 +27,9 @@ uv run mini-ai --web
 | 特性 | 说明 | 文档 |
 |------|------|------|
 | 🔀 **多模型切换** | OpenAI / Anthropic 双协议，运行时 `/model` 一键切换，立即生效 | [架构设计 → 多模型](docs/architecture.md#多模型支持) |
-| ⚙️ **工具系统** | 22+ 内置工具，ToolRegistry 统一注册/分发，支持并行执行和结果截断 | [架构设计 → 工具系统](docs/architecture.md#工具系统) |
+| ⚙️ **工具系统** | 25+ 内置工具，ToolRegistry 统一注册/分发，支持并行执行和结果截断 | [架构设计 → 工具系统](docs/architecture.md#工具系统) |
 | 🧠 **记忆系统** | 四层存储：对话历史 → 情景 → 长期 → 画像，自动压缩归档不丢失 | [记忆系统](docs/memory-system.md) |
-| 🤝 **多 Agent 协作** | 子代理（一次性并行）+ 队友（持久角色）+ DAG 工作流编排 | [多 Agent 编排](docs/team-collaboration.md) |
+| 🤝 **多 Agent 协作** | 5 种子代理（coder/researcher/reviewer/tester/planner）+ 队友 + DAG 工作流编排，支持动态注册和链式传递 | [多 Agent 编排](docs/team-collaboration.md) |
 | 🌐 **MCP 协议** | 支持 stdio/streamable_http 连接 MCP 服务器，工具自动注册 | [架构设计 → MCP](docs/architecture.md#mcp-协议支持) |
 | 📋 **计划模式** | `/plan` 只规划不执行，`/act` 切回执行模式，支持审批配置 | [架构设计 → 计划模式](docs/architecture.md#计划模式) |
 | 🖥️ **双模式** | CLI（Rich + prompt-toolkit）和 Web（FastAPI + Vue 3）同一套后端 | [架构设计 → 终端 UI](docs/architecture.md#终端-ui) / [WEB.md](WEB.md) |

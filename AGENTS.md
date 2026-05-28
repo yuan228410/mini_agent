@@ -50,7 +50,7 @@ src/mini_ai/            # 包源码
     update_todos.py / list_skills.py / load_skill.py / install_skill.py
     config.py / manage_history.py
     mcp_loader.py           #     MCP 客户端（MCPLoader + MCPConnection + _MCPToolModule）
-  subagents/              #   子代理定义（coder.md, researcher.md）
+  subagents/              #   子代理定义（coder.md, researcher.md, reviewer.md, tester.md, planner.md）
   web/                    #   Web 界面子包
     app.py                 #     FastAPI 应用 + lifespan
     display.py             #     Web Display 适配器
