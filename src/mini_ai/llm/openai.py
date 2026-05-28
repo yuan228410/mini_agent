@@ -162,7 +162,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         from .anthropic import chat_stream as anth_stream
         yield from anth_stream(messages, tools, ctx=ctx)
         return
-    payload = {"model": get_model(ctx), "messages": messages, "stream": True}
+    payload = {"model": get_model(ctx), "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
     _apply_model_params(payload, ctx)
     tool_names = None
     if tools is True:

@@ -26,15 +26,15 @@ uv run mini-ai --web
 
 | 特性 | 说明 | 文档 |
 |------|------|------|
-| 🔀 **多模型切换** | OpenAI / Anthropic 双协议，运行时 `/model` 一键切换，立即生效 | [架构设计 → 多模型](docs/architecture.md#多模型支持) |
-| ⚙️ **工具系统** | 25+ 内置工具，ToolRegistry 统一注册/分发，支持并行执行和结果截断 | [架构设计 → 工具系统](docs/architecture.md#工具系统) |
+| 🔀 **多模型切换** | OpenAI / Anthropic 双协议，运行时 `/model` 一键切换，立即生效 | [架构设计](docs/architecture.md) |
+| ⚙️ **工具系统** | 25+ 内置工具，ToolRegistry 统一注册/分发，并行执行和结果截断 | [工具系统](docs/tools.md) |
 | 🧠 **记忆系统** | 四层存储：对话历史 → 情景 → 长期 → 画像，自动压缩归档不丢失 | [记忆系统](docs/memory-system.md) |
-| 🤝 **多 Agent 协作** | 5 种子代理（coder/researcher/reviewer/tester/planner）+ 队友 + DAG 工作流编排，支持动态注册和链式传递 | [多 Agent 编排](docs/team-collaboration.md) |
-| 🌐 **MCP 协议** | 支持 stdio/streamable_http 连接 MCP 服务器，工具自动注册 | [架构设计 → MCP](docs/architecture.md#mcp-协议支持) |
-| 📋 **计划模式** | `/plan` 只规划不执行，`/act` 切回执行模式，支持审批配置 | [架构设计 → 计划模式](docs/architecture.md#计划模式) |
-| 🖥️ **双模式** | CLI（Rich + prompt-toolkit）和 Web（FastAPI + Vue 3）同一套后端，支持批量会话管理 | [架构设计 → 终端 UI](docs/architecture.md#终端-ui) / [WEB.md](WEB.md) |
-| 📁 **工作空间** | 按项目隔离记忆/会话/历史，CLI 自动绑定 CWD，Web 面板管理 | [架构设计 → 工作空间](docs/architecture.md#工作空间) |
-| 🎭 **自定义人设** | 编辑 `character/SOUL.md` 和 `RULES.md` 即可改变 Agent 角色 | [架构设计 → 自定义人设](docs/architecture.md#自定义-agent-人设) |
+| 🤝 **多 Agent 协作** | 5 种子代理 + 队友 + DAG 工作流，支持动态注册和链式传递 | [多 Agent 编排](docs/team-collaboration.md) |
+| 🌐 **MCP 协议** | stdio/streamable_http 连接 MCP 服务器，工具自动注册 | [架构设计](docs/architecture.md) |
+| 📋 **计划模式** | `/plan` 规划，`/act` 执行，支持审批配置 | [CLI 命令](docs/cli-commands.md) |
+| 🖥️ **双模式** | CLI（Rich）和 Web（FastAPI + Vue 3）同一套后端 | [Web 界面](docs/web-interface.md) |
+| 📁 **工作空间** | 按项目隔离记忆/会话/历史，CLI 自动绑定 CWD | [CLI 命令](docs/cli-commands.md#工作空间) |
+| 🎭 **自定义人设** | 编辑 `SOUL.md` / `RULES.md` 改变 Agent 角色 | [架构设计](docs/architecture.md) |
 
 ## 项目结构
 
@@ -66,9 +66,11 @@ src/mini_ai/
 
 | 文档 | 内容 |
 |------|------|
-| [docs/architecture.md](docs/architecture.md) | 主循环、工具系统、终端 UI、日志、技能、MCP 等 |
-| [docs/memory-system.md](docs/memory-system.md) | 四层存储、压缩策略、会话管理 |
-| [docs/team-collaboration.md](docs/team-collaboration.md) | 子代理、队友、DAG 工作流编排 |
+| [docs/architecture.md](docs/architecture.md) | 主循环、多模型、上下文组装、工作空间、设计原则 |
+| [docs/tools.md](docs/tools.md) | 25+ 内置工具详解、注册模式、并行机制、工具白名单 |
+| [docs/cli-commands.md](docs/cli-commands.md) | CLI 斜杠命令完整参考（会话/模型/技能/工作空间等） |
+| [docs/memory-system.md](docs/memory-system.md) | 四层存储、压缩策略、会话管理、主动记忆工具 |
+| [docs/team-collaboration.md](docs/team-collaboration.md) | 子代理、队友、DAG 工作流编排、共享黑板 |
 | [docs/configuration.md](docs/configuration.md) | 所有配置项详细参考 |
 | [docs/quick-start.md](docs/quick-start.md) | 安装、配置、运行指南 |
-| [WEB.md](WEB.md) | Web 界面设计、API 接口、前端组件 |
+| [docs/web-interface.md](docs/web-interface.md) | Web 界面设计、API 接口、前端组件 |

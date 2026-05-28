@@ -116,3 +116,7 @@ def execute(args: dict) -> str:
 
     result = _store.update(todos)
     return result
+
+def cleanup_session(sid: str):
+    with _stores_lock:
+        _stores.pop(sid, None)

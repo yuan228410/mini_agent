@@ -18,6 +18,26 @@ class ContextBuilder:
         self.project_dir = Path(project_dir)
         from .config import PACKAGE_DIR
         self.character_dir = PACKAGE_DIR / "character"
+        self._file_cache: dict[str, tuple[float, str]] = {}
+
+    def _read_cached(self, path: Path) -> str | None:
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            self._file_cache.pop(str(path), None)
+            return None
+        cached = self._file_cache.get(str(path))
+        if cached and cached[0] == mtime:
+            return cached[1]
+        if not path.exists():
+            self._file_cache.pop(str(path), None)
+            return None
+        text = path.read_text(encoding="utf-8").strip() or None
+        if text is not None:
+            self._file_cache[str(path)] = (mtime, text)
+        else:
+            self._file_cache.pop(str(path), None)
+        return text
 
     def build(self, memory_store=None, skill_loader=None, project_path: str = "") -> str:
         parts = []
@@ -61,14 +81,11 @@ class ContextBuilder:
         for d in search_dirs:
             for name in ("CLAUDE.md", "AGENTS.md"):
                 path = d / name
-                if path.exists():
-                    text = path.read_text(encoding="utf-8").strip()
-                    if text:
-                        return f"## {name}\n\n{text}"
+                text = self._read_cached(path)
+                if text:
+                    return f"## {name}\n\n{text}"
         return None
 
     def _read_doc(self, name: str) -> str | None:
         path = self.character_dir / name
-        if path.exists():
-            return path.read_text(encoding="utf-8").strip()
-        return None
+        return self._read_cached(path)

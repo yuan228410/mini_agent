@@ -47,7 +47,6 @@ class MessageBus:
 
         logger.info(f"[MSG→] {sender} -> {to} ({msg_type})")
         logger.debug(f"[MSG详情] {sender} -> {to}: {content}")
-        print(f"📨 {sender} -> {to} ({msg_type})")
         msg = {
             "type": msg_type, "from": sender,
             "content": content, "timestamp": time.time()

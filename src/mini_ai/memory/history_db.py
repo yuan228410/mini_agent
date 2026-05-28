@@ -141,10 +141,6 @@ class HistoryDB:
         """删除指定会话的所有消息"""
         with self._lock:
             with self._conn:
-                cur = self._conn.execute(
-                    "DELETE FROM messages WHERE workspace=? AND session_id=?",
-                    (self.workspace, session_id),
-                )
                 try:
                     self._conn.execute(
                         "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=? AND session_id=?)",
@@ -152,16 +148,33 @@ class HistoryDB:
                     )
                 except Exception:
                     pass
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=? AND session_id=?",
+                    (self.workspace, session_id),
+                )
         logger.info(f"[HistoryDB] 删除会话 '{session_id}' 的 {cur.rowcount} 条消息")
         return cur.rowcount
 
     def delete_before(self, keep_count: int):
         """保留最近 N 条消息，删除其余"""
+        if keep_count <= 0:
+            with self._lock:
+                with self._conn:
+                    cur = self._conn.execute(
+                        "DELETE FROM messages WHERE workspace=? AND archived=0",
+                        (self.workspace,),
+                    )
+                    try:
+                        self._conn.execute("DELETE FROM messages_fts")
+                    except Exception:
+                        pass
+            logger.info(f"[HistoryDB] 删除所有消息: {cur.rowcount} 条")
+            return cur.rowcount
         with self._lock:
             with self._conn:
                 row = self._conn.execute(
                     "SELECT id FROM messages WHERE workspace=? AND archived=0 ORDER BY id DESC LIMIT 1 OFFSET ?",
-                    (self.workspace, keep_count),
+                    (self.workspace, keep_count - 1),
                 ).fetchone()
                 if not row:
                     return 0

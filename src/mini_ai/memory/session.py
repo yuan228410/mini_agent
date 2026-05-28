@@ -27,7 +27,14 @@ class SessionManager:
         for m in messages:
             if m["role"] == "system":
                 continue
-            rows.append({"ts": ts, "role": m["role"], "content": m.get("content")})
+            row = {"ts": ts, "role": m["role"], "content": m.get("content")}
+            if m.get("tool_calls"):
+                row["tool_calls"] = m["tool_calls"]
+            if m.get("thinking"):
+                row["thinking"] = m["thinking"]
+            if m.get("timestamp"):
+                row["timestamp"] = m["timestamp"]
+            rows.append(row)
             ts = None
 
         path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")

@@ -96,7 +96,7 @@ class Compactor:
     def __init__(self, memory_store: MemoryStore, *,
                  keep_recent: int = 50, char_threshold: int = 20000,
                  context_usage_threshold: float = 0.8, context_length: int = 128000,
-                 context_builder=None, skill_loader=None, history_db=None):
+                 context_builder=None, skill_loader=None, history_db=None, project_path=""):
         self.memory = memory_store
         self.keep_recent = keep_recent
         self.char_threshold = char_threshold
@@ -105,6 +105,7 @@ class Compactor:
         self.context_builder = context_builder
         self.skill_loader = skill_loader
         self.history_db = history_db
+        self.project_path = project_path
 
     def should_compact(self, prompt_tokens: int) -> bool:
         if prompt_tokens <= 0:
@@ -177,6 +178,7 @@ class Compactor:
             new_messages[0]["content"] = self.context_builder.build(
                 memory_store=self.memory,
                 skill_loader=self.skill_loader,
+                project_path=self.project_path,
             )
 
         logger.info(f"[压缩←] {len(old_rounds)} 轮摘要，保留 {len(recent_rounds)} 轮完整")
@@ -205,11 +207,6 @@ class Compactor:
         keep = 0
         total_chars = 0
         for rnd in reversed(rounds):
-            if _is_chitchat_round(rnd):
-                keep += 1
-                if keep >= len(rounds) - 1:
-                    break
-                continue
             rnd_chars = len(rnd["user_msg"].get("content") or "")
             for msg in rnd["execution"]:
                 rnd_chars += len(msg.get("content") or "")

@@ -1,21 +1,18 @@
 """历史搜索工具 — 跨会话全文检索"""
-import threading
+import contextvars
 
 from ..logger import logger
 
-_history_db = threading.local()
+_history_db = contextvars.ContextVar("history_db", default=None)
 
 
 def configure(history_db=None):
     if history_db is not None:
-        _history_db.store = history_db
+        _history_db.set(history_db)
 
 
 def _get_db():
-    try:
-        return _history_db.store
-    except AttributeError:
-        return None
+    return _history_db.get()
 
 
 _search_def = {
@@ -161,27 +158,21 @@ def _manage_exec(args: dict) -> str:
                 lines.append(f"  [{m['id']}] {m['role']}: {content}")
             lines.append("... 请用 confirmed=true 确认执行")
             return "\n".join(lines)
-        total_deleted = 0
-        remaining = to_delete
-        while remaining > 0:
-            batch = min(batch_size, remaining)
-            db.delete_before(keep_count + remaining - batch)
-            total_deleted += batch
-            remaining -= batch
+        total_deleted = db.delete_before(keep_count)
         return f"已删除 {total_deleted} 条旧消息，保留最近 {keep_count} 条"
 
     if action == "delete_keyword":
         keyword = args.get("keyword", "")
         if not keyword:
             return "请指定 keyword 参数"
-        results = db.search(keyword, limit=100)
+        results = db.search(keyword, limit=1000)
         if not results:
             return f"未找到包含 '{keyword}' 的消息"
         ids = [r["id"] for r in results if "id" in r]
         if not ids:
-            search_by_kw = db.list_for_review()
-            ids = [m["id"] for m in search_by_kw if keyword.lower() in m["content"].lower()]
-            results = [{"id": m["id"], "role": m["role"], "content": m["content"][:60]} for m in search_by_kw if keyword.lower() in m["content"].lower()]
+            all_msgs = db.list_for_review(limit=1000)
+            ids = [m["id"] for m in all_msgs if keyword.lower() in m["content"].lower()]
+            results = [{"id": m["id"], "role": m["role"], "content": m["content"][:60]} for m in all_msgs if keyword.lower() in m["content"].lower()]
         if not ids:
             return f"未找到包含 '{keyword}' 的消息"
         if not confirmed:

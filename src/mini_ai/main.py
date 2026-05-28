@@ -1,3 +1,4 @@
+import json
 import argparse
 import threading
 from pathlib import Path
@@ -175,6 +176,7 @@ def main():
         context_builder=ctx,
         skill_loader=SKILL_LOADER,
         history_db=history_db,
+        project_path=str(Path.cwd()),
     )
 
     cmd = CommandHandler(
@@ -201,6 +203,23 @@ def main():
         system_prompt_chars=len(messages[0]["content"]) if messages else 0,
         history_count=len(unarchived),
     )
+
+    def _flush_deferred(history_db, messages, deferred_list):
+        tool_results_map = {m.get("name", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
+        for am in deferred_list:
+            enriched_tcs = []
+            for tc in am.get("tool_calls", []):
+                tc_copy = {k: v for k, v in tc.items()}
+                fn_name = tc.get("function", {}).get("name", "")
+                if fn_name and fn_name in tool_results_map:
+                    tc_copy["_result"] = tool_results_map[fn_name][:2000]
+                enriched_tcs.append(tc_copy)
+            am_meta = {}
+            if am.get("thinking"):
+                am_meta["thinking"] = am["thinking"]
+            am_meta["tool_calls"] = enriched_tcs
+            history_db.append("assistant", am.get("content") or "", metadata=json.dumps(am_meta))
+        deferred_list.clear()
 
     while True:
         user_input = disp.user_input(plan_mode=cmd.plan_mode).strip()
@@ -233,19 +252,36 @@ def main():
 
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         messages.append({"role": "user", "content": user_input, "timestamp": ts})
-        history_db.append("user", user_input)
+        history_db.append("user", user_input, metadata=json.dumps({"timestamp": ts}))
         disp.user_label(ts)
 
         try:
             reset_usage()
             tools = [] if cmd.plan_mode else _lead_tool_defs()
+
+            _cli_deferred_assistant = []
+
+            def _persist(m):
+                if m["role"] == "tool":
+                    history_db.append("tool", m.get("content", ""), metadata=json.dumps({"name": m.get("name", ""), "tool_call_id": m.get("tool_call_id", "")}))
+                elif m["role"] == "assistant":
+                    if m.get("tool_calls"):
+                        _cli_deferred_assistant.append(m)
+                    else:
+                        meta = {}
+                        if m.get("thinking"):
+                            meta["thinking"] = m["thinking"]
+                        history_db.append("assistant", m.get("content", ""), metadata=json.dumps(meta) if meta else "")
+
             msg, _ = run_tool_loop(
                 messages, tools,
                 streaming=STREAMING,
                 display=disp,
                 inject_fn=_inject_todos,
                 ctx=req_ctx,
+                persist_fn=_persist,
             )
+            _flush_deferred(history_db, messages, _cli_deferred_assistant)
 
             if cmd.plan_mode and msg and msg.get("content"):
                 if PLAN.get("approval", True):
@@ -260,7 +296,9 @@ def main():
                         display=disp,
                         inject_fn=_inject_todos,
                         ctx=req_ctx,
+                        persist_fn=_persist,
                     )
+                    _flush_deferred(history_db, messages, _cli_deferred_assistant)
                     if msg2 and msg2.get("content"):
                         msg = msg2
 
@@ -276,7 +314,6 @@ def main():
             if msg and msg.get("content"):
                 ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
                 messages.append({"role": "assistant", "content": msg["content"], "timestamp": ts2})
-                history_db.append("assistant", msg["content"])
 
             cleanup_inbox(bus)
 

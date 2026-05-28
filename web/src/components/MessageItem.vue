@@ -61,7 +61,7 @@ const timeLabel = computed(() => {
 
 <style scoped>
 .message {
-  padding: 0.15rem 0;
+  padding: 0.15rem 0 0.15rem 0;
   border-bottom: 0.5px solid var(--border-light);
   animation: fadeInUp 0.3s ease forwards;
 }
@@ -114,7 +114,7 @@ const timeLabel = computed(() => {
 }
 
 .message-body {
-  margin-top: 0.1rem;
+  margin-top: 0;
 }
 
 .message-body {

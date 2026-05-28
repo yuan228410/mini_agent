@@ -13,14 +13,16 @@ class MemoryStore:
     用户画像: USER.md
     """
 
-    def __init__(self, memory_dir: Path):
+    def __init__(self, memory_dir: Path, episode_dir: Path | None = None):
         self.memory_dir = Path(memory_dir)
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.user_file = self.memory_dir / "USER.md"
+        self._episode_dir = Path(episode_dir) if episode_dir else self.memory_dir
         self._ensure()
 
     def _ensure(self):
         self.memory_dir.mkdir(parents=True, exist_ok=True)
+        self._episode_dir.mkdir(parents=True, exist_ok=True)
         for f, default in [
             (self.memory_file, "# 长期记忆\n\n"),
             (self.user_file, "# 用户画像\n\n"),
@@ -30,7 +32,7 @@ class MemoryStore:
 
     # ── 情景层 ──
     def _today_path(self) -> Path:
-        return self.memory_dir / f"{datetime.now(_UTC8).strftime('%Y-%m-%d')}.md"
+        return self._episode_dir / f"{datetime.now(_UTC8).strftime('%Y-%m-%d')}.md"
 
     def read_today(self) -> str:
         p = self._today_path()

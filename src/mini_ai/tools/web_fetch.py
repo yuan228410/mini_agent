@@ -1,7 +1,8 @@
 """网页抓取工具"""
 import re
-import urllib.request
 from html.parser import HTMLParser
+
+import requests
 
 from ..config import TIMEOUTS
 from ..logger import logger
@@ -78,10 +79,10 @@ def execute(args: dict) -> str:
 
     logger.info(f"[抓取→] {url} mode={extract_mode}")
 
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUTS["web_fetch"]) as resp:
-            raw = resp.read().decode("utf-8", errors="replace")
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUTS["web_fetch"])
+        resp.raise_for_status()
+        raw = resp.text
     except Exception as e:
         logger.debug(f"[抓取✗] {url}: {e}")
         return f"Error fetching {url}: {e}"

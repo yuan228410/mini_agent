@@ -50,8 +50,10 @@ const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change', 
 let _unsubWs: (() => void) | null = null
 let _flushTimer: number | null = null
 let _scrollTimer: number | null = null
+let _isNearBottom = true
 const FLUSH_INTERVAL = 50
 const SCROLL_INTERVAL = 100
+const BOTTOM_THRESHOLD = 80
 
 function _state(sid: string): SessionState {
   const key = _cacheKey(sid, props.workspace)
@@ -100,10 +102,11 @@ function _doFlush() {
 }
 
 function _scheduleScroll() {
+  if (!_isNearBottom) return
   if (_scrollTimer !== null) return
   _scrollTimer = window.setTimeout(() => {
     _scrollTimer = null
-    scrollToBottom()
+    if (_isNearBottom) scrollToBottom()
   }, SCROLL_INTERVAL)
 }
 
@@ -371,6 +374,7 @@ async function sendMessage(text: string) {
 
   emit('status-change', sid, 'generating')
 
+  _isNearBottom = true
   await nextTick()
   scrollToBottom()
 
@@ -416,7 +420,14 @@ function useSkill(name: string) {
 function scrollToBottom() {
   if (chatContainer.value) {
     chatContainer.value.scrollTop = chatContainer.value.scrollHeight
+    _isNearBottom = true
   }
+}
+
+function _onChatScroll() {
+  const el = chatContainer.value
+  if (!el) return
+  _isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
 }
 
 async function switchToSession(sid: string, ws?: string) {
@@ -437,7 +448,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
 
 <template>
   <div class="chat-container">
-  <div class="chat-view" ref="chatContainer">
+  <div class="chat-view" ref="chatContainer" @scroll="_onChatScroll">
     <div class="messages" v-if="messages.length === 0">
       <div class="empty-state">
         <div class="empty-icon">m</div>
@@ -479,7 +490,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
 .chat-view {
   flex: 1;
   overflow-y: auto;
-  padding: 2rem 0;
+  padding: 0.5rem 0;
 }
 
 .messages {

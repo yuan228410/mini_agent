@@ -7,7 +7,7 @@ import requests
 from ..config import TIMEOUTS, THINKING as _GLOBAL_THINKING
 from .base import (
     get_api_url, get_api_key, get_model,
-    get_temperature, get_max_tokens, get_top_p,
+    get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, update_usage, get_session, ensure_session_anthropic,
 )
 from ..logger import logger
@@ -120,6 +120,10 @@ def _apply_model_params(payload: dict, ctx=None):
     top_p = get_top_p(ctx)
     if top_p is not None:
         payload["top_p"] = top_p
+    effort = get_reasoning_effort(ctx)
+    if effort and not _get_thinking(ctx).get("enabled"):
+        payload["thinking"] = {"type": "adaptive"}
+        payload["output_config"] = {"effort": effort}
 
 
 def chat(messages, tools=True, ctx=None):
@@ -141,6 +145,7 @@ def chat(messages, tools=True, ctx=None):
         else:
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         payload["max_tokens"] = budget + 4096
+        logger.debug(f"[Anth] thinking模式: max_tokens={budget + 4096}, temperature=1 (覆盖用户配置)")
         payload["temperature"] = 1
 
     if tools is True:
@@ -234,6 +239,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         else:
             payload["thinking"] = {"type": "enabled", "budget_tokens": budget}
         payload["max_tokens"] = budget + 4096
+        logger.debug(f"[Anth] thinking模式: max_tokens={budget + 4096}, temperature=1 (覆盖用户配置)")
         payload["temperature"] = 1
 
     if tools is True:
@@ -357,7 +363,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         us["prompt_tokens"] = est
     us.pop("_api_prompt", None)
     if output_tokens:
-        pass
+        us["completion_tokens"] = prev_comp + output_tokens
     elif call_comp == 0 and blocks:
         est = 0
         for b in blocks:

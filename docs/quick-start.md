@@ -84,8 +84,10 @@ mini_ai/
 
 ## 下一步
 
-- [架构设计](architecture.md) — 主循环、工具系统、终端 UI 等
+- [架构设计](architecture.md) — 主循环、多模型、Agent 执行器、上下文组装
+- [CLI 命令参考](cli-commands.md) — 斜杠命令完整清单
+- [工具系统](tools.md) — 25+ 内置工具详解
 - [记忆系统](memory-system.md) — 四层存储、压缩策略、会话管理
 - [多 Agent 编排](team-collaboration.md) — 子代理、队友、DAG 工作流
 - [配置参考](configuration.md) — 所有配置项详细说明
-- [Web 界面](../WEB.md) — Web 模式完整文档
+- [Web 界面](web-interface.md) — Web 模式完整文档

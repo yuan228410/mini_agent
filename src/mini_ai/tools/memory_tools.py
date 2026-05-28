@@ -1,21 +1,18 @@
 """主动记忆工具 — Agent 实时写入/读取长期记忆"""
-import threading
+import contextvars
 
 from ..logger import logger
 
-_memory_store = threading.local()
+_memory_store = contextvars.ContextVar("memory_store", default=None)
 
 
 def configure(memory_store=None):
     if memory_store is not None:
-        _memory_store.store = memory_store
+        _memory_store.set(memory_store)
 
 
 def _get_store():
-    try:
-        return _memory_store.store
-    except AttributeError:
-        return None
+    return _memory_store.get()
 
 
 # ── remember ──

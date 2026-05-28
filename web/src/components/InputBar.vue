@@ -37,7 +37,7 @@ function onKeydown(e: KeyboardEvent) {
       slashRef.value?.moveDown()
       return
     }
-    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey && !e.isComposing)) {
       e.preventDefault()
       slashRef.value?.confirm()
       return
@@ -48,7 +48,7 @@ function onKeydown(e: KeyboardEvent) {
     }
   }
 
-  if (e.key === 'Enter' && !e.shiftKey) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
     e.preventDefault()
     submit()
   }
@@ -100,7 +100,7 @@ function onSlashSelect(cmd: CommandInfo) {
 <style scoped>
 .input-bar {
   flex-shrink: 0;
-  padding: 1rem 1.5rem 1.2rem;
+  padding: 0.3rem 0.5rem 0.1rem;
   border-top: 0.5px solid var(--border);
   background: var(--bg);
 }
@@ -109,7 +109,7 @@ function onSlashSelect(cmd: CommandInfo) {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  padding: 0 3%;
+  padding: 0;
 }
 
 .input-field {
@@ -126,7 +126,7 @@ textarea {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: 8px;
-  padding: 0.65rem 1rem;
+  padding: 0.45rem 0.8rem;
   resize: none;
   outline: none;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
