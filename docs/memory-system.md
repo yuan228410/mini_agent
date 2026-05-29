@@ -29,7 +29,7 @@
 ## 压缩触发条件
 
 - **API 返回值**：`prompt_tokens > context_length × context_usage_threshold`（默认 0.8）
-- **本地预估**：字符数 / 2.5 超阈值（提前预防，应对 API 不返回 usage 的情况）
+- **本地预估**：CJK 字符按 1:1、其他字符按 4:1 估算 token（`estimate_messages_tokens`），超阈值提前预防，应对 API 不返回 usage 的情况
 
 ## 压缩策略
 

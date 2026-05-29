@@ -56,7 +56,7 @@ models:
 | `requests.Session()` 长连接 | 复用 HTTP 连接，避免每次 TLS 握手 |
 | `tools` 参数三态 | `True`=全部工具，`list[dict]`=指定列表，`False`=无工具 |
 | 失败重试 | `llm_retries` 次，递增延迟 × attempt |
-| token 估算 | API 未返回 usage 时按内容长度自动估算（字符数 / 3） |
+| token 估算 | API 未返回 usage 时按内容 CJK-aware 估算（CJK 1:1，其他 4:1），见 `llm/base.py` `estimate_tokens()` |
 | `RequestContext` | 每请求独立 model_config/display/http_session，多用户并发隔离 |
 
 ---
