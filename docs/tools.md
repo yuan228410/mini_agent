@@ -106,7 +106,17 @@
 
 ### 并行执行
 
-标记为并行的工具（`dispatch_subagent`、`spawn_teammate`）通过 `ThreadPoolExecutor` 并行运行。并行线程中通过 `copy_context()` 保持 `contextvars` 上下文（如 `team_caller` 身份）。
+以下工具标记为可并行执行，通过 `ThreadPoolExecutor` 并发运行：
+
+- **子代理/队友**：`dispatch_subagent`、`spawn_teammate`
+- **文件读取**：`read_file`、`search_files`、`list_dir`
+- **网络抓取**：`web_fetch`
+- **技能查询**：`list_skills`、`load_skill`
+- **记忆/历史检索**：`recall`、`search_history`
+
+LLM 一次返回的多个工具调用会先按类型分组（并行组 / 串行组），再逐组执行：并行组内的工具并发运行，串行组的工具逐一顺序执行。并行线程中通过 `copy_context()` 保持 `contextvars` 上下文（如 `team_caller` 身份）。
+
+> 写操作工具（`write_file`、`edit_file`、`install_skill` 等）保持串行执行，避免同一文件上的竞态覆盖。
 
 ### 依赖注入
 

@@ -581,3 +581,34 @@ export async function removeMcpServer(name: string): Promise<any> {
   })
   return resp.json()
 }
+
+
+export async function exportSession(sessionId: string, workspace?: string): Promise<void> {
+  const params = new URLSearchParams()
+  params.set('session_id', sessionId)
+  params.set('username', _username())
+  if (workspace) params.set('workspace', workspace)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 30000)
+  let resp: Response
+  try {
+    resp = await _origFetch(`/api/chat/export?${params.toString()}`, { signal: controller.signal })
+  } finally {
+    clearTimeout(timer)
+  }
+  if (!resp.ok) {
+    const data = await resp.json().catch(() => ({}))
+    throw new Error(data.error || '导出失败')
+  }
+  const blob = await resp.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const cd = resp.headers.get('content-disposition') || ''
+  const match = cd.match(/filename\*=UTF-8''(.+)/) || cd.match(/filename="?([^"]+)"?/)
+  a.download = match ? decodeURIComponent(match[1]) : `${sessionId}.md`
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}

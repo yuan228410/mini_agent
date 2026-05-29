@@ -27,7 +27,12 @@ class ToolRegistry:
         self._tools: list = []
         self._by_name: dict[str, object] = {}
         self._display = None
-        self._parallel_tools: set[str] = {"dispatch_subagent", "spawn_teammate"}
+        self._parallel_tools: set[str] = {
+            "dispatch_subagent", "spawn_teammate",
+            "read_file", "search_files", "list_dir",
+            "web_fetch", "list_skills", "load_skill",
+            "recall", "search_history",
+        }
 
     def _rebuild_index(self):
         self._by_name.clear()
@@ -79,23 +84,30 @@ class ToolRegistry:
 
         _disp = display if display is not None else self._display
         spawned = False
+
+        groups: list[tuple[str, list[dict]]] = []
         i = 0
         while i < len(calls):
             tc = calls[i]
             name = tc["function"]["name"]
-
             if name == "spawn_teammate":
                 spawned = True
-
             if name in self._parallel_tools:
                 group = []
                 while i < len(calls) and calls[i]["function"]["name"] in self._parallel_tools:
                     group.append(calls[i])
                     i += 1
+                groups.append(("parallel", group))
+            else:
+                groups.append(("serial", [tc]))
+                i += 1
+
+        for mode, group in groups:
+            if mode == "parallel" and len(group) > 1:
                 self._execute_parallel(group, messages, _disp, persist_fn)
             else:
-                self._execute_one(tc, messages, _disp, persist_fn)
-                i += 1
+                for tc in group:
+                    self._execute_one(tc, messages, _disp, persist_fn)
 
         return spawned
 

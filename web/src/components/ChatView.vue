@@ -3,7 +3,7 @@ import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
   ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct,
   getConfig, createSession, getHistory, resetChat, renameSession,
-  getSessions, getWorkspaces,
+  getSessions, getWorkspaces, exportSession,
   type WsEvent, type HistoryMessage,
 } from '../api'
 import MessageItem from './MessageItem.vue'
@@ -338,6 +338,14 @@ function _processEvent(s: SessionState, event: WsEvent) {
   }
 }
 
+async function doExport() {
+  try {
+    await exportSession(activeSessionId.value, props.workspace || undefined)
+  } catch (e: any) {
+    alert(e.message || '导出失败')
+  }
+}
+
 async function sendMessage(text: string) {
   if (!text.trim() || isStreaming.value) return
 
@@ -448,6 +456,9 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
 
 <template>
   <div class="chat-container">
+  <div class="chat-toolbar" v-if="messages.length > 0">
+    <button class="export-btn" @click="doExport" title="导出 Markdown">📥 导出</button>
+  </div>
   <div class="chat-view" ref="chatContainer" @scroll="_onChatScroll">
     <div class="messages" v-if="messages.length === 0">
       <div class="empty-state">
@@ -486,6 +497,26 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   overflow: hidden;
   min-width: 0;
 }
+
+.chat-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0.3rem 0.8rem;
+  border-bottom: 0.5px solid var(--border-light);
+  background: var(--bg);
+}
+
+.export-btn {
+  padding: 0.25rem 0.6rem;
+  border: 0.5px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg-card);
+  color: var(--fg-dim);
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.export-btn:hover { color: var(--fg); background: var(--bg-thinking); }
 
 .chat-view {
   flex: 1;

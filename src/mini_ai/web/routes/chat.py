@@ -845,3 +845,87 @@ async def chat_reset(body: dict | None = None):
     with _sessions_lock:
         _SESSION_COMPONENTS.pop(cache_key, None)
     return {"status": "ok", "session_id": sid}
+
+
+@router.get("/chat/export")
+async def chat_export(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")):
+    from fastapi.responses import JSONResponse
+    if not username:
+        return JSONResponse({"error": "缺少 username"}, status_code=400)
+    if not session_id:
+        return JSONResponse({"error": "缺少 session_id"}, status_code=400)
+    try:
+        base = _resolve_base(username, workspace or None)
+    except Exception as e:
+        logger.error(f"[export] _resolve_base error: {e}")
+        return JSONResponse({"error": f"工作空间错误: {e}"}, status_code=400)
+    cache_key = _cache_key(username, workspace or None, session_id)
+    messages = _SESSIONS.get(cache_key)
+    if not messages:
+        messages = _load_from_db(username, session_id, base, workspace or None) or []
+    if not messages:
+        return JSONResponse({"error": f"会话 '{session_id}' 不存在或无消息"}, status_code=404)
+
+    session_name = ""
+    try:
+        session_name = _load_session_name(base, session_id)
+    except Exception:
+        pass
+    if not session_name:
+        for m in messages:
+            if m.get("role") == "user" and m.get("content"):
+                session_name = m["content"][:50]
+                break
+    if not session_name:
+        session_name = session_id
+
+    lines = [f"# {session_name}\n"]
+
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content") or ""
+        ts = m.get("timestamp", "")
+
+        if role == "system":
+            continue
+        if role == "tool":
+            continue
+
+        if role == "user":
+            label = f"**🧑 用户**"
+            if ts:
+                label += f"  `{ts}`"
+            lines.append(f"\n{label}\n\n{content}\n")
+        elif role == "assistant":
+            thinking = m.get("thinking")
+            tool_calls = m.get("tool_calls")
+            label = f"**🤖 助手**"
+            if ts:
+                label += f"  `{ts}`"
+            lines.append(f"\n{label}\n")
+            if thinking:
+                thinking_text = thinking if isinstance(thinking, str) else str(thinking)
+                lines.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n{thinking_text}\n\n</details>\n")
+            if tool_calls:
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "?")
+                    args = fn.get("arguments", "")
+                    result = tc.get("_result", "")
+                    lines.append(f"\n> 🔧 **{name}**({args[:200]})\n")
+                    if result:
+                        lines.append(f"> 结果: {result[:500]}\n")
+            if content:
+                lines.append(f"\n{content}\n")
+
+    md_content = "\n".join(lines)
+
+    from fastapi.responses import Response
+    from urllib.parse import quote
+    safe_name = session_name.replace("/", "-").replace(" ", "-")[:60]
+    encoded_name = quote(safe_name)
+    return Response(
+        content=md_content,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}.md"},
+    )

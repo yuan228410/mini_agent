@@ -199,6 +199,7 @@ data: {"error": "错误信息"}
 | `/api/chat/ws` | WS | WebSocket 持久连接，支持双向通信和中断生成 |
 | `/api/chat/history` | GET | 获取会话历史，参数: `session_id`, `workspace` |
 | `/api/chat/reset` | POST | 重置会话，body: `{"session_id": "xxx"}` |
+| `/api/chat/export` | GET | 导出会话为 Markdown 文件下载，参数: `session_id`, `username`, `workspace` |
 | `/api/files/list` | GET | 获取工作空间文件列表 |
 | `/api/files/browse` | GET | 浏览目录结构 |
 | `/api/models` | GET | 获取模型列表及当前激活模型 |

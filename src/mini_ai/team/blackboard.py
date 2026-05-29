@@ -23,7 +23,7 @@ class Blackboard:
                 "author": author,
                 "ts": time.time(),
             }
-            self._persist()
+        self._persist()
         logger.info(f"[Blackboard] put {key} ({len(value)} chars) by {author or '?'}")
         return f"已写入 blackboard[{key}]（{len(value)} 字符）"
 
@@ -48,7 +48,7 @@ class Blackboard:
     def clear(self):
         with self._lock:
             self._data.clear()
-            self._persist()
+        self._persist()
 
     def render(self) -> str:
         with self._lock:

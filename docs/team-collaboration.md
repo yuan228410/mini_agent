@@ -358,7 +358,7 @@ DAG 工作流让你定义有依赖关系的多步任务，系统自动编排：�
 ```
 
 条件判断逻辑：
-- `condition` 表达式为 Python 表达式，在受限环境中求值
+- `condition` 表达式在安全的 AST 求值器中执行（替代 `eval()`），仅支持比较、逻辑运算和字典属性访问，**禁止任意代码执行**
 - 可用上下文：`{task_id}.status`、`{task_id}.result`、`{task_id}.error`、`blackboard`
 - 表达式为 `False` 时任务被跳过（status=skipped），不阻塞下游
 - 表达式求值异常时默认执行（保守策略）

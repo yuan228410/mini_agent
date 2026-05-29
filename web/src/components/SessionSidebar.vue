@@ -2,6 +2,7 @@
 import { ref, onMounted, reactive } from 'vue'
 import {
   getSessions, createSession, deleteSession, batchDeleteSessions, renameSession,
+  exportSession,
   getWorkspaces, createWorkspace, addWorkspace, removeWorkspace, switchWorkspace,
   listRemovedWorkspaces, restoreWorkspace, deleteRemovedWorkspace,
   browseDirs,
@@ -200,6 +201,16 @@ async function doDelete(sid: string) {
       activeSessionId.value = all[0].session_id
       emit('switch-session', all[0].session_id, null)
     }
+  }
+}
+
+async function doExport(sid: string) {
+  const ws = contextMenu.value?.ws || activeWorkspace.value || ''
+  contextMenu.value = null
+  try {
+    await exportSession(sid, ws || undefined)
+  } catch (e: any) {
+    alert(e.message || '导出失败')
   }
 }
 
@@ -466,6 +477,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
       <div v-if="contextMenu" class="ctx-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu">
         <div class="ctx-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }">
           <div class="ctx-item" @click="startEdit(contextMenu!.sid, getAllSessions().find(s => s.session_id === contextMenu!.sid)?.name || '')">重命名</div>
+          <div class="ctx-item" @click="doExport(contextMenu!.sid)">导出 MD</div>
           <div class="ctx-item ctx-danger" @click="doDelete(contextMenu!.sid)">删除</div>
         </div>
       </div>

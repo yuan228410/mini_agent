@@ -210,13 +210,13 @@ class Compactor:
             rnd_chars = len(rnd["user_msg"].get("content") or "")
             for msg in rnd["execution"]:
                 rnd_chars += len(msg.get("content") or "")
-            if total_chars + rnd_chars > self.char_threshold:
+            if total_chars + rnd_chars > self.char_threshold and keep >= 2:
                 break
             total_chars += rnd_chars
             keep += 1
             if keep >= len(rounds) - 1:
                 break
-        return max(keep, 1)
+        return max(keep, 2)
 
     def _summarize_round(self, chat_fn, execution: list[dict], round_num: int, ctx=None) -> str:
         content = self._messages_to_text(execution)
