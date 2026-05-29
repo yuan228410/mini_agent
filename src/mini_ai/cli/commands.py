@@ -64,8 +64,7 @@ class CommandHandler:
                 return "continue"
             before = len(non_system)
             from ..llm import chat
-            messages[:] = self.compactor.compact(chat, messages, ctx=self.ctx)
-            self.inject_fn(messages)
+            messages[:] = self.compactor.compact(chat, messages, ctx=self.ctx, inject_fn=self.inject_fn)
             after = len([m for m in messages if m["role"] != "system"])
             self.disp.info(f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条，历史保留在 DB 中）")
             return "continue"

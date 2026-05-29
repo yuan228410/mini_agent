@@ -46,6 +46,9 @@ const globalFields = reactive({
   history_limit: 200,
   context_limit: 50,
   keep_recent: 50,
+  keep_budget_ratio: 0.2,
+  early_compact_ratio: 0.85,
+  max_cached_summaries: 200,
   max_result_chars: 8000,
   log_level: 'WARNING',
   mcp_enabled: false,
@@ -126,6 +129,9 @@ async function loadSettings() {
     const cp = s.compactor || {}
     globalFields.context_limit = cp.context_limit ?? 50
     globalFields.keep_recent = cp.keep_recent ?? 50
+    globalFields.keep_budget_ratio = cp.keep_budget_ratio ?? 0.2
+    globalFields.early_compact_ratio = cp.early_compact_ratio ?? 0.85
+    globalFields.max_cached_summaries = cp.max_cached_summaries ?? 200
 
     const tool = s.tool || {}
     globalFields.max_result_chars = tool.max_result_chars ?? 8000
@@ -231,7 +237,13 @@ async function save() {
     }
     updates.plan = { approval: globalFields.plan_approval }
     updates.web = { history_limit: globalFields.history_limit }
-    updates.compactor = { context_limit: globalFields.context_limit, keep_recent: globalFields.keep_recent }
+    updates.compactor = {
+      context_limit: globalFields.context_limit,
+      keep_recent: globalFields.keep_recent,
+      keep_budget_ratio: globalFields.keep_budget_ratio,
+      early_compact_ratio: globalFields.early_compact_ratio,
+      max_cached_summaries: globalFields.max_cached_summaries,
+    }
     updates.tool = { max_result_chars: globalFields.max_result_chars }
     updates.logging = { level: globalFields.log_level }
     updates.mcp = { enabled: globalFields.mcp_enabled }
@@ -471,6 +483,21 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
             <div class="field">
               <label>压缩保留条数</label>
               <input type="number" v-model.number="globalFields.keep_recent" min="5" max="200" />
+            </div>
+            <div class="field">
+              <label>保留轮次预算比例</label>
+              <input type="number" v-model.number="globalFields.keep_budget_ratio" min="0.05" max="0.5" step="0.05" />
+              <small>压缩后保留轮次占上下文窗口比例</small>
+            </div>
+            <div class="field">
+              <label>预压缩触发比例</label>
+              <input type="number" v-model.number="globalFields.early_compact_ratio" min="0.5" max="0.95" step="0.05" />
+              <small>预压缩阈值相对 context_usage_threshold 的比例</small>
+            </div>
+            <div class="field">
+              <label>压缩摘要缓存条数上限</label>
+              <input type="number" v-model.number="globalFields.max_cached_summaries" min="50" max="1000" step="50" />
+              <small>增量压缩摘要缓存条数上限（非上下文消息），超过时自动清理最旧轮次的摘要</small>
             </div>
             <div class="field">
               <label>工具输出截断字符数</label>

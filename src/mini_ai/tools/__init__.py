@@ -27,6 +27,7 @@ class ToolRegistry:
         self._tools: list = []
         self._by_name: dict[str, object] = {}
         self._display = None
+        self._project_path = ""
         self._parallel_tools: set[str] = {
             "dispatch_subagent", "spawn_teammate",
             "read_file", "search_files", "list_dir",
@@ -60,6 +61,7 @@ class ToolRegistry:
         dispatch_subagent.configure(
             loader=subagent_loader,
             definition=dispatch_subagent.build_definition(subagent_list),
+            project_path=self._project_path,
         )
         self.add_tools(dispatch_subagent)
         register_subagent.configure(loader=subagent_loader)
@@ -128,7 +130,7 @@ class ToolRegistry:
         logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
         args_summary = json.dumps(args, ensure_ascii=False)
         if display:
-            display.tool_call_start(name, args_summary)
+            display.tool_call_start(name, args_summary, tc["id"])
         t0 = time.monotonic()
         try:
             output = self.dispatch(name, args)
@@ -145,12 +147,10 @@ class ToolRegistry:
                 persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": _now()})
             messages.append(tool_msg)
         if display:
-            display.tool_result(name, output or "", elapsed)
+            display.tool_result(name, output or "", elapsed, tc["id"])
 
     def _execute_parallel(self, calls: list[dict], messages: list[dict], display=None, persist_fn=None) -> None:
-        import contextvars as _cv
         results = {}
-        caller_val = _cv.copy_context()
 
         def _run(tc):
             try:
@@ -158,12 +158,14 @@ class ToolRegistry:
                 args = json.loads(tc["function"]["arguments"]) if tc["function"]["arguments"] else {}
                 logger.info(f"[并行→] {name}({json.dumps(args, ensure_ascii=False)})")
                 if display:
-                    display.tool_call_start(name, json.dumps(args, ensure_ascii=False))
+                    display.tool_call_start(name, json.dumps(args, ensure_ascii=False), tc["id"])
                 t0 = time.monotonic()
-                result = caller_val.run(self.dispatch, name, args)
+                import contextvars as _cv
+                ctx = _cv.copy_context()
+                result = ctx.run(self.dispatch, name, args)
                 elapsed = time.monotonic() - t0
                 if display and result is not None:
-                    display.tool_result(name, result, elapsed)
+                    display.tool_result(name, result, elapsed, tc["id"])
                 return tc["id"], result
             except Exception as e:
                 return tc["id"], f"执行失败: {e}"
@@ -220,6 +222,12 @@ def register(skill_loader) -> None:
 
 def register_subagents(subagent_loader) -> None:
     _registry.register_subagents(subagent_loader)
+
+
+def set_project_path(path: str) -> None:
+    from . import dispatch_subagent
+    _registry._project_path = path
+    dispatch_subagent.configure(project_path=path)
 
 
 def register_team(bus, manager) -> None:

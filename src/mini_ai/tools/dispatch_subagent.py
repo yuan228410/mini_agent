@@ -5,14 +5,21 @@ from ..logger import logger
 
 _loader = None
 _definition = None
+_project_path = None
 
 
-def configure(loader=None, definition=None):
-    global _loader, _definition
+def configure(loader=None, definition=None, project_path=None):
+    global _loader, _definition, _project_path
     if loader is not None:
         _loader = loader
     if definition is not None:
         _definition = definition
+    if project_path is not None:
+        _project_path = project_path
+
+
+def get_project_path():
+    return _project_path or ""
 
 
 _BASE_DEFINITION = {
@@ -76,8 +83,12 @@ def execute(args: dict) -> str:
     if inputs:
         logger.info(f"[派遣→] inputs: {list(inputs.keys())}")
 
+    system_prompt = spec["system_prompt"]
+    if _project_path:
+        system_prompt += f"\n\n## 当前工作空间\n\n项目路径: {_project_path}\n\n重要：执行命令时必须传 cwd=\"{_project_path}\" 参数；搜索文件时使用绝对路径基于此目录。读写文件使用绝对路径。"
+
     messages = [
-        {"role": "system", "content": spec["system_prompt"]},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": task},
     ]
 

@@ -65,7 +65,7 @@ _CONFIG_STRUCTURE = """mini-ai 配置结构:
 - models: 模型定义字典（每个模型含 api_url, api_key, model, context_length, api_mode, headers, temperature, max_tokens, top_p, reasoning_effort）
 - streaming: 是否流式输出
 - timeouts: 超时配置（llm, llm_retries, llm_retry_delay, teammate_recv, lead_wait, web_fetch）
-- compactor: 压缩配置（context_usage_threshold, keep_recent, char_threshold）
+- compactor: 压缩配置（context_usage_threshold, keep_recent, keep_budget_ratio, early_compact_ratio, max_cached_summaries）
 - teammate: 队友配置（max_teammates, max_turns, base_tools）
 - tool: 工具配置（max_result_chars）
 - thinking: 思考配置（enabled, budget_tokens）
@@ -104,7 +104,7 @@ def _build_self_overview() -> str:
         f"流式输出: {'是' if STREAMING else '否'}",
         f"思考模式: {'启用' if THINKING.get('enabled') else '禁用'} (budget={THINKING.get('budget_tokens', 10000)})，显示: {DISPLAY.get('thinking_mode', 'collapsed')} (collapsed/expanded/hidden)",
         f"计划模式审批: {'需要' if PLAN.get('approval', True) else '自动执行'}",
-        f"压缩阈值: keep_recent={COMPACTOR.get('keep_recent', 50)}, char_threshold={COMPACTOR.get('char_threshold', 20000)}",
+        f"压缩: keep_recent={COMPACTOR.get('keep_recent', 50)} budget_ratio={COMPACTOR.get('keep_budget_ratio', 0.2)} early_ratio={COMPACTOR.get('early_compact_ratio', 0.85)} max_cache={COMPACTOR.get('max_cached_summaries', 200)}",
     ]
     if MCP.get("enabled"):
         lines.append(f"MCP: 启用 ({len(mcp_tools)} 个工具)")

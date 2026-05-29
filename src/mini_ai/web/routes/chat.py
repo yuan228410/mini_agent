@@ -112,19 +112,6 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     from ...skills import SkillLoader
     from ..deps import SKILL_PATHS
 
-    user_memory_dir = user_data_dir(username) / "memory"
-
-    if base is None:
-        base = _resolve_base(username, workspace or "default")
-    session_dir = base / sid
-    session_dir.mkdir(parents=True, exist_ok=True)
-    session_memory_dir = session_dir / "memory_data"
-    session_memory_dir.mkdir(parents=True, exist_ok=True)
-
-    user_store = MemoryStore(user_memory_dir, episode_dir=session_memory_dir)
-
-    history_db = HistoryDB(session_memory_dir / "history.db", workspace=workspace or "default")
-
     project_path = ""
     ws_dir = None
     if workspace:
@@ -134,6 +121,25 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         if ws:
             project_path = ws.project_path
             ws_dir = ws.ws_dir
+        else:
+            logger.warning(f"[Web] 工作空间 '{workspace}' 不存在，使用默认配置")
+
+    user_memory_dir = user_data_dir(username) / "memory"
+
+    if base is None:
+        base = _resolve_base(username, workspace or "default")
+    session_dir = base / sid
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_memory_dir = session_dir / "memory_data"
+    session_memory_dir.mkdir(parents=True, exist_ok=True)
+
+    global_memory_dir = DATA_DIR / "memory"
+    ws_memory_dir = ws_dir / "memory_data" if ws_dir else None
+    user_store = MemoryStore(user_memory_dir, episode_dir=session_memory_dir,
+                             global_memory_dir=global_memory_dir,
+                             workspace_memory_dir=ws_memory_dir)
+
+    history_db = HistoryDB(session_memory_dir / "history.db", workspace=workspace or "default")
 
     user_skills_dir = user_data_dir(username) / "skills"
     ws_skills_dir = ws_dir / "skills" if ws_dir else None
@@ -143,8 +149,10 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     compactor = Compactor(
         user_store,
         keep_recent=COMPACTOR.get("keep_recent", 50),
-        char_threshold=COMPACTOR.get("char_threshold", 20000),
         context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
+        keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
+        early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
+        max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx_builder,
         skill_loader=skill_loader,
@@ -163,6 +171,7 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     }
     with _sessions_lock:
         if cache_key in _SESSION_COMPONENTS:
+            history_db.close()
             return _SESSION_COMPONENTS[cache_key]
         _SESSION_COMPONENTS[cache_key] = components
     return components
@@ -449,9 +458,9 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
         usage = get_usage()
         if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
-            messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx)
+            messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx, inject_fn=_inject_todos)
+            # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
             messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
-            _inject_todos(messages)
 
         loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
         return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
@@ -540,11 +549,11 @@ async def delete_session(body: dict):
         pass
     with _sessions_lock:
         _SESSIONS.pop(cache_key, None)
-    _SESSION_COMPONENTS.pop(cache_key, None)
-    _META_CACHE.pop(cache_key, None)
-    _SESSION_STATUS.pop(cache_key, None)
-    _SESSION_MODELS.pop(cache_key, None)
-    _SESSION_LOCKS.pop(cache_key, None)
+        _SESSION_COMPONENTS.pop(cache_key, None)
+        _META_CACHE.pop(cache_key, None)
+        _SESSION_STATUS.pop(cache_key, None)
+        _SESSION_MODELS.pop(cache_key, None)
+        _SESSION_LOCKS.pop(cache_key, None)
     from ...tools.update_todos import cleanup_session
     cleanup_session(cache_key)
     session_dir = _resolve_base(username, ws) / session_id
@@ -870,15 +879,8 @@ async def chat_export(session_id: str = Query(default=""), username: str = Query
     except Exception as e:
         logger.error(f"[export] _resolve_base error: {e}")
         return JSONResponse({"error": f"工作空间错误: {e}"}, status_code=400)
-    cache_key = _cache_key(username, workspace or None, session_id)
-    cached = _SESSIONS.get(cache_key)
-    if cached and limit > 0:
-        messages = cached[-limit:]
-    elif cached:
-        messages = cached
-    else:
-        comp = _get_or_create_components(username, session_id, base, workspace or None)
-        messages = comp["history_db"].load_all(session_id, limit=limit) or []
+    comp = _get_or_create_components(username, session_id, base, workspace or None)
+    messages = comp["history_db"].load_all(session_id, limit=limit) or []
     if not messages:
         return JSONResponse({"error": f"会话 '{session_id}' 不存在或无消息"}, status_code=404)
 

@@ -14,7 +14,7 @@ interface Message {
   content: string
 
   thinking?: { chars: number; elapsed: number; content: string }
-  tools?: { name: string; args: string; result: string; elapsed: number }[]
+  tools?: { name: string; args: string; result: string; elapsed: number; tool_call_id?: string }[]
   streaming?: boolean
   timestamp?: string
 }
@@ -300,7 +300,8 @@ function _processEvent(s: SessionState, event: WsEvent) {
         const m = s.messages[s.messages.length - 1]
         if (m && m.role === 'assistant') {
           if (!m.tools) m.tools = []
-          m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0 })
+          m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
+          messages.value = [...s.messages]
         }
       }
       break
@@ -310,11 +311,16 @@ function _processEvent(s: SessionState, event: WsEvent) {
       break
     case 'tool_result':
       {
+        const tcId = event.data.tool_call_id || ''
         const m = s.messages[s.messages.length - 1]
         if (m && m.role === 'assistant' && m.tools && m.tools.length > 0) {
-          const last = m.tools[m.tools.length - 1]
-          last.result = event.data.result || ''
-          last.elapsed = event.data.elapsed || 0
+          let target: any = null
+          if (tcId) target = m.tools.find((t: any) => t.tool_call_id === tcId)
+          if (!target) target = m.tools.find((t: any) => t.result === '...')
+          if (!target) target = m.tools[m.tools.length - 1]
+          target.result = event.data.result || ''
+          target.elapsed = event.data.elapsed || 0
+          messages.value = [...s.messages]
         }
       }
       break

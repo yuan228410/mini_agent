@@ -37,7 +37,9 @@ timeouts:
 compactor:
   context_usage_threshold: 0.8
   keep_recent: 50
-  char_threshold: 20000
+  keep_budget_ratio: 0.2
+  early_compact_ratio: 0.85
+  max_cached_summaries: 200
   context_limit: 50
 
 teammate:
@@ -140,7 +142,9 @@ logging:
 |------|--------|------|
 | `context_usage_threshold` | `0.8` | 压缩触发：prompt_tokens 超过上下文长度的比例 |
 | `keep_recent` | `50` | 压缩后保留最近消息数 |
-| `char_threshold` | `20000` | 压缩后保留消息的最大字符数 |
+| `keep_budget_ratio` | `0.2` | 压缩后保留轮次占上下文窗口比例 |
+| `early_compact_ratio` | `0.85` | 预压缩触发阈值相对 context_usage_threshold 的比例 |
+| `max_cached_summaries` | `200` | 增量压缩轮次摘要缓存条数上限，超过时自动清理最旧摘要，防止长时间对话内存泄漏 |
 | `context_limit` | `50` | 加载到 LLM 上下文的消息条数 |
 
 ### teammate

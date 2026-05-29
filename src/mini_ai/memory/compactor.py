@@ -36,13 +36,21 @@ COMPACT_PROMPT = """根据对话轮次摘要，更新长期记忆和用户画像
 各轮次摘要：
 {round_summaries}"""
 
-ROUND_SUMMARY_PROMPT = """简洁总结以下 Agent 执行过程（1000字内）：
-- 完成了什么任务
-- 调用了哪些工具
-- 关键结果和发现
+BATCH_SUMMARY_PROMPT = """对以下各轮 Agent 执行过程分别进行简洁总结（每轮150字内）。
 
-执行过程：
-{execution_content}"""
+每轮请用 <round_N> 标记包裹：
+<round_1>
+- **需求**: 用户的要求
+- **操作**: 调用的工具
+- **结论**: 关键结果
+</round_1>
+
+<round_{count}>
+...
+</round_{count}>
+
+各轮执行过程：
+{all_rounds_text}"""
 
 
 _CHITCHAT_KEYWORDS = frozenset([
@@ -96,39 +104,67 @@ class Compactor:
     """
 
     def __init__(self, memory_store: MemoryStore, *,
-                 keep_recent: int = 50, char_threshold: int = 20000,
+                 keep_recent: int = 50,
                  context_usage_threshold: float = 0.8, context_length: int = 128000,
+                 keep_budget_ratio: float = 0.2,
+                 early_compact_ratio: float = 0.85,
+                 max_cached_summaries: int = 200,
                  context_builder=None, skill_loader=None, history_db=None, project_path="",
                  summary_dir: Path | None = None):
         self.memory = memory_store
         self.keep_recent = keep_recent
-        self.char_threshold = char_threshold
         self.context_usage_threshold = context_usage_threshold
         self.context_length = context_length
+        self.keep_budget_ratio = keep_budget_ratio
+        self.early_compact_ratio = early_compact_ratio
+        self.max_cached_summaries = max_cached_summaries
         self.context_builder = context_builder
         self.skill_loader = skill_loader
         self.history_db = history_db
         self.project_path = project_path
         self.summary_dir = summary_dir
+        # 增量压缩追踪：记录已摘要的轮次数量
+        self._last_round_count = 0
+        # 已摘要轮次缓存 {round_idx: summary_text}
+        self._cached_summaries: dict[int, str] = {}
+
+    def _hard_threshold(self) -> int:
+        return int(self.context_length * self.context_usage_threshold)
+
+    def _soft_threshold(self) -> int:
+        return int(self._hard_threshold() * self.early_compact_ratio)
 
     def should_compact(self, prompt_tokens: int) -> bool:
         if prompt_tokens <= 0:
             return False
-        threshold = self.context_length * self.context_usage_threshold
+        threshold = self._hard_threshold()
         if prompt_tokens > threshold:
-            logger.info(f"[压缩→] prompt_tokens={prompt_tokens} > {int(threshold)}")
+            logger.info(f"[压缩→] prompt_tokens={prompt_tokens} > {threshold}")
+            return True
+        # 两级预警：68% 阈值时尝试预压缩（仅增量）
+        soft = self._soft_threshold()
+        if prompt_tokens > soft and self._has_incremental_rounds():
+            logger.info(f"[压缩→] prompt_tokens={prompt_tokens} > {soft} 触发预压缩")
             return True
         return False
+
+    def _has_incremental_rounds(self) -> bool:
+        return self._last_round_count > 0
 
     def estimate_tokens(self, messages: list[dict]) -> int:
         return estimate_messages_tokens(messages)
 
     def should_compact_local(self, messages: list[dict]) -> bool:
         estimated = self.estimate_tokens(messages)
-        threshold = self.context_length * self.context_usage_threshold
-        return estimated > threshold
+        threshold = self._hard_threshold()
+        if estimated > threshold:
+            return True
+        soft = self._soft_threshold()
+        if estimated > soft and self._has_incremental_rounds():
+            return True
+        return False
 
-    def compact(self, chat_fn, messages: list[dict], ctx=None) -> list[dict]:
+    def compact(self, chat_fn, messages: list[dict], ctx=None, inject_fn=None) -> list[dict]:
         non_system = [m for m in messages if m["role"] != "system"]
 
         rounds = self._split_rounds(non_system)
@@ -141,9 +177,14 @@ class Compactor:
         old_rounds = rounds[:len(rounds) - keep_rounds]
         recent_rounds = rounds[len(rounds) - keep_rounds:]
 
+        # 判断是否为增量压缩：上次已摘要的轮次本次依然在 old 中
+        incremental = self._last_round_count > 0
+
         new_messages = [messages[0]]
         round_summaries = []
+        new_round_summaries = []  # 仅新增摘要，用于写入文件
         skipped_chitchat = 0
+        batch_candidates = []  # 需要批量摘要的轮次
 
         for i, rnd in enumerate(old_rounds):
             if _is_chitchat_round(rnd):
@@ -151,14 +192,45 @@ class Compactor:
                 continue
             new_messages.append(rnd["user_msg"])
             execution = rnd["execution"]
-            if execution:
-                summary = self._summarize_round(chat_fn, execution, i + 1, ctx)
+            if not execution:
+                continue
+
+            # 增量模式：命中缓存直接复用，不再重复写入文件
+            if incremental and i in self._cached_summaries:
+                summary = self._cached_summaries[i]
+                new_messages.append({
+                    "role": "user",
+                    "content": f"[第{i+1}轮执行摘要]\n{summary}",
+                })
+                continue
+
+            # 小轮次直接内联，不需要调 LLM
+            exec_text = self._messages_to_text(execution)
+            if len(exec_text) < 100:
+                new_messages.append({
+                    "role": "user",
+                    "content": f"[第{i+1}轮执行摘要]\n{exec_text}",
+                })
+                summary_entry = f"第{i+1}轮: {exec_text[:200]}"
+                round_summaries.append(summary_entry)
+                new_round_summaries.append(summary_entry)
+                self._cached_summaries[i] = exec_text
+                continue
+
+            batch_candidates.append((i, rnd, execution, exec_text))
+
+        if batch_candidates:
+            summaries = self._batch_summarize(chat_fn, batch_candidates, ctx)
+            for round_idx, summary in summaries:
                 if summary:
                     new_messages.append({
                         "role": "user",
-                        "content": f"[第{i+1}轮执行摘要]\n{summary}",
+                        "content": f"[第{round_idx+1}轮执行摘要]\n{summary}",
                     })
-                    round_summaries.append(f"第{i+1}轮: {summary[:200]}")
+                    summary_entry = f"第{round_idx+1}轮: {summary[:200]}"
+                    round_summaries.append(summary_entry)
+                    new_round_summaries.append(summary_entry)
+                    self._cached_summaries[round_idx] = summary
 
         if skipped_chitchat > 0:
             logger.info(f"[压缩] 跳过 {skipped_chitchat} 轮闲聊")
@@ -168,8 +240,19 @@ class Compactor:
             new_messages.extend(rnd["execution"])
 
         self._update_memory(chat_fn, round_summaries, ctx)
-        if round_summaries and self.summary_dir:
-            self._write_summary(round_summaries)
+        if new_round_summaries and self.summary_dir:
+            self._write_summary(new_round_summaries)
+
+        # 记忆更新后再提交追踪状态，避免 _update_memory 异常导致缓存不一致
+        self._last_round_count = len(old_rounds)
+        self._cached_summaries = {
+            k: v for k, v in self._cached_summaries.items()
+            if k < self._last_round_count
+        }
+        if len(self._cached_summaries) > self.max_cached_summaries:
+            sorted_keys = sorted(self._cached_summaries.keys())
+            for k in sorted_keys[:-self.max_cached_summaries]:
+                del self._cached_summaries[k]
 
         if self.context_builder:
             new_messages[0]["content"] = self.context_builder.build(
@@ -178,7 +261,11 @@ class Compactor:
                 project_path=self.project_path,
             )
 
-        logger.info(f"[压缩←] {len(old_rounds)} 轮摘要，保留 {len(recent_rounds)} 轮完整")
+        # 重新注入 todos（修复压缩后丢失任务计划的问题）
+        if inject_fn:
+            inject_fn(new_messages)
+
+        logger.info(f"[压缩←] {len(old_rounds)} 轮摘要{' (增量)' if incremental else ''}，保留 {len(recent_rounds)} 轮完整")
         return new_messages
 
     def _write_summary(self, round_summaries: list[str]):
@@ -217,34 +304,79 @@ class Compactor:
         return rounds
 
     def _determine_keep_rounds(self, rounds: list[dict]) -> int:
+        """用 token 预算决定保留多少轮。"""
+        threshold = self.context_length * self.context_usage_threshold
+        # 保留预算 = 硬阈值以下留一定比例余量
+        keep_budget = int(threshold * self.keep_budget_ratio)
+        if keep_budget < 2000:
+            keep_budget = 2000
+
         keep = 0
-        total_chars = 0
+        total_tokens = 0
         for rnd in reversed(rounds):
-            rnd_chars = len(rnd["user_msg"].get("content") or "")
-            for msg in rnd["execution"]:
-                rnd_chars += len(msg.get("content") or "")
-            if total_chars + rnd_chars > self.char_threshold and keep >= 2:
+            rnd_msgs = [rnd["user_msg"]] + rnd["execution"]
+            rnd_tokens = estimate_messages_tokens(rnd_msgs)
+            if total_tokens + rnd_tokens > keep_budget and keep >= 2:
                 break
-            total_chars += rnd_chars
+            total_tokens += rnd_tokens
             keep += 1
             if keep >= len(rounds) - 1:
                 break
         return max(keep, 2)
 
-    def _summarize_round(self, chat_fn, execution: list[dict], round_num: int, ctx=None) -> str:
-        content = self._messages_to_text(execution)
-        if not content.strip():
-            return ""
+    def _batch_summarize(self, chat_fn, candidates: list[tuple], ctx=None) -> list[tuple[int, str]]:
+        """批量摘要多轮执行过程，一次 LLM 调用完成所有轮的摘要。
+        自动分批处理，每批不超过 12000 字符，避免截断丢失后续轮次。
+        """
+        if not candidates:
+            return []
 
-        if len(content) < 100:
-            return content
+        all_summaries: dict[int, str] = {}
 
-        prompt = ROUND_SUMMARY_PROMPT.format(execution_content=content[:8000])
-        result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
-        if result and result.get("content"):
-            logger.debug(f"[压缩] 第{round_num}轮摘要生成成功")
-            return result["content"]
-        return content[:500]
+        # 分批，每批 prompt 总长不超过 12000
+        MAX_BATCH_CHARS = 12000
+        batches = []
+        current_batch = []
+        current_chars = len(BATCH_SUMMARY_PROMPT.format(count=1, all_rounds_text=""))
+
+        for i, rnd, execution, exec_text in candidates:
+            entry_text = f"--- 第{i+1}轮 ---\n{exec_text[:4000]}"
+            entry_chars = len(entry_text) + 20  # 20 for `<round_N>` wrapper overhead
+
+            if current_chars + entry_chars > MAX_BATCH_CHARS and current_batch:
+                batches.append((current_batch, current_chars))
+                current_batch = []
+                current_chars = len(BATCH_SUMMARY_PROMPT.format(count=1, all_rounds_text=""))
+
+            current_batch.append((i, rnd, execution, entry_text))
+            current_chars += entry_chars
+
+        if current_batch:
+            batches.append((current_batch, current_chars))
+
+        for batch in batches:
+            batch_candidates = batch[0]
+            all_text = "\n\n".join(entry_text for _, _, _, entry_text in batch_candidates)
+            count = len(batch_candidates)
+
+            prompt = BATCH_SUMMARY_PROMPT.format(count=count, all_rounds_text=all_text)
+
+            result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
+
+            if result and result.get("content"):
+                for i, rnd, execution, entry_text in batch_candidates:
+                    tag = f"round_{i+1}"
+                    summary = _extract(tag, result["content"])
+                    if summary:
+                        all_summaries[i] = summary
+                    else:
+                        all_summaries[i] = self._messages_to_text(execution)[:500]
+                logger.debug(f"[压缩] 批量摘要 {len(batch_candidates)} 轮成功")
+            else:
+                for i, rnd, execution, entry_text in batch_candidates:
+                    all_summaries[i] = self._messages_to_text(execution)[:500]
+
+        return sorted(all_summaries.items())
 
     def _update_memory(self, chat_fn, round_summaries: list[str], ctx=None):
         if not round_summaries:
@@ -272,6 +404,7 @@ class Compactor:
             self.memory.write_memory(new_memory)
         if new_user and new_user != "(无需更新)":
             self.memory.write_user(new_user)
+        logger.info("[压缩] 记忆更新完成")
 
     @staticmethod
     def _messages_to_text(messages: list[dict]) -> str:

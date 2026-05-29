@@ -17,7 +17,7 @@ from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, cleanup_inbox
-from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, register_history_tools, render_todos
+from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, register_history_tools, render_todos, set_project_path
 from .workspace import WorkspaceManager
 
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
@@ -136,6 +136,7 @@ def main():
     ws_dir = ws.ws_dir
     logger.info(f"[Workspace] {cwd_name} → {ws_dir} (project: {ws.project_path or cwd})")
 
+    set_project_path(ws.project_path or str(cwd))
     skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, workspace_skills_dir=ws_dir / "skills")
     register(skill_loader)
     register_subagents(SUBAGENT_LOADER)
@@ -160,7 +161,8 @@ def main():
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
 
-    store = MemoryStore(ws_dir / "memory_data")
+    store = MemoryStore(ws_dir / "memory_data",
+                     global_memory_dir=DATA_DIR / "memory")
     history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=cwd_name)
     sessions = SessionManager(ws_dir / "memory_data" / "sessions")
     register_memory_tools(store)
@@ -170,8 +172,10 @@ def main():
     compactor = Compactor(
         store,
         keep_recent=COMPACTOR.get("keep_recent", 50),
-        char_threshold=COMPACTOR.get("char_threshold", 20000),
         context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
+        keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
+        early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
+                    max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx,
         skill_loader=skill_loader,
@@ -240,14 +244,18 @@ def main():
                 ws_dir = ws.ws_dir
                 skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, workspace_skills_dir=ws_dir / "skills")
                 register(skill_loader)
-                store = MemoryStore(ws_dir / "memory_data")
+                set_project_path(ws.project_path or "")
+                store = MemoryStore(ws_dir / "memory_data",
+                                 global_memory_dir=DATA_DIR / "memory")
                 history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
                 sessions = SessionManager(ws_dir / "memory_data" / "sessions")
                 compactor = Compactor(
                     store,
                     keep_recent=COMPACTOR.get("keep_recent", 50),
-                    char_threshold=COMPACTOR.get("char_threshold", 20000),
                     context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
+                    keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
+                    early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
+                    max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
                     context_length=MODEL_CONFIG.get("context_length", 128000),
                     context_builder=ctx,
                     skill_loader=skill_loader,
@@ -350,8 +358,7 @@ def main():
 
             if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
                 from .llm import chat
-                messages = compactor.compact(chat, messages)
-                _inject_todos(messages)
+                messages = compactor.compact(chat, messages, inject_fn=_inject_todos)
         except KeyboardInterrupt:
             disp.info("⚠ 已中断")
             cleanup_inbox(bus)

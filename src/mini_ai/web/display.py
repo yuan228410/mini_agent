@@ -59,18 +59,18 @@ class WebDisplay:
         self._streaming = False
         self._had_thinking = False
 
-    def tool_call_start(self, name: str, args_summary: str):
+    def tool_call_start(self, name: str, args_summary: str, tool_call_id: str = ""):
         self._tool_start_time = time.monotonic()
-        self._push("tool_start", {"name": name, "args": args_summary[:200]})
+        self._push("tool_start", {"name": name, "args": args_summary, "tool_call_id": tool_call_id})
 
-    def tool_result(self, name: str, result: str, elapsed: float | None = None):
+    def tool_result(self, name: str, result: str, elapsed: float | None = None, tool_call_id: str = ""):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
         if result.startswith("📋TODO\n"):
             self._push("todos", {"content": result[6:]})
-            self._push("tool_result", {"name": name, "result": result[:200], "elapsed": round(elapsed, 1)})
+            self._push("tool_result", {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id})
             return
-        self._push("tool_result", {"name": name, "result": result[:500], "elapsed": round(elapsed, 1)})
+        self._push("tool_result", {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id})
 
     def assistant_prefix(self):
         pass

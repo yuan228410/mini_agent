@@ -80,7 +80,7 @@ def run_tool_loop(messages, tools, *, streaming=False, display=None,
 - **轮次上限** — `max_turns`（默认 20）强制退出
 - **实时持久化** — `persist_fn(msg)` 回调，每条消息生成即写入
 
-`run_agent()` 作为轻量包装（供子代理/队友内部调用），返回最终文本。
+`run_agent()` 作为轻量包装（供子代理/队友内部调用），返回最终文本。超轮次时自动兜底：先尝试取最后一条 assistant 消息，再尝试请求 LLM 总结，异常安全。
 
 ---
 

@@ -1,6 +1,6 @@
 # Memory System
 
-## 四层存储模型
+## 四层存储模型 + 三层读取合并
 
 从短期到长期逐层提炼，确保 Agent 在长对话中不丢失关键信息：
 
@@ -10,6 +10,20 @@
 | 情景层 | `YYYY-MM-DD.md` | 按日 | 每日情景记忆短文——当天对话的关键事实、结论、待办。每天一个文件，用于快速回顾当日上下文 |
 | 长期层 | `MEMORY.md` | 持久 | 跨对话的长期记忆——核心目标、重要决策、项目背景、关键技术选型等。压缩时由 LLM 增量更新 |
 | 用户画像 | `USER.md` | 持久 | 用户偏好、习惯、知识背景。帮助 Agent 更好地理解用户需求风格 |
+
+### 三层读取合并
+
+长期层和用户画像支持 **global → user → workspace** 三层级合并读取。写入时指定层级，读取时自动合并：
+
+```
+global/MEMORY.md  (全用户共享)
+       ↓ 叠加
+user/MEMORY.md    (用户级，优先级高于 global)
+       ↓ 叠加
+workspace/MEMORY.md (工作空间级，最高优先级)
+```
+
+合并规则：按 `## 标题` 拆分 section，同名 section 后层覆盖前层（workspace > user > global）。无标题的头部文本仅保留首个非空文件的内容。
 
 ## 数据流
 
@@ -38,7 +52,9 @@
 1. **保留所有 user 消息** — 用户意图不能丢失
 2. **按轮次独立摘要** — 每轮 `user → (assistant + tool 执行过程)` 之间的消息独立摘要
 3. **闲聊过滤** — 短消息（≤30 字符）+ 无工具调用 + 匹配寒暄关键词的轮次直接丢弃
-4. **最近 N 轮保持完整** — 按字符阈值（默认 20000）动态决定保留多少轮
+4. **最近 N 轮保持完整** — 按 `keep_budget_ratio`（默认 0.2）动态决定保留轮次，保留轮次的字符数上限 = `context_length × context_usage_threshold × keep_budget_ratio`
+5. **预压缩机制** — token 使用率超过 `context_usage_threshold × early_compact_ratio`（默认 0.8×0.85=0.68）时提前压缩，避免突发超限
+6. **批量摘要** — 待压缩轮次按每批 ≤12000 字符分批，每批独立调用 LLM 摘要，分批结果合入同一轮次映射
 5. **压缩后结构**：`system → user1 → summary1 → user2 → summary2 → ... → 最近完整轮次`
 
 ## 压缩产出
@@ -84,25 +100,36 @@ Agent 可随时主动操作长期记忆，不需要等待压缩触发：
 
 ## 存储位置
 
-每个工作空间独立的记忆数据，存储在 `memory_data/` 目录：
+记忆数据分布在三个层级，按 global → user → workspace 顺序合并读取：
 
 ```
-memory_data/
-├── history.db         # SQLite 历史（FTS 全文搜索）
-├── MEMORY.md          # 长期记忆
-├── USER.md            # 用户画像
-├── YYYY-MM-DD.md      # 情景记忆（按日）
-└── sessions/          # 命名会话
+~/.mini_ai/
+├── memory/                      # global 层（全用户共享）
+│   ├── MEMORY.md                #   长期记忆
+│   └── USER.md                  #   用户画像
+├── users/<username>/memory/     # user 层（用户级，优先级高于 global）
+│   ├── MEMORY.md
+│   └── USER.md
+└── workspaces/<name>/
+    └── memory_data/             # workspace 层（工作空间级，最高优先级）
+        ├── history.db           # SQLite 历史（FTS 全文搜索）
+        ├── MEMORY.md            # 长期记忆（当前工作空间专属）
+        ├── USER.md              # 用户画像（当前工作空间专属）
+        ├── YYYY-MM-DD.md        # 情景记忆（按日）
+        └── sessions/            # 命名会话
+
+# CLI 模式：workspace 层 = ws_dir/memory_data
+# Web 模式：user 层 = users/<username>/memory，workspace 层 = ws_dir/memory_data
 ```
 
 ## Web 端 Per-session 隔离
 
 Web 模式下每个会话独立初始化 MemoryStore + HistoryDB + Compactor 实例：
 
-- **MemoryStore** — 三层记忆（情景层/长期层/用户画像），存放在 `<session_dir>/<sid>/memory_data/`
+- **MemoryStore** — 三层记忆（情景层/长期层/用户画像），支持 global→user→workspace 三层级合并读取。Web 端 user 层存在 `users/<username>/memory/`，global 层存在 `~/.mini_ai/memory/`，workspace 层存在工作空间目录下
 - **HistoryDB** — SQLite 历史存储，支持全文搜索（`/api/chat/search`）
-- **Compactor** — 复用 `config.yaml` 的 `compactor` 配置，上下文超阈值自动压缩
+- **Compactor** — 复用 `config.yaml` 的 `compactor` 配置，上下文超阈值自动压缩。引入增量缓存机制：已摘要轮次复用缓存，`max_cached_summaries`（默认 200）控制缓存上限，超过时自动裁剪最旧轮次的摘要
 - **实时持久化** — 通过 `persist_fn` 回调，每条消息（用户/助手/工具调用/工具结果）生成即写入 DB，工具结果完整保存不截断（仅 LLM 上下文截断）
 - **会话名称** — 持久化到 `<session_dir>/<sid>/meta.json`，重启后恢复
-- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.context_limit`（默认 50）控制 LLM 上下文加载量，`compactor.keep_recent` 控制压缩后保留的完整消息数，三者独立配置
+- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.context_limit`（默认 50）控制 LLM 上下文加载量，`compactor.keep_recent` 控制压缩后保留的完整消息数。`keep_budget_ratio`（默认 0.2）和 `early_compact_ratio`（默认 0.85）控制压缩保留精度和触发时机，`max_cached_summaries`（默认 200）控制增量压缩缓存上限，三者独立配置
 - **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md

@@ -90,7 +90,9 @@ display:
 compactor:
   context_usage_threshold: 0.8   # prompt_tokens 占 context_length 比例超此值时触发，默认 0.8
   keep_recent: 50                # 保留最近 N 条消息不压缩，默认 50
-  char_threshold: 20000          # 本地预估字符数超此值也触发（API 未返回 token 数时），默认 20000
+  keep_budget_ratio: 0.2         # 压缩后保留轮次占上下文窗口比例，默认 0.2
+  early_compact_ratio: 0.85      # 预压缩触发阈值相对 context_usage_threshold 的比例，默认 0.85
+  max_cached_summaries: 200       # 压缩轮次摘要缓存条数上限（非上下文消息），超过时自动清理最旧轮次的摘要，防止长时间对话内存泄漏
   context_limit: 50               # 加载到 LLM 上下文的消息条数，默认 50
 
 # ── 队友配置 ──────────────────────────────────────────────────
@@ -98,6 +100,7 @@ compactor:
 teammate:
   max_teammates: 10    # 最多同时存在的队友数，默认 10
   max_turns: 20        # 队友单次任务最大工具调用轮次，默认 20
+  idle_timeout: 300    # 队友空闲超时（秒），超时自动 shutdown，默认 300（5分钟），设为 0 永不退出
   base_tools:          # 队友默认可用的工具列表
     - run_command
     - web_fetch

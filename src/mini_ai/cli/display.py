@@ -228,7 +228,7 @@ class Display:
             logger.debug(f"[思考内容] {self._thinking_buf[:500]}")
         self._thinking_buf = ""
 
-    def tool_call_start(self, name: str, args_summary: str):
+    def tool_call_start(self, name: str, args_summary: str, tool_call_id: str = ""):
         self._tool_start_time = time.monotonic()
         if self.tool_detail == "minimal":
             self.console.print(Text(f"  🔧 {name}", style="dim"))
@@ -239,7 +239,7 @@ class Display:
             display_args = args_summary[:80]
             self.console.print(Text(f"  🔧 {name}({display_args})", style="dim"))
 
-    def tool_result(self, name: str, result: str, elapsed: float | None = None):
+    def tool_result(self, name: str, result: str, elapsed: float | None = None, tool_call_id: str = ""):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
         if self._on_status_update:

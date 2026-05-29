@@ -148,6 +148,8 @@ def run_tool_loop(
                 content = (m.get("content") or "")[:60].replace("\n", " ")
                 tool_summary.append(f"→{content}")
         logger.warning(f"[runner] 工具循环达到上限 {max_turns} 轮，强制退出。最近工具: {' | '.join(tool_summary[-20:])}")
+        if msg and msg.get("content"):
+            return msg, spawned
         if display:
             display.text_end()
         return None, spawned
@@ -166,7 +168,7 @@ def run_tool_loop(
 def run_agent(messages: list[dict], *, max_turns: int = 10,
               tool_names: list[str] | None = None,
               context_length: int = 128000, ctx=None) -> str | None:
-    """轻量 agent 循环（供子代理/队友使用），返回最终文本。"""
+    """轻量 agent 循环（供子代理/队友使用），返回最终文本。超轮次时自动请求总结。"""
     from .tools import get_definitions
 
     tools = _filter_tools(tool_names) if tool_names else get_definitions()
@@ -181,4 +183,22 @@ def run_agent(messages: list[dict], *, max_turns: int = 10,
         context_usage_limit=_CONTEXT_USAGE_LIMIT,
         ctx=ctx,
     )
-    return msg.get("content") if msg else None
+    if msg and msg.get("content"):
+        return msg["content"]
+    if not msg:
+        last_asst = ""
+        for m in reversed(messages):
+            if m.get("role") == "assistant" and m.get("content"):
+                last_asst = m["content"]
+                break
+        if last_asst:
+            return last_asst
+        try:
+            from .llm import chat as llm_chat
+            summary_prompt = "根据以上工具调用过程，简要总结你的发现和结论。只输出总结，不要调用任何工具。"
+            messages.append({"role": "user", "content": summary_prompt})
+            result = llm_chat(messages, tools=None, ctx=ctx)
+            return result.get("content", "") if result else ""
+        except Exception:
+            return ""
+    return ""

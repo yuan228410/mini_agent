@@ -37,6 +37,11 @@ _remember_def = {
                     "enum": ["user_preference", "project_info", "decision", "discovery", "general"],
                     "description": "记忆分类",
                 },
+                "level": {
+                    "type": "string",
+                    "enum": ["global", "user", "workspace"],
+                    "description": "记忆写入层级：global（全局）、user（用户级，默认）、workspace（工作空间级）",
+                },
             },
             "required": ["content"],
         },
@@ -52,17 +57,23 @@ def _remember_exec(args: dict) -> str:
     if not content:
         return "Error: content 不能为空"
     category = args.get("category", "general")
+    level = args.get("level", "user")
 
-    current = store.read_memory() or ""
+    tier_dir = store.get_tier_dir(level)
+    if not tier_dir:
+        return f"Error: 层级 '{level}' 不可用"
+
+    target_file = tier_dir / "MEMORY.md"
+    current = target_file.read_text(encoding="utf-8") if target_file.exists() else ""
     entry = f"- [{category}] {content}"
 
     if entry in current:
-        return f"已存在相同记忆，跳过"
+        return "已存在相同记忆，跳过"
 
     new_memory = current.rstrip() + "\n" + entry + "\n" if current else entry + "\n"
-    store.write_memory(new_memory)
-    logger.info(f"[记忆+] [{category}] {content[:60]}")
-    return f"已记住: {content}"
+    store.write_memory_at(new_memory, level)
+    logger.info(f"[记忆+] [{category}] {content[:60]} level={level}")
+    return f"已记住({level}): {content}"
 
 
 # ── recall ──
@@ -120,6 +131,11 @@ _forget_def = {
                     "type": "string",
                     "description": "要删除的记忆中包含的关键词",
                 },
+                "level": {
+                    "type": "string",
+                    "enum": ["global", "user", "workspace"],
+                    "description": "记忆删除层级：global（全局）、user（用户级，默认）、workspace（工作空间级）",
+                },
             },
             "required": ["keyword"],
         },
@@ -134,8 +150,14 @@ def _forget_exec(args: dict) -> str:
     keyword = args.get("keyword", "").strip()
     if not keyword:
         return "Error: keyword 不能为空"
+    level = args.get("level", "user")
 
-    memory = store.read_memory()
+    tier_dir = store.get_tier_dir(level)
+    if not tier_dir:
+        return f"Error: 层级 '{level}' 不可用"
+
+    target_file = tier_dir / "MEMORY.md"
+    memory = target_file.read_text(encoding="utf-8") if target_file.exists() else ""
     if not memory:
         return "长期记忆为空，无需删除"
 
@@ -146,9 +168,9 @@ def _forget_exec(args: dict) -> str:
     if removed == 0:
         return f"未找到包含 '{keyword}' 的记忆"
 
-    store.write_memory("\n".join(remaining) + "\n" if remaining else "")
-    logger.info(f"[记忆-] 删除 {removed} 条包含 '{keyword}' 的记忆")
-    return f"已删除 {removed} 条记忆"
+    store.write_memory_at("\n".join(remaining) + "\n" if remaining else "", level)
+    logger.info(f"[记忆-] 删除 {removed} 条包含 '{keyword}' 的记忆 level={level}")
+    return f"已删除 {removed} 条记忆({level})"
 
 
 # ── 构建可注册的工具模块对象 ──

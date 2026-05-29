@@ -38,9 +38,9 @@
 
 | 工具 | 说明 |
 |------|------|
-| `remember(content, category?)` | 主动写入长期记忆，支持分类：user_preference / project_info / decision / discovery / general |
-| `recall(keyword?)` | 检索长期记忆，支持模糊关键词匹配 |
-| `forget(keyword)` | 删除包含指定关键词的过期记忆 |
+| `remember(content, category?, level?)` | 主动写入长期记忆，支持分类：user_preference / project_info / decision / discovery / general。`level` 指定写入层级：`global` / `user`（默认）/ `workspace` |
+| `recall(keyword?)` | 检索长期记忆，支持模糊关键词匹配（读取合并后结果） |
+| `forget(keyword, level?)` | 删除包含指定关键词的过期记忆。`level` 指定操作层级：`global` / `user`（默认）/ `workspace` |
 | `search_history(keyword, date_from?, date_to?, limit?)` | 跨会话全文搜索历史对话 |
 | `manage_history(action, keep_count?, keyword?, confirmed?)` | 管理历史消息：list / keep_recent / delete_keyword / delete_all（需用户确认后方可删除） |
 
