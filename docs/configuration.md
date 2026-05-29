@@ -38,6 +38,7 @@ compactor:
   context_usage_threshold: 0.8
   keep_recent: 50
   char_threshold: 20000
+  context_limit: 50
 
 teammate:
   max_teammates: 10
@@ -140,6 +141,7 @@ logging:
 | `context_usage_threshold` | `0.8` | 压缩触发：prompt_tokens 超过上下文长度的比例 |
 | `keep_recent` | `50` | 压缩后保留最近消息数 |
 | `char_threshold` | `20000` | 压缩后保留消息的最大字符数 |
+| `context_limit` | `50` | 加载到 LLM 上下文的消息条数 |
 
 ### teammate
 
@@ -177,7 +179,7 @@ logging:
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `history_limit` | `200` | Web 端加载历史消息条数（前端展示），`compactor.keep_recent` 控制上下文构建量 |
+| `history_limit` | `200` | Web 端前端展示历史消息条数，`compactor.context_limit` 控制 LLM 上下文加载量 |
 
 ### runner
 

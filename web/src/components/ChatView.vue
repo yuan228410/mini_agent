@@ -338,9 +338,23 @@ function _processEvent(s: SessionState, event: WsEvent) {
   }
 }
 
+const showExportDialog = ref(false)
+const exportLimit = ref(0)
+const exportThinking = ref(false)
+const exportTools = ref(false)
+
 async function doExport() {
+  exportLimit.value = 0
+  exportThinking.value = false
+  exportTools.value = false
+  showExportDialog.value = true
+}
+
+async function confirmExport() {
+  showExportDialog.value = false
+  const limit = isNaN(exportLimit.value) ? 0 : (exportLimit.value || 0)
   try {
-    await exportSession(activeSessionId.value, props.workspace || undefined)
+    await exportSession(activeSessionId.value, props.workspace || undefined, limit, exportThinking.value, exportTools.value)
   } catch (e: any) {
     alert(e.message || '导出失败')
   }
@@ -459,6 +473,24 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   <div class="chat-toolbar" v-if="messages.length > 0">
     <button class="export-btn" @click="doExport" title="导出 Markdown">📥 导出</button>
   </div>
+  <Teleport to="body">
+    <div v-if="showExportDialog" class="export-overlay" @click.self="showExportDialog = false">
+      <div class="export-dialog">
+        <div class="export-title">导出会话</div>
+        <div class="export-row">
+          <label>消息条数</label>
+          <input v-model.number="exportLimit" type="number" min="0" placeholder="0 = 全部" class="export-input" />
+          <span class="export-hint">0 表示全部</span>
+        </div>
+        <div class="export-row"><label><input v-model="exportThinking" type="checkbox" /> 包含思考过程</label></div>
+        <div class="export-row"><label><input v-model="exportTools" type="checkbox" /> 包含工具调用</label></div>
+        <div class="export-actions">
+          <button class="export-cancel" @click="showExportDialog = false">取消</button>
+          <button class="export-confirm" @click="confirmExport">导出</button>
+        </div>
+      </div>
+    </div>
+  </Teleport>
   <div class="chat-view" ref="chatContainer" @scroll="_onChatScroll">
     <div class="messages" v-if="messages.length === 0">
       <div class="empty-state">
@@ -517,6 +549,19 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   transition: all 0.15s ease;
 }
 .export-btn:hover { color: var(--fg); background: var(--bg-thinking); }
+
+.export-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 200; display: flex; align-items: center; justify-content: center; animation: fadeIn 0.15s ease; }
+.export-dialog { background: var(--bg); border: 0.5px solid var(--border); border-radius: 12px; padding: 1.2rem 1.5rem; width: 360px; box-shadow: 0 8px 32px var(--shadow); }
+.export-title { font-size: 1rem; font-weight: 600; margin-bottom: 0.8rem; color: var(--fg); }
+.export-row { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem; font-size: 0.85rem; color: var(--fg); }
+.export-row label { display: flex; align-items: center; gap: 0.3rem; cursor: pointer; }
+.export-input { width: 80px; padding: 0.25rem 0.5rem; border: 0.5px solid var(--border); border-radius: 5px; background: var(--bg-card); color: var(--fg); font-size: 0.85rem; }
+.export-hint { font-size: 0.75rem; color: var(--fg-dim); }
+.export-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.8rem; }
+.export-cancel { padding: 0.35rem 0.8rem; border: 0.5px solid var(--border); border-radius: 5px; background: transparent; color: var(--fg-dim); font-size: 0.82rem; cursor: pointer; }
+.export-cancel:hover { color: var(--fg); }
+.export-confirm { padding: 0.35rem 0.8rem; border: none; border-radius: 5px; background: var(--accent); color: #fff; font-size: 0.82rem; cursor: pointer; }
+.export-confirm:hover { background: var(--accent-hover); }
 
 .chat-view {
   flex: 1;

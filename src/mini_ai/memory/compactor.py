@@ -1,5 +1,6 @@
 """压缩器：按轮次摘要 + 三层记忆更新"""
 import re
+from pathlib import Path
 from datetime import datetime, timezone, timedelta
 
 from ..logger import logger
@@ -96,7 +97,8 @@ class Compactor:
     def __init__(self, memory_store: MemoryStore, *,
                  keep_recent: int = 50, char_threshold: int = 20000,
                  context_usage_threshold: float = 0.8, context_length: int = 128000,
-                 context_builder=None, skill_loader=None, history_db=None, project_path=""):
+                 context_builder=None, skill_loader=None, history_db=None, project_path="",
+                 summary_dir: Path | None = None):
         self.memory = memory_store
         self.keep_recent = keep_recent
         self.char_threshold = char_threshold
@@ -106,6 +108,7 @@ class Compactor:
         self.skill_loader = skill_loader
         self.history_db = history_db
         self.project_path = project_path
+        self.summary_dir = summary_dir
 
     def should_compact(self, prompt_tokens: int) -> bool:
         if prompt_tokens <= 0:
@@ -171,8 +174,8 @@ class Compactor:
             new_messages.extend(rnd["execution"])
 
         self._update_memory(chat_fn, round_summaries, ctx)
-        if self.history_db:
-            self.history_db.mark_archived()
+        if round_summaries and self.summary_dir:
+            self._write_summary(round_summaries)
 
         if self.context_builder:
             new_messages[0]["content"] = self.context_builder.build(
@@ -183,6 +186,22 @@ class Compactor:
 
         logger.info(f"[压缩←] {len(old_rounds)} 轮摘要，保留 {len(recent_rounds)} 轮完整")
         return new_messages
+
+    def _write_summary(self, round_summaries: list[str]):
+        self.summary_dir.mkdir(parents=True, exist_ok=True)
+        path = self.summary_dir / "compaction_summary.md"
+        ts = datetime.now(_UTC8).strftime("%Y-%m-%d %H:%M")
+        lines = [f"\n## 压缩 {ts}\n"]
+        for s in round_summaries:
+            lines.append(f"- {s}")
+        lines.append("")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        if path.exists():
+            text = path.read_text(encoding="utf-8")
+            sections = text.split("\n## 压缩 ")
+            if len(sections) > 10:
+                path.write_text("## 压缩 " + "\n## 压缩 ".join(sections[-10:]), encoding="utf-8")
 
     def _split_rounds(self, non_system: list[dict]) -> list[dict]:
         rounds = []

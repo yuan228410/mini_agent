@@ -583,11 +583,14 @@ export async function removeMcpServer(name: string): Promise<any> {
 }
 
 
-export async function exportSession(sessionId: string, workspace?: string): Promise<void> {
+export async function exportSession(sessionId: string, workspace?: string, limit?: number, includeThinking?: boolean, includeTools?: boolean): Promise<void> {
   const params = new URLSearchParams()
   params.set('session_id', sessionId)
   params.set('username', _username())
   if (workspace) params.set('workspace', workspace)
+  if (limit && limit > 0) params.set('limit', String(limit))
+  if (includeThinking) params.set('include_thinking', 'true')
+  if (includeTools) params.set('include_tools', 'true')
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 30000)
   let resp: Response

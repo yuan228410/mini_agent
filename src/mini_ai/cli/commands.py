@@ -18,6 +18,8 @@ class CommandHandler:
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
+        if user_input != "/purge":
+            self._purge_pending = False
         if user_input.lower() in ("exit", "quit", "q", "/exit", "/quit", "/q"):
             return "break"
 
@@ -65,20 +67,78 @@ class CommandHandler:
             messages[:] = self.compactor.compact(chat, messages, ctx=self.ctx)
             self.inject_fn(messages)
             after = len([m for m in messages if m["role"] != "system"])
-            self.disp.info(f"压缩完成：{before} → {after} 条消息（归档 {before - after} 条）")
+            self.disp.info(f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条，历史保留在 DB 中）")
             return "continue"
 
         if user_input == "/history":
-            unarchived = self.history_db.load_unarchived()
-            if not unarchived:
+            history = self.history_db.load_all(limit=50)
+            if not history:
                 self.disp.info("暂无历史消息")
                 return "continue"
-            for i, msg in enumerate(unarchived, 1):
+            for i, msg in enumerate(history, 1):
                 role = msg.get("role", "?")
                 text = (msg.get("content") or "")[:100]
                 ts = msg.get("timestamp", "")
                 ts_display = f" {ts[2:].replace(chr(84), chr(32))}" if ts else ""
                 self.disp.info(f"  [{i}] {role}{ts_display}: {text}")
+            return "continue"
+
+        if user_input == "/export" or user_input.startswith("/export "):
+            parts = user_input[8:].strip().split()
+            path = ""
+            include_thinking = False
+            include_tools = False
+            for p in parts:
+                if p == "--thinking":
+                    include_thinking = True
+                elif p == "--tools":
+                    include_tools = True
+                elif not path:
+                    path = p
+            if not path:
+                from datetime import datetime as _dt
+                path = f"chat_export_{_dt.now().strftime('%Y%m%d_%H%M%S')}.md"
+            msgs = self.history_db.load_all()
+            if not msgs:
+                self.disp.info("没有历史消息可导出")
+                return "continue"
+            lines = ["# 对话导出\n"]
+            for m in msgs:
+                role = m.get("role", "")
+                content = m.get("content") or ""
+                ts = m.get("timestamp", "")
+                if role in ("system", "tool"):
+                    continue
+                if role == "user":
+                    label = "**🧑 用户**"
+                    if ts: label += f"  `{ts}`"
+                    lines.append(f"\n{label}\n\n{content}\n")
+                elif role == "assistant":
+                    has_thinking = include_thinking and m.get("thinking")
+                    has_tools = include_tools and m.get("tool_calls")
+                    if not content and not has_thinking and not has_tools:
+                        continue
+                    label = "**🤖 助手**"
+                    if ts: label += f"  `{ts}`"
+                    lines.append(f"\n{label}\n")
+                    if has_thinking:
+                        thinking = m["thinking"] if isinstance(m["thinking"], str) else str(m["thinking"])
+                        lines.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n{thinking}\n\n</details>\n")
+                    if has_tools:
+                        for tc in m["tool_calls"]:
+                            fn = tc.get("function", {})
+                            name = fn.get("name", "?")
+                            a = str(fn.get("arguments", ""))
+                            result = tc.get("_result", "")
+                            lines.append(f"\n> 🔧 **{name}**({a[:200]})\n")
+                            if result:
+                                lines.append(f"> 结果: {result[:500]}\n")
+                    if content:
+                        lines.append(f"\n{content}\n")
+            from pathlib import Path as _P
+            fp = _P(path)
+            fp.write_text("\n".join(lines), encoding="utf-8")
+            self.disp.info(f"已导出到 {fp.resolve()}")
             return "continue"
 
         if user_input == "/model":
@@ -106,6 +166,11 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/purge":
+            if not getattr(self, '_purge_pending', False):
+                self._purge_pending = True
+                self.disp.info("⚠ 确认要彻底删除所有历史消息（不可恢复）？再次输入 /purge 确认")
+                return "continue"
+            self._purge_pending = False
             non_system = [m for m in messages if m["role"] != "system"]
             if not non_system:
                 self.disp.info("没有历史消息需要删除")
@@ -124,8 +189,7 @@ class CommandHandler:
                 return "continue"
             messages[:] = [messages[0]]
             self.inject_fn(messages)
-            self.history_db.mark_archived()
-            self.disp.info(f"已清空 {len(non_system)} 条会话消息")
+            self.disp.info(f"已清空 {len(non_system)} 条上下文消息（历史保留在 DB 中）")
             return "continue"
 
         if user_input == "/genskill":

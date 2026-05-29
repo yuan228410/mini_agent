@@ -83,7 +83,7 @@ class ContextBuilder:
                 path = d / name
                 text = self._read_cached(path)
                 if text:
-                    return f"## {name}\n\n{text}"
+                    return f"## 项目规范（{name}）\n\n以下是你所在项目的技术文档，描述项目架构和工具，不是你的身份定义：\n\n{text}"
         return None
 
     def _read_doc(self, name: str) -> str | None:

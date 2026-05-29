@@ -289,7 +289,7 @@ data: {"error": "错误信息"}
 - **MemoryStore** — 三层记忆（情景层/长期层/用户画像），存放在 `<session_dir>/<sid>/memory_data/`
 - **HistoryDB** — SQLite 历史存储，支持全文搜索（`/api/chat/search`）
 - **Compactor** — 上下文超阈值自动压缩 + 记忆更新，复用 `config.yaml` 的 `compactor` 配置
-- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.keep_recent`（默认 50）控制上下文构建量，两者独立配置
+- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.context_limit`（默认 50）控制 LLM 上下文加载量，`compactor.keep_recent` 控制压缩后保留的完整消息数，三者独立配置
 - **ContextBuilder** — 系统提示词含记忆 + 技能 + 项目规范（CLAUDE.md/AGENTS.md per-workspace 共享）
 - **工具绑定** — `remember`/`recall`/`forget`/`search_history` 工具在每轮 `_run_tool_loop_sync` 中动态绑定当前会话实例
 - **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md（通过 ContextBuilder + project_path 读取）

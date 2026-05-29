@@ -44,6 +44,7 @@ const globalFields = reactive({
   context_usage_limit: 0.88,
   plan_approval: true,
   history_limit: 200,
+  context_limit: 50,
   log_level: 'WARNING',
   mcp_enabled: false,
 })
@@ -120,6 +121,8 @@ async function loadSettings() {
 
     const w = s.web || {}
     globalFields.history_limit = w.history_limit ?? 200
+    const cp = s.compactor || {}
+    globalFields.context_limit = cp.context_limit ?? 50
 
     const l = s.logging || {}
     globalFields.log_level = l.level || 'WARNING'
@@ -222,6 +225,7 @@ async function save() {
     }
     updates.plan = { approval: globalFields.plan_approval }
     updates.web = { history_limit: globalFields.history_limit }
+    updates.compactor = { context_limit: globalFields.context_limit }
     updates.logging = { level: globalFields.log_level }
   updates.mcp = { enabled: globalFields.mcp_enabled }
 
@@ -450,8 +454,12 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
           <div class="settings-section">
             <div class="section-title">其他</div>
             <div class="field">
-              <label>Web 历史加载条数</label>
+              <label>前端展示条数</label>
               <input type="number" v-model.number="globalFields.history_limit" min="10" max="1000" />
+            </div>
+            <div class="field">
+              <label>上下文加载条数</label>
+              <input type="number" v-model.number="globalFields.context_limit" min="10" max="500" />
             </div>
             <div class="field">
               <label>日志级别</label>

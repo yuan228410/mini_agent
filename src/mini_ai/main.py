@@ -116,7 +116,7 @@ def main():
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
             system_prompt_chars=len(messages[0]["content"]) if messages else 0,
-            history_count=len(history_db.load_unarchived()),
+            history_count=history_db.count(),
         )
 
     disp = Display(
@@ -177,6 +177,7 @@ def main():
         skill_loader=SKILL_LOADER,
         history_db=history_db,
         project_path=str(Path.cwd()),
+        summary_dir=ws_dir,
     )
 
     cmd = CommandHandler(
@@ -190,10 +191,11 @@ def main():
     messages = [{"role": "system", "content": system_prompt}]
     _inject_todos(messages)
 
-    unarchived = history_db.load_unarchived()
-    if unarchived:
-        messages.extend(unarchived)
-        logger.info(f"[恢复] {len(unarchived)} 条历史消息")
+    _ctx_limit = COMPACTOR.get("context_limit", 50)
+    restored = history_db.load_all(limit=_ctx_limit)
+    if restored:
+        messages.extend(restored)
+        logger.info(f"[恢复] {len(restored)} 条历史消息")
 
     disp.status_bar(
         model=MODEL_CONFIG.get("model", "?"),
@@ -201,7 +203,7 @@ def main():
         prompt_tokens=0,
         completion_tokens=0,
         system_prompt_chars=len(messages[0]["content"]) if messages else 0,
-        history_count=len(unarchived),
+        history_count=len(restored),
     )
 
     def _flush_deferred(history_db, messages, deferred_list):
@@ -249,20 +251,22 @@ def main():
                     skill_loader=SKILL_LOADER,
                     history_db=history_db,
                     project_path=ws.project_path or "",
+                    summary_dir=ws_dir,
                 )
                 register_memory_tools(store)
                 register_history_tools(history_db)
                 system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
                 messages = [{"role": "system", "content": system_prompt}]
                 _inject_todos(messages)
-                unarchived = history_db.load_unarchived()
-                if unarchived:
-                    messages.extend(unarchived)
+                _ctx_limit2 = COMPACTOR.get("context_limit", 50)
+                restored2 = history_db.load_all(limit=_ctx_limit2)
+                if restored2:
+                    messages.extend(restored2)
                 cmd.store = store
                 cmd.sessions = sessions
                 cmd.compactor = compactor
                 cmd.history_db = history_db
-                disp.info(f"工作空间 '{ws_name}' 已加载（{len(unarchived)} 条历史）")
+                disp.info(f"工作空间 '{ws_name}' 已加载（{len(restored2)} 条历史）")
             continue
 
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -339,7 +343,7 @@ def main():
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
                 system_prompt_chars=len(messages[0]["content"]) if messages else 0,
-                history_count=len(history_db.load_unarchived()),
+                history_count=history_db.count(),
             )
 
             if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):

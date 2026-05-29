@@ -6,7 +6,7 @@
 
 | 层级 | 存储 | 生命周期 | 说明 |
 |------|------|----------|------|
-| 对话历史 | `history.db`（SQLite） | 持久 | 全量对话记录，支持 FTS5 全文搜索，按 workspace 隔离。压缩后旧消息标记 `archived`，数据不删除 |
+| 对话历史 | `history.db`（SQLite） | 持久 | 全量对话记录，支持 FTS5 全文搜索，按 workspace 隔离。压缩后摘要写入 `compaction_summary.md`，全量数据保留 |
 | 情景层 | `YYYY-MM-DD.md` | 按日 | 每日情景记忆短文——当天对话的关键事实、结论、待办。每天一个文件，用于快速回顾当日上下文 |
 | 长期层 | `MEMORY.md` | 持久 | 跨对话的长期记忆——核心目标、重要决策、项目背景、关键技术选型等。压缩时由 LLM 增量更新 |
 | 用户画像 | `USER.md` | 持久 | 用户偏好、习惯、知识背景。帮助 Agent 更好地理解用户需求风格 |
@@ -14,14 +14,14 @@
 ## 数据流
 
 ```
-用户发消息 → 存入 history.db（未归档）
+用户发消息 → 存入 history.db
              ↓
         token 超阈值？
           是 → 触发压缩
                ├─ 旧轮次摘要 → 写入情景记忆（今日 .md）
                ├─ 重要信息提炼 → 增量更新长期记忆（MEMORY.md）
                ├─ 用户特征提取 → 增量更新用户画像（USER.md）
-               ├─ 旧消息标记 archived（不删除，仍可搜索）
+               ├─ 摘要写入 `compaction_summary.md`（全量数据保留在 history.db，仍可搜索）
                └─ 重建 system prompt（含最新记忆 + 项目规范）
           否 → 继续
 ```
@@ -78,7 +78,7 @@ Agent 可随时主动操作长期记忆，不需要等待压缩触发：
 | `/save <名称>` | 保存当前对话为命名会话（跳过 system 消息） |
 | `/load <名称>` | 加载已保存的会话，恢复上下文（保留当前 system prompt） |
 | `/sessions` | 列出所有已保存会话（标记当前） |
-| `/compact` | 手动触发对话压缩，归档旧消息 |
+| `/compact` | 手动触发对话压缩，摘要写入文件 |
 | `/clear` | 清空当前会话的历史消息 |
 | `/history` | 查看历史消息列表 |
 
@@ -104,5 +104,5 @@ Web 模式下每个会话独立初始化 MemoryStore + HistoryDB + Compactor 实
 - **Compactor** — 复用 `config.yaml` 的 `compactor` 配置，上下文超阈值自动压缩
 - **实时持久化** — 通过 `persist_fn` 回调，每条消息（用户/助手/工具调用/工具结果）生成即写入 DB，工具结果完整保存不截断（仅 LLM 上下文截断）
 - **会话名称** — 持久化到 `<session_dir>/<sid>/meta.json`，重启后恢复
-- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.keep_recent`（默认 50）控制上下文构建量，两者独立配置
+- **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.context_limit`（默认 50）控制 LLM 上下文加载量，`compactor.keep_recent` 控制压缩后保留的完整消息数，三者独立配置
 - **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md

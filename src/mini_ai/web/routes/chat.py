@@ -143,6 +143,7 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         skill_loader=SKILL_LOADER,
         history_db=history_db,
         project_path=project_path,
+        summary_dir=session_dir,
     )
 
     components = {
@@ -268,7 +269,7 @@ def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: 
         if base is None:
             base = _resolve_base(username, workspace or "default")
         comp = _get_or_create_components(username, sid, base, workspace)
-        result = comp["history_db"].load_all(sid, limit=WEB.get("history_limit", 200))
+        result = comp["history_db"].load_all(sid, limit=COMPACTOR.get("context_limit", 50))
         logger.debug(f"[perf] _load_from_db sid={sid} msgs={len(result) if result else 0} time={time.time()-_t0:.3f}s")
         return result
     except Exception as e:
@@ -441,7 +442,6 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         usage = get_usage()
         if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
             messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx)
-            comp["history_db"].mark_archived()
             messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
             _inject_todos(messages)
 
@@ -799,9 +799,8 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
         session_id = "default"
     base = _resolve_base(username, workspace or None)
     cache_key = _cache_key(username, workspace or None, session_id)
-    messages = _SESSIONS.get(cache_key)
-    if not messages:
-        messages = _load_from_db(username, session_id, base, workspace or None) or []
+    comp = _get_or_create_components(username, session_id, base, workspace or None)
+    messages = comp["history_db"].load_all(session_id, limit=WEB.get("history_limit", 200))
     if not messages:
         return {"session_id": session_id, "history": []}
     logger.info(f"[chat_history] sid={session_id} ws={workspace} base={base} msgs={len(messages)} time={time.time()-_t0:.3f}s")
@@ -848,7 +847,7 @@ async def chat_reset(body: dict | None = None):
 
 
 @router.get("/chat/export")
-async def chat_export(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")):
+async def chat_export(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default=""), limit: int = Query(default=0), include_thinking: bool = Query(default=False), include_tools: bool = Query(default=False)):
     from fastapi.responses import JSONResponse
     if not username:
         return JSONResponse({"error": "缺少 username"}, status_code=400)
@@ -860,9 +859,14 @@ async def chat_export(session_id: str = Query(default=""), username: str = Query
         logger.error(f"[export] _resolve_base error: {e}")
         return JSONResponse({"error": f"工作空间错误: {e}"}, status_code=400)
     cache_key = _cache_key(username, workspace or None, session_id)
-    messages = _SESSIONS.get(cache_key)
-    if not messages:
-        messages = _load_from_db(username, session_id, base, workspace or None) or []
+    cached = _SESSIONS.get(cache_key)
+    if cached and limit > 0:
+        messages = cached[-limit:]
+    elif cached:
+        messages = cached
+    else:
+        comp = _get_or_create_components(username, session_id, base, workspace or None)
+        messages = comp["history_db"].load_all(session_id, limit=limit) or []
     if not messages:
         return JSONResponse({"error": f"会话 '{session_id}' 不存在或无消息"}, status_code=404)
 
@@ -899,18 +903,22 @@ async def chat_export(session_id: str = Query(default=""), username: str = Query
         elif role == "assistant":
             thinking = m.get("thinking")
             tool_calls = m.get("tool_calls")
+            has_thinking = include_thinking and thinking
+            has_tools = include_tools and tool_calls
+            if not content and not has_thinking and not has_tools:
+                continue
             label = f"**🤖 助手**"
             if ts:
                 label += f"  `{ts}`"
             lines.append(f"\n{label}\n")
-            if thinking:
+            if has_thinking:
                 thinking_text = thinking if isinstance(thinking, str) else str(thinking)
                 lines.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n{thinking_text}\n\n</details>\n")
-            if tool_calls:
+            if has_tools:
                 for tc in tool_calls:
                     fn = tc.get("function", {})
                     name = fn.get("name", "?")
-                    args = fn.get("arguments", "")
+                    args = str(fn.get("arguments", ""))
                     result = tc.get("_result", "")
                     lines.append(f"\n> 🔧 **{name}**({args[:200]})\n")
                     if result:

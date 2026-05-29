@@ -33,11 +33,9 @@ class HistoryDB:
                     ts TEXT NOT NULL,
                     role TEXT NOT NULL,
                     content TEXT DEFAULT '',
-                    metadata TEXT DEFAULT '',
-                    archived INTEGER DEFAULT 0
+                    metadata TEXT DEFAULT ''
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_workspace ON messages(workspace);
-                CREATE INDEX IF NOT EXISTS idx_messages_archived ON messages(workspace, archived);
                 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
             """)
             try:
@@ -52,7 +50,7 @@ class HistoryDB:
         with self._lock:
             with self._conn:
                 cur = self._conn.execute(
-                    "INSERT INTO messages (workspace, session_id, ts, role, content, metadata, archived) VALUES (?, ?, ?, ?, ?, ?, 0)",
+                    "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
                     (self.workspace, session_id, ts, role, content, metadata),
                 )
                 try:
@@ -63,31 +61,7 @@ class HistoryDB:
                 except sqlite3.OperationalError:
                     pass
 
-    def load_unarchived(self) -> list[dict]:
-        with self._lock:
-            rows = self._conn.execute(
-                "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
-                (self.workspace,),
-            ).fetchall()
-        results = []
-        for role, content, metadata, ts in rows:
-            msg = {"role": role, "content": content, "timestamp": ts[:19] if ts else ""}
-            if metadata:
-                try:
-                    msg.update(json.loads(metadata))
-                except json.JSONDecodeError:
-                    pass
-            results.append(msg)
-        return results
 
-    def mark_archived(self):
-        with self._lock:
-            with self._conn:
-                self._conn.execute(
-                    "UPDATE messages SET archived=1 WHERE workspace=? AND archived=0",
-                    (self.workspace,),
-                )
-        logger.info(f"[HistoryDB] 已归档 workspace={self.workspace}")
 
     def purge(self):
         """彻底删除所有历史消息（不可恢复）"""
@@ -111,11 +85,10 @@ class HistoryDB:
                     f"DELETE FROM messages WHERE workspace=? AND id IN ({placeholders})",
                     [self.workspace] + list(ids),
                 )
-                for _id in ids:
-                    try:
-                        self._conn.execute("DELETE FROM messages_fts WHERE rowid=?", (_id,))
-                    except Exception:
-                        pass
+                try:
+                    self._conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", list(ids))
+                except Exception:
+                    pass
         logger.info(f"[HistoryDB] 删除 {cur.rowcount} 条消息")
         return cur.rowcount
 
@@ -163,7 +136,7 @@ class HistoryDB:
             with self._lock:
                 with self._conn:
                     cur = self._conn.execute(
-                        "DELETE FROM messages WHERE workspace=? AND archived=0",
+                        "DELETE FROM messages WHERE workspace=?",
                         (self.workspace,),
                     )
                     try:
@@ -175,7 +148,7 @@ class HistoryDB:
         with self._lock:
             with self._conn:
                 row = self._conn.execute(
-                    "SELECT id FROM messages WHERE workspace=? AND archived=0 ORDER BY id DESC LIMIT 1 OFFSET ?",
+                    "SELECT id FROM messages WHERE workspace=? ORDER BY id DESC LIMIT 1 OFFSET ?",
                     (self.workspace, keep_count - 1),
                 ).fetchone()
                 if not row:
@@ -196,7 +169,7 @@ class HistoryDB:
         """列出消息供审核（含 id），用于选择性删除"""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, role, content, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
+                "SELECT id, role, content, ts FROM messages WHERE workspace=? ORDER BY id",
                 (self.workspace,),
             ).fetchall()
         results = []
@@ -237,23 +210,23 @@ class HistoryDB:
             if session_id:
                 if limit > 0:
                     rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? AND archived=0 ORDER BY id DESC LIMIT ?) ORDER BY id",
+                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? ORDER BY id DESC LIMIT ?) ORDER BY id",
                         (self.workspace, session_id, limit),
                     ).fetchall()
                 else:
                     rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? AND archived=0 ORDER BY id",
+                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? ORDER BY id",
                         (self.workspace, session_id),
                     ).fetchall()
             else:
                 if limit > 0:
                     rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id DESC LIMIT ?) ORDER BY id",
+                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? ORDER BY id DESC LIMIT ?) ORDER BY id",
                         (self.workspace, limit),
                     ).fetchall()
                 else:
                     rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND archived=0 ORDER BY id",
+                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? ORDER BY id",
                         (self.workspace,),
                     ).fetchall()
         results = []
@@ -268,11 +241,11 @@ class HistoryDB:
             results.append(msg)
         return results
 
-    def count(self, archived: bool = False) -> int:
+    def count(self) -> int:
         with self._lock:
             row = self._conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE workspace=? AND archived=?",
-                (self.workspace, int(archived)),
+                "SELECT COUNT(*) FROM messages WHERE workspace=?",
+                (self.workspace,),
             ).fetchone()
         return row[0] if row else 0
 

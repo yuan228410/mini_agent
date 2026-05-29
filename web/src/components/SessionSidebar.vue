@@ -207,8 +207,14 @@ async function doDelete(sid: string) {
 async function doExport(sid: string) {
   const ws = contextMenu.value?.ws || activeWorkspace.value || ''
   contextMenu.value = null
+  const input = prompt('导出参数（条数,是否含思考,是否含工具）\n例: 0,false,false = 全部消息，不含思考和工具', '0,false,false')
+  if (input === null) return
+  const parts = input.split(',').map(s => s.trim())
+  const limit = parseInt(parts[0]) || 0
+  const thinking = parts[1] === 'true'
+  const tools = parts[2] === 'true'
   try {
-    await exportSession(sid, ws || undefined)
+    await exportSession(sid, ws || undefined, limit, thinking, tools)
   } catch (e: any) {
     alert(e.message || '导出失败')
   }
