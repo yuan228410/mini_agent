@@ -169,9 +169,9 @@ def main():
 
     compactor = Compactor(
         store,
-        keep_recent=COMPACTOR["keep_recent"],
-        char_threshold=COMPACTOR["char_threshold"],
-        context_usage_threshold=COMPACTOR["context_usage_threshold"],
+        keep_recent=COMPACTOR.get("keep_recent", 50),
+        char_threshold=COMPACTOR.get("char_threshold", 20000),
+        context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx,
         skill_loader=SKILL_LOADER,
@@ -239,6 +239,19 @@ def main():
                 store = MemoryStore(ws_dir / "memory_data")
                 history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
                 sessions = SessionManager(ws_dir / "memory_data" / "sessions")
+                compactor = Compactor(
+                    store,
+                    keep_recent=COMPACTOR.get("keep_recent", 50),
+                    char_threshold=COMPACTOR.get("char_threshold", 20000),
+                    context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
+                    context_length=MODEL_CONFIG.get("context_length", 128000),
+                    context_builder=ctx,
+                    skill_loader=SKILL_LOADER,
+                    history_db=history_db,
+                    project_path=ws.project_path or "",
+                )
+                register_memory_tools(store)
+                register_history_tools(history_db)
                 system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
                 messages = [{"role": "system", "content": system_prompt}]
                 _inject_todos(messages)
@@ -247,6 +260,8 @@ def main():
                     messages.extend(unarchived)
                 cmd.store = store
                 cmd.sessions = sessions
+                cmd.compactor = compactor
+                cmd.history_db = history_db
                 disp.info(f"工作空间 '{ws_name}' 已加载（{len(unarchived)} 条历史）")
             continue
 

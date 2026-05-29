@@ -1,4 +1,5 @@
 """历史消息 SQLite 存储 — FTS5 全文搜索支持"""
+import atexit
 import json
 import sqlite3
 import threading
@@ -20,6 +21,7 @@ class HistoryDB:
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
+        atexit.register(self.close)
 
     def _init_schema(self):
         with self._conn:
@@ -275,4 +277,7 @@ class HistoryDB:
         return row[0] if row else 0
 
     def close(self):
-        self._conn.close()
+        try:
+            self._conn.close()
+        except Exception:
+            pass

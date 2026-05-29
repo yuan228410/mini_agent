@@ -12,7 +12,7 @@ _UTC8 = timezone(timedelta(hours=8))
 def _now(): return datetime.now(_UTC8).strftime("%Y-%m-%dT%H:%M:%S")
 from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 
-_MAX_RESULT_CHARS = TOOL["max_result_chars"]
+_MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
 
 
 def _truncate(output: str) -> str:

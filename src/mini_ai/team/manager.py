@@ -97,9 +97,11 @@ class TeammateManager:
             self._wake_events[name].set()
 
         logger.info(f"[spawn→] {name} role={role}")
+        import contextvars as _cv
+        parent_ctx = _cv.copy_context()
         thread = threading.Thread(
-            target=self._teammate_loop,
-            args=(name, role, prompt),
+            target=parent_ctx.run,
+            args=(self._teammate_loop, name, role, prompt),
             daemon=True,
         )
         with self.lock:

@@ -1,5 +1,6 @@
 """三层记忆存储：原始层 / 情景记忆 / 长期记忆"""
 import json
+import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -18,6 +19,7 @@ class MemoryStore:
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.user_file = self.memory_dir / "USER.md"
         self._episode_dir = Path(episode_dir) if episode_dir else self.memory_dir
+        self._lock = threading.Lock()
         self._ensure()
 
     def _ensure(self):
@@ -39,9 +41,10 @@ class MemoryStore:
         return p.read_text(encoding="utf-8") if p.exists() else ""
 
     def append_today(self, content: str) -> None:
-        p = self._today_path()
-        existing = p.read_text(encoding="utf-8") if p.exists() else f"# {p.stem}\n"
-        p.write_text(existing.rstrip() + "\n\n" + content.strip() + "\n", encoding="utf-8")
+        with self._lock:
+            p = self._today_path()
+            existing = p.read_text(encoding="utf-8") if p.exists() else f"# {p.stem}\n"
+            p.write_text(existing.rstrip() + "\n\n" + content.strip() + "\n", encoding="utf-8")
 
     # ── 长期层 ──
     def read_memory(self) -> str:
@@ -52,7 +55,8 @@ class MemoryStore:
         return bool(content and content != "# 长期记忆")
 
     def write_memory(self, content: str) -> None:
-        self.memory_file.write_text(content.strip() + "\n", encoding="utf-8")
+        with self._lock:
+            self.memory_file.write_text(content.strip() + "\n", encoding="utf-8")
 
     # ── 用户画像 ──
     def read_user(self) -> str:
@@ -63,4 +67,5 @@ class MemoryStore:
         return bool(content and content != "# 用户画像")
 
     def write_user(self, content: str) -> None:
-        self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
+        with self._lock:
+            self.user_file.write_text(content.strip() + "\n", encoding="utf-8")

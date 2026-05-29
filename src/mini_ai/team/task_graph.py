@@ -50,6 +50,65 @@ class TaskGraph:
             ready.append(node)
         return ready
 
+    @staticmethod
+    def _safe_eval(expr: str, ctx: dict) -> bool:
+        """安全条件求值：仅支持比较、逻辑运算和属性访问，禁止任意代码执行。"""
+        import ast
+        import operator as op
+
+        _OPS = {
+            ast.Eq: op.eq, ast.NotEq: op.ne,
+            ast.In: lambda a, b: a in b, ast.NotIn: lambda a, b: a not in b,
+            ast.And: lambda a, b: a and b, ast.Or: lambda a, b: a or b,
+        }
+        _UNARY_OPS = {ast.Not: op.not_}
+
+        def _resolve(node):
+            if isinstance(node, ast.Constant):
+                return node.value
+            if isinstance(node, ast.Name):
+                return ctx.get(node.id, "")
+            if isinstance(node, ast.Attribute):
+                if node.attr.startswith("_"):
+                    raise ValueError(f"禁止访问私有属性: {node.attr}")
+                val = _resolve(node.value)
+                if isinstance(val, dict):
+                    return val.get(node.attr, "")
+                if isinstance(val, str):
+                    return getattr(val, node.attr, "")
+                raise ValueError(f"不支持对 {type(val).__name__} 的属性访问")
+            if isinstance(node, ast.Subscript):
+                val = _resolve(node.value)
+                key = _resolve(node.slice)
+                if isinstance(val, dict):
+                    return val.get(key, "")
+                return getattr(val, key, "")
+            if isinstance(node, ast.BoolOp):
+                result = _resolve(node.values[0])
+                for v in node.values[1:]:
+                    if isinstance(node.op, ast.And):
+                        result = result and _resolve(v)
+                    else:
+                        result = result or _resolve(v)
+                return result
+            if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+                return not _resolve(node.operand)
+            if isinstance(node, ast.Compare):
+                left = _resolve(node.left)
+                for op_node, comp_node in zip(node.ops, node.comparators):
+                    right = _resolve(comp_node)
+                    op_fn = _OPS.get(type(op_node))
+                    if op_fn is None:
+                        raise ValueError(f"不支持的操作符: {type(op_node).__name__}")
+                    if not op_fn(left, right):
+                        return False
+                    left = right
+                return True
+            raise ValueError(f"不支持的表达式: {type(node).__name__}")
+
+        tree = ast.parse(expr, mode="eval")
+        return bool(_resolve(tree.body))
+
     def _evaluate_condition(self, node: TaskNode) -> bool:
         ctx = {}
         for dep_id, dep_node in self.nodes.items():
@@ -60,7 +119,7 @@ class TaskGraph:
             }
         ctx["blackboard"] = self.blackboard.snapshot()
         try:
-            return bool(eval(node.condition, {"__builtins__": {}}, ctx))
+            return self._safe_eval(node.condition, ctx)
         except Exception as e:
             logger.warning(f"[DAG] 条件表达式求值失败 ({node.condition}): {e}")
             return True

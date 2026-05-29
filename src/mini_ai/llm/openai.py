@@ -47,13 +47,7 @@ def _apply_model_params(payload: dict, ctx=None):
         payload["reasoning_effort"] = effort
 
 
-def chat(messages, tools=True, ctx=None):
-    ensure_session_openai(ctx)
-    if get_api_mode(ctx) == "anthropic":
-        from .anthropic import chat as anth_chat
-        return anth_chat(messages, tools, ctx=ctx)
-    payload = {"model": get_model(ctx), "messages": messages}
-    _apply_model_params(payload, ctx)
+def _attach_tools(payload: dict, tools) -> list[str] | None:
     tool_names = None
     if tools is True:
         defs = get_definitions()
@@ -64,6 +58,17 @@ def chat(messages, tools=True, ctx=None):
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
+    return tool_names
+
+
+def chat(messages, tools=True, ctx=None):
+    ensure_session_openai(ctx)
+    if get_api_mode(ctx) == "anthropic":
+        from .anthropic import chat as anth_chat
+        return anth_chat(messages, tools, ctx=ctx)
+    payload = {"model": get_model(ctx), "messages": messages}
+    _apply_model_params(payload, ctx)
+    tool_names = _attach_tools(payload, tools)
 
     logger.info(f"[LLM→] model={get_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0}")
     if len(messages) <= 3:
@@ -164,16 +169,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         return
     payload = {"model": get_model(ctx), "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
     _apply_model_params(payload, ctx)
-    tool_names = None
-    if tools is True:
-        defs = get_definitions()
-        payload["tools"] = defs
-        payload["tool_choice"] = "auto"
-        tool_names = [d["function"]["name"] for d in defs]
-    elif tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-        tool_names = [d["function"]["name"] for d in tools]
+    tool_names = _attach_tools(payload, tools)
 
     logger.info(f"[LLM→] model={get_model(ctx)} msgs={len(messages)} tools={len(tool_names) if tool_names else 0} [stream]")
     if tool_names:
