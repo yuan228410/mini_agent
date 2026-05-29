@@ -20,7 +20,6 @@ from .team.loop import wait_for_teammates, cleanup_inbox
 from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, register_history_tools, render_todos
 from .workspace import WorkspaceManager
 
-SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
 _MCP_LOADER = None
@@ -137,7 +136,8 @@ def main():
     ws_dir = ws.ws_dir
     logger.info(f"[Workspace] {cwd_name} → {ws_dir} (project: {ws.project_path or cwd})")
 
-    register(SKILL_LOADER)
+    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, workspace_skills_dir=ws_dir / "skills")
+    register(skill_loader)
     register_subagents(SUBAGENT_LOADER)
 
     bus = MessageBus(ws_dir / ".team" / "inbox")
@@ -174,7 +174,7 @@ def main():
         context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx,
-        skill_loader=SKILL_LOADER,
+        skill_loader=skill_loader,
         history_db=history_db,
         project_path=str(Path.cwd()),
         summary_dir=ws_dir,
@@ -187,7 +187,7 @@ def main():
         history_db=history_db,
     )
 
-    system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
+    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
     messages = [{"role": "system", "content": system_prompt}]
     _inject_todos(messages)
 
@@ -238,6 +238,8 @@ def main():
             ws = ws_mgr.get(ws_name)
             if ws:
                 ws_dir = ws.ws_dir
+                skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, workspace_skills_dir=ws_dir / "skills")
+                register(skill_loader)
                 store = MemoryStore(ws_dir / "memory_data")
                 history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
                 sessions = SessionManager(ws_dir / "memory_data" / "sessions")
@@ -248,14 +250,14 @@ def main():
                     context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
                     context_length=MODEL_CONFIG.get("context_length", 128000),
                     context_builder=ctx,
-                    skill_loader=SKILL_LOADER,
+                    skill_loader=skill_loader,
                     history_db=history_db,
                     project_path=ws.project_path or "",
                     summary_dir=ws_dir,
                 )
                 register_memory_tools(store)
                 register_history_tools(history_db)
-                system_prompt = ctx.build(memory_store=store, skill_loader=SKILL_LOADER, project_path=ws.project_path)
+                system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
                 messages = [{"role": "system", "content": system_prompt}]
                 _inject_todos(messages)
                 _ctx_limit2 = COMPACTOR.get("context_limit", 50)

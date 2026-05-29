@@ -407,8 +407,29 @@ export async function resetChat(sessionId?: string, workspace?: string): Promise
   return resp.json()
 }
 
-export async function getSkills(): Promise<any> {
-  const resp = await _fetch('/api/skills')
+export interface SkillInfo {
+  name: string
+  description: string
+  tags: string
+  tier: string
+}
+
+export async function getSkills(username?: string, workspace?: string): Promise<{skills: SkillInfo[]}> {
+  const params = new URLSearchParams()
+  if (username) params.set('username', username)
+  if (workspace) params.set('workspace', workspace)
+  const qs = params.toString()
+  const resp = await _fetch('/api/skills' + (qs ? '?' + qs : ''))
+  return resp.json()
+}
+
+export async function deleteSkill(name: string, username?: string, workspace?: string, level?: string): Promise<any> {
+  const params = new URLSearchParams()
+  if (username) params.set('username', username)
+  if (workspace) params.set('workspace', workspace)
+  if (level) params.set('level', level)
+  const qs = params.toString()
+  const resp = await _fetch('/api/skills/' + encodeURIComponent(name) + (qs ? '?' + qs : ''), { method: 'DELETE' })
   return resp.json()
 }
 

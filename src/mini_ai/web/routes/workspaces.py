@@ -97,7 +97,7 @@ async def switch_workspace(body: dict):
 
     store = MemoryStore(ws.ws_dir / "memory_data")
     ctx = ContextBuilder(DATA_DIR)
-    skill_loader = SkillLoader(DATA_DIR / "skills", [])
+    skill_loader = SkillLoader(DATA_DIR / "skills", [], user_skills_dir=user_data_dir(username) / "skills", workspace_skills_dir=ws.ws_dir / "skills")
     system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
 
     return {"status": "ok", "message": f"已切换到 '{name}'", "project_path": ws.project_path}

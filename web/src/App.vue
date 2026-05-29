@@ -179,7 +179,7 @@ function submitUsername() {
       </div>
     </div>
     <StatusBar v-bind="config" :plan-mode="planMode" />
-    <SkillPanel :visible="showSkills" @close="showSkills = false" @use="onUseSkill" />
+    <SkillPanel :visible="showSkills" :username="currentUsername" :workspace="activeWorkspace" @close="showSkills = false" @use="onUseSkill" />
     <FileBrowserPanel :visible="showFiles" :workspace="activeWorkspace" @close="showFiles = false" />
     <SettingsPanel :visible="showSettings" @close="showSettings = false" />
   </template>

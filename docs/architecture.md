@@ -120,7 +120,7 @@ SOUL.md (核心身份)
 ---
 用户画像 (MemoryStore)
 ---
-可用技能 (SkillLoader)
+可用技能 (SkillLoader — global/user/workspace 三层覆盖)
 ---
 CLAUDE.md / AGENTS.md (项目规范，自动读取当前目录)
 ---

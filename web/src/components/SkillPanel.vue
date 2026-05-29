@@ -1,15 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { getSkills, getMcpStatus, type McpConnectedServer, type McpConfiguredServer } from '../api'
+import { ref, onMounted, watch } from 'vue'
+import { getSkills, deleteSkill, getMcpStatus, type SkillInfo, type McpConnectedServer, type McpConfiguredServer } from '../api'
 
-interface Skill {
-  name: string
-  description: string
-}
-
-const props = defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible: boolean, username?: string, workspace?: string }>()
 const emit = defineEmits(['close', 'use'])
-const skills = ref<Skill[]>([])
+const skills = ref<SkillInfo[]>([])
 const mcpEnabled = ref(false)
 const mcpConfigured = ref<McpConfiguredServer[]>([])
 const mcpConnected = ref<McpConnectedServer[]>([])
@@ -19,15 +14,14 @@ onMounted(async () => {
   await refresh()
 })
 
+watch(() => [props.visible, props.username, props.workspace], async ([vis]) => {
+  if (vis) await refresh()
+})
+
 async function refresh() {
   try {
-    const resp = await getSkills()
-    if (resp.skills && typeof resp.skills === 'string') {
-      skills.value = resp.skills
-        .split('\n')
-        .filter((s: string) => s.trim() && !s.trim().startsWith('('))
-        .map((s: string) => ({ name: s.trim(), description: '' }))
-    } else if (Array.isArray(resp.skills)) {
+    const resp = await getSkills(props.username, props.workspace)
+    if (Array.isArray(resp.skills)) {
       skills.value = resp.skills
     }
   } catch {}
@@ -44,6 +38,26 @@ async function refresh() {
 function useSkill(name: string) {
   emit('use', name)
   emit('close')
+}
+
+async function onDelete(name: string, tier: string) {
+  if (tier === 'extra') {
+    alert('扩展路径技能为只读，不可删除')
+    return
+  }
+  if (tier === 'global') {
+    if (!confirm(`确定删除全局技能 "${name}"？这将影响所有用户。`)) return
+  }
+  try {
+    const result = await deleteSkill(name, props.username, props.workspace)
+    if (result.ok) {
+      await refresh()
+    } else {
+      alert(result.error || '删除失败')
+    }
+  } catch (e) {
+    alert('删除失败')
+  }
 }
 </script>
 
@@ -67,10 +81,15 @@ function useSkill(name: string) {
             v-for="skill in skills"
             :key="skill.name"
             class="skill-item"
-            @click="useSkill(skill.name)"
           >
-            <span class="skill-item-name">{{ skill.name }}</span>
-            <span v-if="skill.description" class="skill-item-desc">{{ skill.description }}</span>
+            <div class="skill-item-main" @click="useSkill(skill.name)">
+              <div class="skill-item-row">
+                <span class="skill-item-name">{{ skill.name }}</span>
+                <span v-if="skill.tier" class="skill-tier-badge" :class="skill.tier">{{ skill.tier }}</span>
+              </div>
+              <span v-if="skill.description" class="skill-item-desc">{{ skill.description }}</span>
+            </div>
+            <button class="skill-delete-btn" @click.stop="onDelete(skill.name, skill.tier)" title="删除技能">🗑</button>
           </div>
         </div>
 
@@ -194,18 +213,49 @@ function useSkill(name: string) {
   opacity: 0.7;
 }
 .skill-item {
+  display: flex;
+  align-items: center;
   padding: 0.7rem 1.2rem;
-  cursor: pointer;
-  transition: background 0.15s ease;
   border-bottom: 0.5px solid var(--border-light);
+  transition: background 0.15s ease;
 }
 .skill-item:hover { background: var(--bg-thinking); }
+.skill-item-main {
+  flex: 1;
+  cursor: pointer;
+  min-width: 0;
+}
+.skill-item-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
 .skill-item-name {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.85rem;
   font-weight: 500;
   color: var(--fg);
-  display: block;
+}
+.skill-tier-badge {
+  font-size: 0.68rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-family: 'JetBrains Mono', monospace;
+}
+.skill-tier-badge.global {
+  background: #6b728018;
+  color: #6b7280;
+  border: 1px solid #6b728030;
+}
+.skill-tier-badge.user {
+  background: #3b82f618;
+  color: #3b82f6;
+  border: 1px solid #3b82f630;
+}
+.skill-tier-badge.workspace {
+  background: #10a37f18;
+  color: #10a37f;
+  border: 1px solid #10a37f30;
 }
 .skill-item-desc {
   font-size: 0.8rem;
@@ -213,6 +263,21 @@ function useSkill(name: string) {
   display: block;
   margin-top: 0.2rem;
 }
+.skill-delete-btn {
+  flex-shrink: 0;
+  width: 28px; height: 28px;
+  border: none; background: none;
+  color: var(--fg-dim);
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s ease;
+  margin-left: 0.3rem;
+  opacity: 0;
+}
+.skill-item:hover .skill-delete-btn { opacity: 1; }
+.skill-delete-btn:hover { background: #ef444420; color: #ef4444; }
 .mcp-server {
   padding: 0.7rem 1.2rem;
   border-bottom: 0.5px solid var(--border-light);

@@ -76,7 +76,7 @@ mini_ai/
 │   └── character/             # Agent 人设（SOUL.md + RULES.md）
 └── ~/.mini_ai/                # 运行时数据目录
     ├── config.yaml            # 用户配置
-    ├── skills/                # 用户技能
+    ├── skills/                # 全局技能（global 层级）
     ├── workflows/             # 工作流 YAML 模板
     ├── logs/                  # 运行日志（按日期轮转）
     └── workspaces/            # 工作空间数据（按项目隔离）

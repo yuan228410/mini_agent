@@ -58,11 +58,14 @@
 
 ### 技能系统
 
+技能按优先级分四层（低→高）：`extra`（只读补充）→ `global`（全局）→ `user`（用户级）→ `workspace`（工作空间级）。同名技能高层覆盖低层，`list_skills` 显示技能层级。
+
 | 工具 | 说明 |
 |------|------|
-| `list_skills()` | 列出所有可用技能名称和描述 |
+| `list_skills()` | 列出所有可用技能名称、描述和层级 |
 | `load_skill(name)` | 加载指定技能的完整内容 |
-| `install_skill(name, source?, content?)` | 安装技能。source=压缩包 URL/本地路径，或 content=内联 Markdown |
+| `install_skill(name, source?, content?, level?)` | 安装技能到指定层级。source=压缩包 URL/本地路径，或 content=内联 Markdown。level=global/user/workspace（默认 user） |
+| `delete_skill(name, level?)` | 删除指定技能。不传 level 则删除当前活跃的副本；传 level 则删除该层级的副本 |
 
 ### 子代理
 

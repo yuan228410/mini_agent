@@ -1,4 +1,5 @@
 """上下文组装器：从多个来源构建系统提示词"""
+import threading
 from pathlib import Path
 
 
@@ -19,24 +20,29 @@ class ContextBuilder:
         from .config import PACKAGE_DIR
         self.character_dir = PACKAGE_DIR / "character"
         self._file_cache: dict[str, tuple[float, str]] = {}
+        self._cache_lock = threading.Lock()
 
     def _read_cached(self, path: Path) -> str | None:
         try:
             mtime = path.stat().st_mtime
         except OSError:
-            self._file_cache.pop(str(path), None)
+            with self._cache_lock:
+                self._file_cache.pop(str(path), None)
             return None
-        cached = self._file_cache.get(str(path))
-        if cached and cached[0] == mtime:
-            return cached[1]
+        with self._cache_lock:
+            cached = self._file_cache.get(str(path))
+            if cached and cached[0] == mtime:
+                return cached[1]
         if not path.exists():
-            self._file_cache.pop(str(path), None)
+            with self._cache_lock:
+                self._file_cache.pop(str(path), None)
             return None
         text = path.read_text(encoding="utf-8").strip() or None
-        if text is not None:
-            self._file_cache[str(path)] = (mtime, text)
-        else:
-            self._file_cache.pop(str(path), None)
+        with self._cache_lock:
+            if text is not None:
+                self._file_cache[str(path)] = (mtime, text)
+            else:
+                self._file_cache.pop(str(path), None)
         return text
 
     def build(self, memory_store=None, skill_loader=None, project_path: str = "") -> str:

@@ -132,7 +132,8 @@ def chat(messages, tools=True, ctx=None):
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
-    payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": 4096}
+    max_tokens = get_max_tokens(ctx) or 4096
+    payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": max_tokens}
     _apply_model_params(payload, ctx)
     if system_text:
         payload["system"] = system_text
@@ -226,7 +227,8 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
 
     system_text, ant_msgs = _openai_to_anthropic(messages)
 
-    payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": 4096, "stream": True}
+    max_tokens = get_max_tokens(ctx) or 4096
+    payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": max_tokens, "stream": True}
     _apply_model_params(payload, ctx)
     if system_text:
         payload["system"] = system_text

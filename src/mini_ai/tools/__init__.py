@@ -10,7 +10,7 @@ from ..logger import logger
 _UTC8 = timezone(timedelta(hours=8))
 
 def _now(): return datetime.now(_UTC8).strftime("%Y-%m-%dT%H:%M:%S")
-from . import delete_file, dispatch_subagent, edit_file, list_dir, read_file, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
+from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 
 _MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
 
@@ -32,6 +32,7 @@ class ToolRegistry:
             "read_file", "search_files", "list_dir",
             "web_fetch", "list_skills", "load_skill",
             "recall", "search_history",
+            "delete_skill",
         }
 
     def _rebuild_index(self):
@@ -39,15 +40,20 @@ class ToolRegistry:
         self._by_name.update({m.definition["function"]["name"]: m for m in self._tools})
 
     def add_tools(self, *modules):
-        self._tools.extend(modules)
+        existing = {m.definition["function"]["name"] for m in self._tools}
+        for m in modules:
+            if m.definition["function"]["name"] not in existing:
+                self._tools.append(m)
+                existing.add(m.definition["function"]["name"])
         self._rebuild_index()
 
     def register_skills(self, skill_loader):
-        from . import list_skills, load_skill, install_skill
+        from . import list_skills, load_skill, install_skill, delete_skill
         list_skills.configure(loader=skill_loader)
         load_skill.configure(loader=skill_loader)
         install_skill.configure(loader=skill_loader)
-        self.add_tools(list_skills, load_skill, install_skill)
+        delete_skill.configure(loader=skill_loader)
+        self.add_tools(list_skills, load_skill, install_skill, delete_skill)
 
     def register_subagents(self, subagent_loader):
         subagent_list = subagent_loader.list_specs()
@@ -203,7 +209,7 @@ class ToolRegistry:
 # ── 模块级默认实例 ──
 
 _registry = ToolRegistry()
-_registry.add_tools(read_file, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool)
+_registry.add_tools(read_file, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
 
 
 # ── 向后兼容的模块级函数 ──

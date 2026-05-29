@@ -12,7 +12,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, WEB, PLAN, RequestContext, get_model_config, user_data_dir
 from ...llm import get_usage, reset_usage, chat as llm_chat
 from ...runner import run_tool_loop
-from ...tools import get_definitions, register_memory_tools, register_history_tools
+from ...tools import get_definitions, register_memory_tools, register_history_tools, register
 from ...logger import logger
 from ..display import WebDisplay
 
@@ -109,7 +109,8 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     from ...memory import MemoryStore, Compactor
     from ...memory.history_db import HistoryDB
     from ...context import ContextBuilder
-    from ..deps import SKILL_LOADER
+    from ...skills import SkillLoader
+    from ..deps import SKILL_PATHS
 
     user_memory_dir = user_data_dir(username) / "memory"
 
@@ -125,12 +126,18 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     history_db = HistoryDB(session_memory_dir / "history.db", workspace=workspace or "default")
 
     project_path = ""
+    ws_dir = None
     if workspace:
         from ...workspace import WorkspaceManager
         ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
         ws = ws_mgr.get(workspace)
         if ws:
             project_path = ws.project_path
+            ws_dir = ws.ws_dir
+
+    user_skills_dir = user_data_dir(username) / "skills"
+    ws_skills_dir = ws_dir / "skills" if ws_dir else None
+    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, user_skills_dir=user_skills_dir, workspace_skills_dir=ws_skills_dir)
 
     ctx_builder = ContextBuilder(DATA_DIR)
     compactor = Compactor(
@@ -140,7 +147,7 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx_builder,
-        skill_loader=SKILL_LOADER,
+        skill_loader=skill_loader,
         history_db=history_db,
         project_path=project_path,
         summary_dir=session_dir,
@@ -152,6 +159,7 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         "compactor": compactor,
         "ctx_builder": ctx_builder,
         "project_path": project_path,
+        "skill_loader": skill_loader,
     }
     with _sessions_lock:
         if cache_key in _SESSION_COMPONENTS:
@@ -162,13 +170,12 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
 
 def _build_system_prompt(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> str:
     _t0 = time.time()
-    from ..deps import SKILL_LOADER
     if base is None:
         base = _resolve_base(username, workspace or "default")
     comp = _get_or_create_components(username, sid, base, workspace)
     result = comp["ctx_builder"].build(
         memory_store=comp["store"],
-        skill_loader=SKILL_LOADER,
+        skill_loader=comp["skill_loader"],
         project_path=comp["project_path"],
     )
     logger.debug(f"[perf] _build_system_prompt sid={sid} len={len(result)} time={time.time()-_t0:.3f}s")
@@ -356,6 +363,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         comp = _get_or_create_components(username, comp_key, base, workspace)
         register_memory_tools(comp["store"])
         register_history_tools(comp["history_db"])
+        register(comp["skill_loader"])
 
         if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
             messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
@@ -464,6 +472,8 @@ async def create_session(body: dict):
     cache_key = _cache_key(username, workspace, sid)
     system_prompt = _build_system_prompt(username, sid, base, workspace)
     _SESSIONS[cache_key] = [{"role": "system", "content": system_prompt, "name": "新会话"}]
+    from ...tools.update_todos import set_session
+    set_session(cache_key)
     _inject_todos(_SESSIONS[cache_key])
     _update_meta_cache(username, sid, workspace, _SESSIONS[cache_key])
     return {"session_id": sid}
@@ -525,6 +535,7 @@ async def delete_session(body: dict):
         comp = _SESSION_COMPONENTS.get(cache_key)
         if comp:
             comp["history_db"].delete_by_session(session_id)
+            comp["history_db"].close()
     except Exception:
         pass
     with _sessions_lock:
@@ -559,6 +570,7 @@ async def batch_delete_sessions(body: dict):
             comp = _SESSION_COMPONENTS.get(cache_key)
             if comp:
                 comp["history_db"].delete_by_session(sid)
+                comp["history_db"].close()
         except Exception:
             pass
         with _sessions_lock:
