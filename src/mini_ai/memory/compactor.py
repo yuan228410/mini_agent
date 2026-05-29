@@ -5,6 +5,7 @@ from datetime import datetime, timezone, timedelta
 
 from ..logger import logger
 from .store import MemoryStore
+from ..llm.base import estimate_messages_tokens
 
 _UTC8 = timezone(timedelta(hours=8))
 
@@ -120,14 +121,7 @@ class Compactor:
         return False
 
     def estimate_tokens(self, messages: list[dict]) -> int:
-        total_chars = 0
-        for msg in messages:
-            content = msg.get("content") or ""
-            if isinstance(content, str):
-                total_chars += len(content)
-            elif isinstance(content, list):
-                total_chars += len(str(content))
-        return int(total_chars / 2.5)
+        return estimate_messages_tokens(messages)
 
     def should_compact_local(self, messages: list[dict]) -> bool:
         estimated = self.estimate_tokens(messages)

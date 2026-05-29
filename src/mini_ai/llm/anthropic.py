@@ -9,6 +9,7 @@ from .base import (
     get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, update_usage, get_session, ensure_session_anthropic,
+    estimate_tokens, estimate_messages_tokens,
 )
 from ..logger import logger
 
@@ -199,12 +200,12 @@ def chat(messages, tools=True, ctx=None):
     if inp:
         us["prompt_tokens"] = inp
     else:
-        us["prompt_tokens"] = sum(len(m.get("content", "") or "") for m in messages) // 3
+        us["prompt_tokens"] = estimate_messages_tokens(messages)
     if out:
         us["completion_tokens"] += out
     else:
         content_text = data.get("content", [])
-        est = sum(len(b.get("text", "")) for b in content_text if isinstance(b, dict) and b.get("type") == "text") // 3
+        est = sum(estimate_tokens(b.get("text", "")) for b in content_text if isinstance(b, dict) and b.get("type") == "text")
         if est:
             us["completion_tokens"] += est
 
@@ -361,7 +362,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         us["prompt_tokens"] = input_tokens
         us["_api_prompt"] = True
     elif not us.get("_api_prompt") and messages:
-        est = sum(len(m.get("content", "") or "") for m in messages) // 3
+        est = estimate_messages_tokens(messages)
         us["prompt_tokens"] = est
     us.pop("_api_prompt", None)
     if output_tokens:
@@ -369,8 +370,8 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     elif call_comp == 0 and blocks:
         est = 0
         for b in blocks:
-            if b.get("text"): est += len(b["text"]) // 3
-            if b.get("thinking"): est += len(b["thinking"]) // 3
+            if b.get("text"): est += estimate_tokens(b["text"])
+            if b.get("thinking"): est += estimate_tokens(b["thinking"])
         us["completion_tokens"] = prev_comp + est
     us.pop("_prev_completion", None)
 

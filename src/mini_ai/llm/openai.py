@@ -9,6 +9,7 @@ from .base import (
     get_config, get_api_url, get_api_key, get_model, get_api_mode,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, update_usage, get_session, ensure_session_openai,
+    estimate_tokens, estimate_messages_tokens,
 )
 from ..logger import logger
 from ..tools import get_definitions
@@ -140,11 +141,11 @@ def chat(messages, tools=True, ctx=None):
     if p_tok:
         usage_store["prompt_tokens"] = p_tok
     else:
-        usage_store["prompt_tokens"] = sum(len(m.get("content", "") or "") for m in messages) // 3
+        usage_store["prompt_tokens"] = estimate_messages_tokens(messages)
     if c_tok:
         usage_store["completion_tokens"] += c_tok
     elif msg.get("content"):
-        usage_store["completion_tokens"] += len(msg["content"]) // 3
+        usage_store["completion_tokens"] += estimate_tokens(msg["content"])
 
     if "tool_calls" in msg:
         calls = msg["tool_calls"]
@@ -277,15 +278,16 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     prev_comp = usage_store.get("_prev_completion", 0)
     call_comp = usage_store["completion_tokens"] - prev_comp
     if not usage_store.get("_api_prompt"):
-        est_prompt = sum(len(m.get("content", "") or "") for m in messages) // 3
+        est_prompt = estimate_messages_tokens(messages)
         if tool_call_buf:
-            est_prompt += sum(len(buf["function"].get("arguments", "")) for buf in tool_call_buf.values()) // 3
+            for buf in tool_call_buf.values():
+                est_prompt += estimate_tokens(buf["function"].get("arguments", ""))
         usage_store["prompt_tokens"] = est_prompt
     usage_store.pop("_api_prompt", None)
     if call_comp == 0:
-        est_comp = len(collected_content) // 3
+        est_comp = estimate_tokens(collected_content)
         if collected_thinking:
-            est_comp += len(collected_thinking) // 3
+            est_comp += estimate_tokens(collected_thinking)
         usage_store["completion_tokens"] = prev_comp + est_comp
     usage_store.pop("_prev_completion", None)
     p_tok = usage_store["prompt_tokens"]

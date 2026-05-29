@@ -45,6 +45,42 @@ def get_reasoning_effort(ctx=None):
     return get_config(ctx).get("reasoning_effort")
 
 
+def estimate_tokens(text: str) -> int:
+    cjk = 0
+    other = 0
+    for ch in text:
+        cp = ord(ch)
+        if (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
+            0x20000 <= cp <= 0x2A6DF or 0xF900 <= cp <= 0xFAFF or
+            0x3000 <= cp <= 0x303F or 0x3040 <= cp <= 0x309F or
+            0x30A0 <= cp <= 0x30FF or 0xAC00 <= cp <= 0xD7AF):
+            cjk += 1
+        else:
+            other += 1
+    return int(cjk / 1.0 + other / 4.0)
+
+
+def estimate_messages_tokens(messages: list[dict]) -> int:
+    total = 0
+    for msg in messages:
+        content = msg.get("content") or ""
+        if isinstance(content, str):
+            total += estimate_tokens(content)
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    total += estimate_tokens(block.get("text", ""))
+                elif isinstance(block, str):
+                    total += estimate_tokens(block)
+        tc = msg.get("tool_calls")
+        if tc:
+            for call in tc:
+                args = call.get("function", {}).get("arguments", "")
+                if args:
+                    total += estimate_tokens(args)
+        total += 4
+    return total
+
 
 # ── Thread-local usage store ──
 
