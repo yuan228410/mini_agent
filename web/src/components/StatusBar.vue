@@ -7,7 +7,7 @@ const props = defineProps<{
   context_length: number
   prompt_tokens: number
   completion_tokens: number
-  system_prompt_chars: number
+  system_prompt_tokens: number
   history_count: number
   planMode?: boolean
 }>()
@@ -32,7 +32,7 @@ const usagePct = computed(() => {
     <span class="status-sep">│</span>
     <span class="status-item">↑{{ prompt_tokens }} ↓{{ completion_tokens }}</span>
     <span class="status-sep">│</span>
-    <span class="status-item">sys {{ system_prompt_chars }}</span>
+    <span class="status-item">sys {{ system_prompt_tokens }}</span>
     <span class="status-sep">│</span>
     <span class="status-item">msg {{ history_count }}</span>
   </div>

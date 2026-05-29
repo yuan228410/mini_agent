@@ -299,7 +299,7 @@ class Display:
         self.console.print(Text(f"✗ {text}", style="bold red"))
 
     def status_bar(self, model: str, context_length: int, prompt_tokens: int,
-                    completion_tokens: int, system_prompt_chars: int,
+                    completion_tokens: int, system_prompt_tokens: int,
                     history_count: int = 0):
         if not _IS_TTY:
             return
@@ -314,7 +314,7 @@ class Display:
         info.append(" │ ")
         info.append(f"↑{prompt_tokens} ↓{completion_tokens}", style="dim")
         info.append(" │ ")
-        info.append(f"sys {system_prompt_chars}", style="dim")
+        info.append(f"sys {system_prompt_tokens}", style="dim")
         info.append(" │ ")
         info.append(f"msg {history_count}", style="dim")
         todo_sum = self.todo_summary()

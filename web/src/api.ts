@@ -49,7 +49,7 @@ export interface ConfigResponse {
   context_length: number
   prompt_tokens: number
   completion_tokens: number
-  system_prompt_chars: number
+  system_prompt_tokens: number
   history_count: number
   session_id: string
   username: string

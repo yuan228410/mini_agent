@@ -10,7 +10,7 @@ from .memory.history_db import HistoryDB
 from datetime import datetime
 from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw
 from .context import ContextBuilder
-from .llm import get_usage, reset_usage
+from .llm import get_usage, reset_usage, estimate_tokens
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
@@ -114,7 +114,7 @@ def main():
             context_length=MODEL_CONFIG.get("context_length", 128000),
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
-            system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+            system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
             history_count=history_db.count(),
         )
 
@@ -206,7 +206,7 @@ def main():
         context_length=MODEL_CONFIG.get("context_length", 128000),
         prompt_tokens=0,
         completion_tokens=0,
-        system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+        system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
         history_count=len(restored),
     )
 
@@ -352,7 +352,7 @@ def main():
                 context_length=MODEL_CONFIG.get("context_length", 128000),
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
-                system_prompt_chars=len(messages[0]["content"]) if messages else 0,
+                system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
                 history_count=history_db.count(),
             )
 

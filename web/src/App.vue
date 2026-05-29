@@ -20,7 +20,7 @@ const config = ref({
   context_length: 128000,
   prompt_tokens: 0,
   completion_tokens: 0,
-  system_prompt_chars: 0,
+  system_prompt_tokens: 0,
   history_count: 0,
   session_id: '',
   username: '',

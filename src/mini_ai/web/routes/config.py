@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query
 
 from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config
+from ...llm.base import estimate_tokens
 from ...logger import logger
 from .chat import _get_or_create_session, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE
 
@@ -31,7 +32,7 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
         "context_length": model_cfg.get("context_length", 128000),
         "prompt_tokens": usage["prompt_tokens"],
         "completion_tokens": usage["completion_tokens"],
-        "system_prompt_chars": len(messages[0]["content"]) if messages else 0,
+        "system_prompt_tokens": estimate_tokens(messages[0]["content"]) if messages else 0,
         "history_count": len(messages) - 1 if messages else 0,
         "session_id": session_id,
         "username": username,
