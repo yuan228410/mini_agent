@@ -45,6 +45,8 @@ const globalFields = reactive({
   plan_approval: true,
   history_limit: 200,
   context_limit: 50,
+  keep_recent: 50,
+  max_result_chars: 8000,
   log_level: 'WARNING',
   mcp_enabled: false,
 })
@@ -123,6 +125,10 @@ async function loadSettings() {
     globalFields.history_limit = w.history_limit ?? 200
     const cp = s.compactor || {}
     globalFields.context_limit = cp.context_limit ?? 50
+    globalFields.keep_recent = cp.keep_recent ?? 50
+
+    const tool = s.tool || {}
+    globalFields.max_result_chars = tool.max_result_chars ?? 8000
 
     const l = s.logging || {}
     globalFields.log_level = l.level || 'WARNING'
@@ -225,9 +231,10 @@ async function save() {
     }
     updates.plan = { approval: globalFields.plan_approval }
     updates.web = { history_limit: globalFields.history_limit }
-    updates.compactor = { context_limit: globalFields.context_limit }
+    updates.compactor = { context_limit: globalFields.context_limit, keep_recent: globalFields.keep_recent }
+    updates.tool = { max_result_chars: globalFields.max_result_chars }
     updates.logging = { level: globalFields.log_level }
-  updates.mcp = { enabled: globalFields.mcp_enabled }
+    updates.mcp = { enabled: globalFields.mcp_enabled }
 
     await updateSettings(updates)
     await loadSettings()
@@ -460,6 +467,14 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
             <div class="field">
               <label>上下文加载条数</label>
               <input type="number" v-model.number="globalFields.context_limit" min="10" max="500" />
+            </div>
+            <div class="field">
+              <label>压缩保留条数</label>
+              <input type="number" v-model.number="globalFields.keep_recent" min="5" max="200" />
+            </div>
+            <div class="field">
+              <label>工具输出截断字符数</label>
+              <input type="number" v-model.number="globalFields.max_result_chars" min="1000" max="50000" step="1000" />
             </div>
             <div class="field">
               <label>日志级别</label>

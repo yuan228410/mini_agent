@@ -42,7 +42,7 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
 async def get_settings():
     from ...config import (
         _raw, STREAMING, THINKING, DISPLAY, COMPACTOR, TIMEOUTS,
-        RUNNER, PLAN, WEB, LOGGING, AVAILABLE_MODELS, MODEL_CONFIG,
+        RUNNER, PLAN, TOOL, WEB, LOGGING, AVAILABLE_MODELS, MODEL_CONFIG,
     )
     models_safe = {}
     for name, cfg in _raw.get("models", {}).items():
@@ -67,6 +67,7 @@ async def get_settings():
         "timeouts": TIMEOUTS,
         "runner": RUNNER,
         "plan": PLAN,
+        "tool": TOOL,
         "web": WEB,
         "logging": LOGGING,
     }
@@ -107,6 +108,14 @@ async def update_settings(body: dict):
             from ...config import COMPACTOR
             COMPACTOR.update(compactor)
             updated_sections.append("compactor")
+
+    if "tool" in body:
+        tool = body["tool"]
+        if isinstance(tool, dict):
+            _raw.setdefault("tool", {}).update(tool)
+            from ...config import TOOL
+            TOOL.update(tool)
+            updated_sections.append("tool")
 
     if "runner" in body:
         runner = body["runner"]

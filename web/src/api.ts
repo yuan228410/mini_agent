@@ -502,6 +502,7 @@ export interface SettingsResponse {
   timeouts: Record<string, any>
   runner: Record<string, any>
   plan: Record<string, any>
+  tool: Record<string, any>
   web: Record<string, any>
   logging: Record<string, any>
   mcp: { enabled: boolean; servers?: Record<string, any> }
