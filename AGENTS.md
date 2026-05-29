@@ -46,7 +46,7 @@ src/mini_ai/            # 包源码
     blackboard_tools.py    #     黑板工具（read/write/list）
     workflow_tools.py      #     工作流工具（run_workflow/status/load）
     dispatch_subagent.py   #     子代理调度
-    run_command.py / web_fetch.py / read_file.py / write_file.py / edit_file.py
+    run_command.py / web_fetch.py / read_file.py / write_file.py / edit_file.py / delete_file.py / rename_file.py
     update_todos.py / list_skills.py / load_skill.py / install_skill.py
     config.py / manage_history.py
     mcp_loader.py           #     MCP 客户端（MCPLoader + MCPConnection + _MCPToolModule）

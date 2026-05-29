@@ -1,7 +1,7 @@
 ---
 name: tester
 description: 测试工程师，负责编写和执行测试
-tools: read_file, write_file, edit_file, run_command, search_files, load_skill
+tools: read_file, write_file, edit_file, delete_file, rename_file, run_command, search_files, load_skill
 max_turns: 15
 ---
 

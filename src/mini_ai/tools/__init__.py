@@ -10,7 +10,7 @@ from ..logger import logger
 _UTC8 = timezone(timedelta(hours=8))
 
 def _now(): return datetime.now(_UTC8).strftime("%Y-%m-%dT%H:%M:%S")
-from . import dispatch_subagent, edit_file, list_dir, read_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
+from . import delete_file, dispatch_subagent, edit_file, list_dir, read_file, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 
 _MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
 
@@ -203,7 +203,7 @@ class ToolRegistry:
 # ── 模块级默认实例 ──
 
 _registry = ToolRegistry()
-_registry.add_tools(read_file, write_file, edit_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool)
+_registry.add_tools(read_file, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool)
 
 
 # ── 向后兼容的模块级函数 ──

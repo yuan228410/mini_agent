@@ -1,7 +1,7 @@
 ---
 name: coder
 description: 代码工程师，负责编写和修改代码
-tools: run_command, load_skill, read_file, write_file, edit_file, search_files, list_dir
+tools: run_command, load_skill, read_file, write_file, edit_file, delete_file, rename_file, search_files, list_dir
 max_turns: 15
 ---
 
