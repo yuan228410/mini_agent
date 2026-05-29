@@ -39,7 +39,17 @@ def execute(args: dict) -> str:
     content = path.read_text(encoding="utf-8")
 
     if old_string not in content:
-        return f"Error: 未找到匹配内容。文件中不包含指定的 old_string"
+        idx = content.lower().find(old_string.lower())
+        nearby = ""
+        if idx >= 0:
+            start = max(0, idx - 40)
+            end = min(len(content), idx + len(old_string) + 40)
+            snippet = content[start:end]
+            lines_around = snippet.splitlines()
+            if len(lines_around) > 5:
+                lines_around = lines_around[:5]
+            nearby = "\n  附近内容（大小写不同）:\n" + "\n".join(f"  |{l}" for l in lines_around)
+        return f"Error: 未找到精确匹配的 old_string。请确认字符串与文件中完全一致（包括空格和缩进）。{nearby}"
 
     if replace_all:
         count = content.count(old_string)

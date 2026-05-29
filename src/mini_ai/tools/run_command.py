@@ -38,7 +38,14 @@ def execute(args: dict) -> str:
             command, shell=True, capture_output=True, text=True,
             timeout=timeout, cwd=cwd,
         )
-        output = result.stdout or result.stderr
+        parts = []
+        if result.stdout:
+            parts.append(result.stdout.rstrip("\n"))
+        if result.stderr:
+            parts.append("--- STDERR ---\n" + result.stderr.rstrip("\n"))
+        output = "\n".join(parts) if parts else ""
+        if result.returncode != 0:
+            output += f"\n(exit code: {result.returncode})"
     except subprocess.TimeoutExpired:
         output = f"Error: 命令超时（{timeout}s）"
     except OSError as e:

@@ -24,12 +24,18 @@ definition = {
     },
 }
 
+_MAX_WRITE_BYTES = 10 * 1024 * 1024  # 10MB 安全阀
+
 
 def execute(args: dict) -> str:
     path_str = args.get("path", "")
     if not path_str or not isinstance(path_str, str):
         return "Error: write_file 缺少 path 参数（字符串类型），请提供完整的文件路径后重试，不要重复空调用"
     content = args.get("content", "")
+    if isinstance(content, str):
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes > _MAX_WRITE_BYTES:
+            return f"Error: 内容过大（{content_bytes} bytes），超过限值 {_MAX_WRITE_BYTES} bytes，请分批写入"
     path = Path(path_str)
     mode = args.get("mode", "overwrite")
 

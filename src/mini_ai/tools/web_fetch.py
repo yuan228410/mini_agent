@@ -64,6 +64,18 @@ def _strip_html(raw: str) -> str:
     return parser.get_text()
 
 
+def _detect_encoding(resp: requests.Response) -> str:
+    """尽量获取正确的编码，避免乱码。"""
+    # 1. 优先用 apparent_encoding（基于内容检测，如 <meta charset> 或 BOM）
+    if resp.apparent_encoding:
+        return resp.apparent_encoding
+    # 2. 回退到 headers 声明的编码
+    if resp.encoding:
+        return resp.encoding
+    # 3. 最后兜底
+    return "utf-8"
+
+
 def execute(args: dict) -> str:
     url = args.get("url")
     if not url:
@@ -82,6 +94,8 @@ def execute(args: dict) -> str:
     try:
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUTS["web_fetch"])
         resp.raise_for_status()
+        encoding = _detect_encoding(resp)
+        resp.encoding = encoding
         raw = resp.text
     except Exception as e:
         logger.debug(f"[抓取✗] {url}: {e}")
