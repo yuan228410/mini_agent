@@ -1,4 +1,5 @@
 """工作空间管理 — 按项目隔离记忆、会话、历史"""
+import time
 import shutil
 from pathlib import Path
 
@@ -84,7 +85,8 @@ class WorkspaceManager:
         ws_dir = self.workspaces_dir / name
         if not ws_dir.exists():
             return f"Error: 工作空间 '{name}' 不存在"
-        backup = ws_dir.with_name(f".{name}.removed")
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        backup = ws_dir.with_name(f".{name}.removed_{ts}")
         if backup.exists():
             shutil.rmtree(backup)
         ws_dir.rename(backup)
@@ -116,9 +118,20 @@ class WorkspaceManager:
         return Workspace(name=name, ws_dir=ws_dir, project_path=project_path)
 
     def restore(self, name: str) -> str:
-        backup = self.workspaces_dir / f".{name}.removed"
-        if not backup.exists():
+        # 找到最新的备份（按时间戳降序）
+        candidates = sorted(
+            [d for d in self.workspaces_dir.iterdir()
+             if d.is_dir() and d.name.startswith(f".{name}.removed_")],
+            key=lambda d: d.name, reverse=True,
+        )
+        # 兼容旧格式
+        if not candidates:
+            old_backup = self.workspaces_dir / f".{name}.removed"
+            if old_backup.exists():
+                candidates = [old_backup]
+        if not candidates:
             return f"Error: 未找到已移除的工作空间 '{name}'"
+        backup = candidates[0]
         ws_dir = self.workspaces_dir / name
         if ws_dir.exists():
             return f"Error: 工作空间 '{name}' 已存在，无法恢复"
@@ -131,25 +144,33 @@ class WorkspaceManager:
         for d in sorted(self.workspaces_dir.iterdir()):
             if not d.is_dir():
                 continue
-            if d.name.endswith(".removed"):
+            if ".removed_" in d.name:
+                parts = d.name.split(".removed_")
+                original_name = parts[0][1:]  # 去掉前导点
+            elif d.name.endswith(".removed"):
                 original_name = d.name[1:-len(".removed")]
-                meta_path = d / "workspace.yaml"
-                project_path = ""
-                if meta_path.exists():
-                    try:
-                        meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
-                        project_path = meta.get("project_path", "")
-                    except Exception:
-                        pass
-                result.append({"name": original_name, "project_path": project_path})
+            else:
+                continue
+            meta_path = d / "workspace.yaml"
+            project_path = ""
+            if meta_path.exists():
+                try:
+                    meta = yaml.safe_load(meta_path.read_text(encoding="utf-8")) or {}
+                    project_path = meta.get("project_path", "")
+                except Exception:
+                    pass
+            result.append({"name": original_name, "project_path": project_path})
         return result
 
     def delete_removed(self, name: str) -> str:
-        backup = self.workspaces_dir / f".{name}.removed"
-        if not backup.exists():
+        # 删除该名称的所有备份
+        candidates = [d for d in self.workspaces_dir.iterdir()
+                      if d.is_dir() and (d.name == f".{name}.removed" or d.name.startswith(f".{name}.removed_"))]
+        if not candidates:
             return f"Error: 未找到已移除的工作空间 '{name}'"
-        shutil.rmtree(backup)
-        logger.info(f"[Workspace] 彻底删除已移除的工作空间 '{name}'")
+        for backup in candidates:
+            shutil.rmtree(backup)
+        logger.info(f"[Workspace] 彻底删除已移除的工作空间 '{name}'（{len(candidates)} 个备份）")
         return f"已彻底删除 '{name}'"
 
     def list_all(self) -> list[dict]:

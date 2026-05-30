@@ -38,11 +38,12 @@
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `id` | ✅ | 任务唯一标识，也作为 blackboard key |
-| `agent` | ✅ | 执行者。teammate 名（如 `coder`）或 `subagent:type`（如 `subagent:researcher`） |
+| `agent` | ✅ | 执行者。teammate 名（如 `coder`）或 `subagent:type`（如 `subagent:researcher`）。teammate 名优先派发给已 spawn 的真实队友，不存在则创建一次性 agent |
 | `prompt` | ✅ | 任务描述。`{task_id}` 被替换为依赖任务结果，`{blackboard.key}` 引用黑板数据 |
 | `depends_on` | ❌ | 依赖列表，默认空（立即执行） |
 | `condition` | ❌ | 条件表达式。可用 `dep_id['status']`、`dep_id['result']`、`dep_id['error']` |
 | `max_retry` | ❌ | 失败重试次数，默认 1（不重试） |
+| `timeout` | ❌ | 单任务超时秒数，默认使用全局 `teammate.task_timeout: 600` |
 
 ## 执行示例
 
@@ -102,6 +103,37 @@ LLM 调用 run_workflow:
 
 如果 test 结果包含 FAIL → 走 fix 分支（最多重试 3 次）
 如果 test 通过 → 走 deploy 分支
+```
+
+### 示例 4：单任务超时
+
+```json
+{
+  "tasks": [
+    {"id": "fetch", "agent": "subagent:researcher", "prompt": "从第三方 API 获取数据", "timeout": 120},
+    {"id": "process", "agent": "subagent:coder", "prompt": "处理获取的数据: {fetch}", "depends_on": ["fetch"]}
+  ]
+}
+
+fetch 任务最长等 120 秒，超时标记为 failed
+process 使用全局默认超时 600 秒
+```
+
+### 示例 5：派发给持久队友
+
+当 `agent` 字段指定的是已 spawn 的队友名时，Orchestrator 自动通过 inbox 派发并等待结果：
+
+```json
+{
+  "tasks": [
+    {"id": "research", "agent": "researcher", "prompt": "搜索 WebSocket 技术"},
+    {"id": "code", "agent": "coder", "prompt": "根据调研结果编码: {research}", "depends_on": ["research"]}
+  ]
+}
+
+如果 researcher 和 coder 已 spawn → 通过 inbox 派发给真实队友
+如果不存在 → 自动创建一次性 agent 执行
+队友完成后通过 send_message 回禀 workflow 或写入黑板的 workflow_result_xxx 键
 ```
 
 ## 预定义模板

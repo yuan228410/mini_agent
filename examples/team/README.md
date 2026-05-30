@@ -100,15 +100,20 @@ spawn_teammate(name, role, prompt)
   ┌──────────┐
   │ working  │ ← 执行 prompt 任务（LLM + 工具循环）
   └────┬─────┘
-       │ 任务完成，回禀 lead
+       │ 任务完成，send_message 回禀 lead
        ▼
-  ┌──────────┐     收到新 inbox 消息
-  │  idle    │ ──────────────────────→ working（循环）
+  ┌──────────┐     收到新 inbox 消息（来自 lead 或其他队友）
+  │  idle    │ ───────────────────────────────────→ working（循环）
   └────┬─────┘
        │
-       ├── idle 超时 (300s) ──→ 自动退出
-       ├── 收到 shutdown_request ──→ 退出
-       └── dismiss_team ──→ 退出
+       ├── idle 超时 (idle_timeout，默认 300s，设为 0 永不退出) ──→ shutdown
+       ├── 收到 shutdown_request（来自 dismiss_team 或其他 Agent）──→ shutdown
+       └── 线程未预期异常 ──→ offline（日志记录异常信息）
+
+  状态流转:
+    spawn → working → idle → working → idle → ...
+                              │
+                              └── 超时/shutdown_request → shutdown
 ```
 
 **何时创建**：Lead LLM 调用 `spawn_teammate` 时。如果同名队友已存在且线程活着，直接发新任务到 inbox，不重建。
@@ -165,12 +170,14 @@ tasks:
 | 你的需求 | 说法示例 | 模型自动使用 |
 |----------|----------|-------------|
 | 简单问答/搜索 | "搜索 X" | subagent（同步一次性） |
-| 并行处理 | "同时搜索 A 和 B" | 多个 spawn_teammate 并行 |
-| 有依赖的多步任务 | "先研究再设计再编码" | run_workflow（DAG） |
+| 并行处理 | "同时搜索 A 和 B" | 多个 spawn_teammate 或 subagent 并行 |
+| 有依赖的多步任务 | "先研究再设计再编码" | run_workflow（DAG），自动传递结果 |
 | 多角色协作 | "coder 写代码，reviewer 审查" | spawn + P2P 通信 |
 | 保存中间结果 | "把结果存起来" | blackboard_write |
 | 条件判断 | "如果失败就重试" | DAG condition + max_retry |
 | 复用流程 | "用 XX 模板" | load_workflow |
+| 编码+审查接力 | "coder 写完后发给 reviewer" | spawn + send_message P2P |
+| 长期驻守助手 | "召入一个 coder 待命" | spawn (idle_timeout=0 永不退出) |
 
 ---
 
@@ -184,6 +191,7 @@ tasks:
     depends_on: [依赖列表]
     condition: "可选条件表达式"  # 不满足则跳过
     max_retry: 1               # 失败重试次数
+    timeout: 600               # 可选，单任务超时秒数，默认 teammate.task_timeout
 ```
 
 模板存放路径：`~/.mini_ai/workflows/`
@@ -231,7 +239,8 @@ tasks:
 - **每个任务完成后结果自动写入 blackboard**（key = task_id）
 - **失败的任务按 `max_retry` 自动重试**（默认 1 次不重试）
 - **condition 不满足时任务被 skip**（不执行，不阻塞后续）
-- **超时 30 分钟自动终止**
+- **单任务超时由 `timeout` 字段控制**（默认 teammate.task_timeout: 600s）
+- **全局超时 30 分钟自动终止**
 
 ### condition 表达式
 
@@ -275,6 +284,7 @@ tasks:
     depends_on: [review]
     condition: "'问题' in review['result'] or '修复' in review['result']"
     max_retry: 2
+    timeout: 120               # 修复任务最多等 120 秒，防止无限循环
 ```
 
 ### Workflow vs Team 选型
@@ -287,6 +297,7 @@ tasks:
 | 临时组队完成一件事 | team spawn | 灵活，无需预定义 |
 | 需要条件判断/重试 | workflow | DAG 内置 condition + retry |
 | 队友需要长期驻守 | team spawn (idle_timeout=0) | 跨多轮保持 |
+| 已有队友复用于流程 | workflow agent=队友名 | Orchestrator 自动通过 inbox 派发，无需重新 spawn |
 
 ### 查看执行状态
 

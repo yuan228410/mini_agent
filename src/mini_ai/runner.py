@@ -29,9 +29,11 @@ def run_tool_loop(
     context_length: int | None = None,
     context_usage_limit: float = _CONTEXT_USAGE_LIMIT,
     ctx=None,
+    bus=None,
 ) -> tuple[dict | None, bool]:
     """统一工具循环。返回 (final_msg, spawned_teammate)。
-    persist_fn: 可选回调 (msg_dict) -> None，每条新消息追加时调用。"""
+    persist_fn: 可选回调 (msg_dict) -> None，每条新消息追加时调用。
+    bus: 可选 MessageBus，spawn 队友后每轮检查 inbox 注入回禀。"""
     from .llm import chat as llm_chat, chat_stream as llm_chat_stream, get_usage
     from .tools import handle_tool_calls
 
@@ -115,6 +117,13 @@ def run_tool_loop(
                 _consecutive_errors += 1
                 if _consecutive_errors >= 3:
                     logger.warning(f"[runner] 连续 {_consecutive_errors} 次工具错误，提前退出")
+                    if bus:
+                        from .team.loop import format_inbox_messages
+                        inbox = bus.read_inbox("lead")
+                        inbox_text = format_inbox_messages(inbox) if inbox else None
+                        if inbox_text:
+                            messages.append({"role": "user", "content": inbox_text, "timestamp": _now()})
+                            logger.info("[runner] 退出前注入队友回禀")
                     if display:
                         display.text_end()
                     return msg, spawned
@@ -126,9 +135,17 @@ def run_tool_loop(
             if inject_fn:
                 inject_fn(messages)
 
-            if spawned:
-                logger.info("[spawn] lead 退出 LLM 循环，等待队友")
-                return None, True
+            # 每轮检查队友回禀（回禀可能在 spawn 后任意轮到达）
+            if bus:
+                from .team.loop import format_inbox_messages, REPLY_INSTRUCTION
+                inbox = bus.read_inbox("lead")
+                inbox_text = format_inbox_messages(inbox) if inbox else None
+                if inbox_text:
+                    messages.append({"role": "user", "content": inbox_text, "timestamp": _now()})
+                    # 避免连续注入重复的回禀指令
+                    if not messages[-2:-1] or messages[-2].get("content") != REPLY_INSTRUCTION:
+                        messages.append({"role": "user", "content": REPLY_INSTRUCTION, "timestamp": _now()})
+                    logger.info(f"[runner] 队友回禀已注入")
 
             if context_length is not None:
                 usage = get_usage()
@@ -173,9 +190,10 @@ def run_agent(messages: list[dict], *, max_turns: int = 10,
 
     tools = _filter_tools(tool_names) if tool_names else get_definitions()
 
+    _has_display = ctx and ctx.display
     msg, _ = run_tool_loop(
         messages, tools,
-        streaming=False,
+        streaming=_has_display,
         display=ctx.display if ctx else None,
         inject_fn=None,
         max_turns=max_turns,

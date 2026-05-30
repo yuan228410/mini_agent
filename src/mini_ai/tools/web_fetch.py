@@ -1,4 +1,5 @@
 """网页抓取工具"""
+import threading
 import re
 from html.parser import HTMLParser
 
@@ -6,6 +7,10 @@ import requests
 
 from ..config import TIMEOUTS
 from ..logger import logger
+
+_MAX_CONSECUTIVE_FAILURES = 5
+_consecutive_failures = 0
+_fail_lock = threading.Lock()
 
 definition = {
     "type": "function",
@@ -92,7 +97,7 @@ def execute(args: dict) -> str:
     logger.info(f"[抓取→] {url} mode={extract_mode}")
 
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUTS["web_fetch"])
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUTS.get("web_fetch", 20))
         resp.raise_for_status()
         encoding = _detect_encoding(resp)
         resp.encoding = encoding
@@ -105,6 +110,18 @@ def execute(args: dict) -> str:
         text = _strip_html(raw)
     else:
         text = raw
+
+    # 追踪连续失败次数（异常或空内容均计）
+    is_failure = text.strip().startswith("Error") or len(text.strip()) == 0
+    with _fail_lock:
+        if is_failure:
+            _consecutive_failures += 1
+        else:
+            _consecutive_failures = 0
+        failures = _consecutive_failures
+    if failures >= _MAX_CONSECUTIVE_FAILURES:
+        logger.warning(f"[抓取] 连续 {failures} 次抓取失败，建议换策略")
+        return text[:max_chars] + f"\n\n⚠ 已连续 {failures} 次抓取失败，建议换用其他方式（如 run_command curl）或直接告知用户无法获取。"
 
     logger.debug(f"[抓取←] {url} chars={len(text)}")
     return text[:max_chars]

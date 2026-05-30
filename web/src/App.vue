@@ -8,6 +8,7 @@ import ThemeToggle from './components/ThemeToggle.vue'
 import StatusBar from './components/StatusBar.vue'
 import ModelSelector from './components/ModelSelector.vue'
 import SkillPanel from './components/SkillPanel.vue'
+import TeamPanel from './components/TeamPanel.vue'
 import FileBrowserPanel from './components/FileBrowserPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 
@@ -26,9 +27,30 @@ const config = ref({
   username: '',
 })
 const showSidebar = ref(true)
-const showSkills = ref(false)
-const showFiles = ref(false)
-const showSettings = ref(false)
+const rightPanelTab = ref<string>('files')
+const rightPanelCollapsed = ref(false)
+const rightPanelWidth = ref(300)
+
+function startRightPanelResize(e: MouseEvent) {
+  const startX = e.clientX
+  const startWidth = rightPanelWidth.value
+  function onMove(ev: MouseEvent) {
+    const delta = startX - ev.clientX
+    const w = startWidth + delta
+    if (w < 60) {
+      rightPanelCollapsed.value = true
+    } else {
+      rightPanelCollapsed.value = false
+      rightPanelWidth.value = Math.max(160, Math.min(600, w))
+    }
+  }
+  function onUp() {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 const activeWorkspace = ref('')
 const chatViewRef = ref<InstanceType<typeof ChatView>>()
 const sidebarRef = ref<InstanceType<typeof SessionSidebar>>()
@@ -148,13 +170,16 @@ function submitUsername() {
       </div>
       <div class="header-right">
         <ModelSelector :session-id="sessionId" :workspace="activeWorkspace || undefined" @switched="onModelSwitched" />
-        <button class="skill-btn" @click="showFiles = true" title="文件浏览">
+        <button class="skill-btn" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'" title="文件浏览">
           <span>📄</span>
         </button>
-        <button class="skill-btn" @click="showSkills = true" title="工具面板">
+        <button class="skill-btn" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'" title="协作面板">
+          <span>👥</span>
+        </button>
+        <button class="skill-btn" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'" title="工具面板">
           <span>🔧</span>
         </button>
-        <button class="skill-btn" @click="showSettings = true" title="设置">
+        <button class="skill-btn" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'" title="设置">
           <span>⚙</span>
         </button>
         <ThemeToggle :theme="theme" @toggle="onToggleTheme" />
@@ -170,18 +195,37 @@ function submitUsername() {
         @workspace-change="onWorkspaceChange"
       />
       <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" @todos-update="onTodosUpdate" />
-      <div class="todos-sidebar" v-if="todosContent">
-        <div class="todos-sidebar-header" @click="todosCollapsed = !todosCollapsed">
-          📋 任务计划
-          <span class="todos-toggle">{{ todosCollapsed ? '▸' : '▾' }}</span>
+      <div class="rp-resize-handle" @mousedown.prevent="startRightPanelResize"></div>
+      <div class="right-panel" :class="{ 'rp-collapsed': rightPanelCollapsed }" :style="rightPanelCollapsed ? {} : { width: rightPanelWidth + 'px' }">
+        <div class="rp-tabs">
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'todos' }" @click="rightPanelTab = rightPanelTab === 'todos' ? '' : 'todos'" v-if="todosContent">📋</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'">👥</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'">🔧</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'">📄</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'">⚙</button>
+          <button class="rp-tab rp-collapse" @click="rightPanelCollapsed = !rightPanelCollapsed">{{ rightPanelCollapsed ? '◂' : '▸' }}</button>
         </div>
-        <div class="todos-sidebar-body" v-if="!todosCollapsed" v-html="renderTodos()"></div>
+        <div class="rp-body" v-show="!rightPanelCollapsed">
+          <div v-if="rightPanelTab === 'todos'" class="rp-content">
+            <div class="rp-title">📋 任务计划</div>
+            <div class="rp-todos" v-html="renderTodos()"></div>
+          </div>
+          <div v-if="rightPanelTab === 'team'" class="rp-content">
+            <TeamPanel :username="currentUsername" :workspace="activeWorkspace" embedded />
+          </div>
+          <div v-if="rightPanelTab === 'skills'" class="rp-content">
+            <SkillPanel :username="currentUsername" :workspace="activeWorkspace" embedded @use="onUseSkill" />
+          </div>
+          <div v-if="rightPanelTab === 'files'" class="rp-content rp-content-fill">
+            <FileBrowserPanel :workspace="activeWorkspace" embedded />
+          </div>
+          <div v-if="rightPanelTab === 'settings'" class="rp-content">
+            <SettingsPanel embedded />
+          </div>
+        </div>
       </div>
     </div>
     <StatusBar v-bind="config" :plan-mode="planMode" />
-    <SkillPanel :visible="showSkills" :username="currentUsername" :workspace="activeWorkspace" @close="showSkills = false" @use="onUseSkill" />
-    <FileBrowserPanel :visible="showFiles" :workspace="activeWorkspace" @close="showFiles = false" />
-    <SettingsPanel :visible="showSettings" @close="showSettings = false" />
   </template>
 </template>
 
@@ -359,60 +403,131 @@ function submitUsername() {
   background: var(--bg-thinking);
 }
 
+.skill-btn.active {
+  border-color: var(--accent);
+  background: var(--bg-thinking);
+}
+
 .main-area {
   flex: 1;
   display: flex;
   overflow: hidden;
 }
 
-.todos-sidebar {
-  width: 260px;
+.rp-resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.rp-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.3;
+}
+
+.right-panel {
+  width: 300px;
   flex-shrink: 0;
   border-left: 0.5px solid var(--border);
   background: var(--bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width 0.2s ease;
 }
 
-.todos-sidebar-header {
-  padding: 0.8rem 1rem;
-  font-weight: 600;
-  font-size: 0.82rem;
-  cursor: pointer;
-  user-select: none;
+.right-panel:not(.rp-collapsed) .rp-body:empty {
+  display: none;
+}
+
+.rp-tabs {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
-  color: var(--accent, #E8912D);
   border-bottom: 0.5px solid var(--border);
+  padding: 0 0.3rem;
+  gap: 1px;
+  flex-shrink: 0;
 }
 
-.todos-toggle {
-  font-size: 0.7rem;
-  margin-left: auto;
+.rp-tab {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  border-radius: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
 }
 
-.todos-sidebar-body {
+.rp-tab:hover { background: var(--bg-thinking); }
+.rp-tab.active { background: var(--accent); }
+.rp-collapse { margin-left: auto; font-size: 0.7rem; color: var(--fg-dim); }
+.rp-collapse:hover { color: var(--fg); background: var(--bg-card); }
+
+.right-panel.rp-collapsed {
+  width: 40px;
+}
+.right-panel.rp-collapsed .rp-tabs {
+  flex-direction: column;
+  border-bottom: none;
+  padding: 0.3rem 0;
+}
+.right-panel.rp-collapsed .rp-tab {
+  width: 28px;
+  height: 28px;
+  font-size: 0.75rem;
+}
+
+.rp-body {
   flex: 1;
   overflow-y: auto;
-  padding: 0.6rem 1rem;
-  font-family: 'Source Sans 3', sans-serif;
+  display: flex;
+  flex-direction: column;
 }
 
-.todos-sidebar-body :deep(.todo-item) {
+.rp-content {
+  padding: 0.6rem;
+  flex-shrink: 0;
+}
+
+.rp-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  color: var(--accent);
+  margin-bottom: 0.5rem;
+  padding: 0.2rem 0.4rem;
+}
+
+.rp-todos {
+  font-family: 'Source Sans 3', sans-serif;
   font-size: 0.8rem;
+}
+
+.rp-todos :deep(.todo-item) {
   padding: 2px 0;
   line-height: 1.5;
 }
 
-.todos-sidebar-body :deep(.todo-active) {
+.rp-todos :deep(.todo-active) {
   font-weight: 600;
   color: var(--accent, #E8912D);
 }
 
-.todos-sidebar-body :deep(.todo-done) {
+.rp-todos :deep(.todo-done) {
   opacity: 0.5;
   text-decoration: line-through;
+}
+
+.rp-content-fill {
+  padding: 0 !important;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 </style>

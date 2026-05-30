@@ -13,12 +13,19 @@ _graphs_lock = threading.Lock()
 _last_graphs: dict[int, object] = {}  # thread_id → last TaskGraph
 
 
-def configure(blackboard=None, workflow_dirs: list[Path] | None = None):
-    global _blackboard, _workflow_dirs
+_bus = None
+_manager = None
+
+def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None, manager=None):
+    global _blackboard, _workflow_dirs, _bus, _manager
     if blackboard is not None:
         _blackboard = blackboard
     if workflow_dirs is not None:
         _workflow_dirs = workflow_dirs
+    if bus is not None:
+        _bus = bus
+    if manager is not None:
+        _manager = manager
 
 
 # ── run_workflow ──
@@ -28,7 +35,7 @@ _run_def = {
     "function": {
         "name": "run_workflow",
         "description": (
-            "提交并执行一个多 agent 工作流（DAG）。定义任务节点和依赖关系，"
+            "提交并执行一个多 agent 工作流（DAG）。适用于有依赖链的多步任务（如先搜索再编码）。定义任务节点和依赖关系，"
             "系统自动按依赖顺序编排执行：无依赖的任务并行，有依赖的等前置完成后触发。\n"
             "每个任务的 prompt 中可用 {task_id} 引用依赖任务的结果。\n"
             "示例：[{\"id\":\"search\",\"agent\":\"researcher\",\"prompt\":\"搜索 X\",\"depends_on\":[]},"
@@ -51,6 +58,7 @@ _run_def = {
                                 "items": {"type": "string"},
                                 "description": "依赖的任务 ID 列表",
                             },
+                            "timeout": {"type": "integer", "description": "单任务超时秒数，默认 600"},
                         },
                         "required": ["id", "agent", "prompt"],
                     },
@@ -80,6 +88,7 @@ def _run_exec(args: dict) -> str:
             depends_on=t.get("depends_on", []),
             condition=t.get("condition"),
             max_retry=t.get("max_retry", 1),
+            timeout=t.get("timeout", 0),
         )
         graph.add_task(node)
 
@@ -89,6 +98,7 @@ def _run_exec(args: dict) -> str:
     orch = Orchestrator(
         graph, _blackboard,
         context_length=MODEL_CONFIG.get("context_length", 128000),
+        bus=_bus, manager=_manager,
     )
     result = orch.run()
     return result
@@ -108,6 +118,10 @@ _status_def = {
 
 def _status_exec(args: dict) -> str:
     graph = _last_graphs.get(threading.current_thread().ident)
+    if graph is None:
+        with _graphs_lock:
+            if _last_graphs:
+                graph = next(iter(_last_graphs.values()))
     if graph is None:
         return "暂无工作流记录"
     return graph.render_status()

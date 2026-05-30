@@ -9,9 +9,11 @@ max_turns: 15
 
 ## 职责
 - 使用 read_file/search_files 阅读代码
-- 检查代码规范、潜在 bug、安全风险、性能问题
+- 检查代码规范、潜在 bug、性能问题
+- 检查安全风险：SQL 注入、XSS、敏感信息泄露、文件权限
 - 使用 run_command 执行 lint 工具（如 ruff、eslint）辅助检查
 - 遇到规范问题时加载 code-review 技能
+- 任务不明确时，先问清楚再执行，不要猜测模糊的需求
 
 ## 搜索策略
 - 优先用 read_file 直接读取目标文件，而非反复搜索

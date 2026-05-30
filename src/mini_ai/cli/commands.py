@@ -3,7 +3,7 @@ from ..logger import logger
 
 
 class CommandHandler:
-    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None):
+    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path=""):
         self.disp = disp
         self.store = store
         self.sessions = sessions
@@ -14,6 +14,9 @@ class CommandHandler:
         self.ctx = ctx
         self.workspace_mgr = workspace_mgr
         self.history_db = history_db
+        self.context_builder = context_builder
+        self.skill_loader = skill_loader
+        self.project_path = project_path
         self.plan_mode = False
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
@@ -189,6 +192,17 @@ class CommandHandler:
             messages[:] = [messages[0]]
             self.inject_fn(messages)
             self.disp.info(f"已清空 {len(non_system)} 条上下文消息（历史保留在 DB 中）")
+            return "continue"
+
+        if user_input == "/prompt":
+            if not self.context_builder:
+                self.disp.error("context_builder 不可用")
+                return "continue"
+            prompt = self.context_builder.build(
+                memory_store=self.store, skill_loader=self.skill_loader,
+                project_path=self.project_path,
+            )
+            self.disp.info(f"系统提示词（{len(prompt)} 字符）：\n{prompt}")
             return "continue"
 
         if user_input == "/genskill":

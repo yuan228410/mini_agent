@@ -5,21 +5,22 @@ from ..logger import logger
 
 _loader = None
 _definition = None
-_project_path = None
+_project_path_ctx = __import__("contextvars").ContextVar("dispatch_project_path", default=None)
 
 
 def configure(loader=None, definition=None, project_path=None):
-    global _loader, _definition, _project_path
+    global _loader, _definition
     if loader is not None:
         _loader = loader
     if definition is not None:
         _definition = definition
     if project_path is not None:
-        _project_path = project_path
+        _project_path_ctx.set(project_path)
 
 
 def get_project_path():
-    return _project_path or ""
+    val = _project_path_ctx.get()
+    return val or ""
 
 
 _BASE_DEFINITION = {
@@ -63,6 +64,7 @@ def build_definition(subagent_list: str) -> dict:
 
 def execute(args: dict) -> str:
     from ..runner import run_agent
+    from ..config import MODEL_CONFIG, RequestContext
 
     spec = _loader.get(args.get("type", ""))
     if not spec:
@@ -72,7 +74,6 @@ def execute(args: dict) -> str:
     task = args.get("task", "")
     inputs = args.get("inputs") or {}
 
-    # 替换 task 中的 {key} 占位符为 inputs 中对应的值
     if inputs:
         for key, value in inputs.items():
             placeholder = "{" + key + "}"
@@ -84,6 +85,7 @@ def execute(args: dict) -> str:
         logger.info(f"[派遣→] inputs: {list(inputs.keys())}")
 
     system_prompt = spec["system_prompt"]
+    _project_path = _project_path_ctx.get()
     if _project_path:
         system_prompt += f"\n\n## 当前工作空间\n\n项目路径: {_project_path}\n\n重要：执行命令时必须传 cwd=\"{_project_path}\" 参数；搜索文件时使用绝对路径基于此目录。读写文件使用绝对路径。"
 
@@ -92,6 +94,21 @@ def execute(args: dict) -> str:
         {"role": "user", "content": task},
     ]
 
-    result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"])
+    sub_display = None
+    try:
+        from ..tools import _registry
+        lead_display = _registry._display
+        if lead_display and hasattr(lead_display, 'queue'):
+            from ..web.display import WebDisplay
+            sub_display = WebDisplay(lead_display.queue, lead_display.loop)
+            sub_display.set_teammate(f"sub:{spec['name']}")
+    except (ImportError, AttributeError):
+        pass
+
+    ctx = None
+    if sub_display:
+        ctx = RequestContext(model_config=MODEL_CONFIG, display=sub_display)
+
+    result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx)
     logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
     return result or f"[{spec['name']}] 超出轮次限制或执行失败"

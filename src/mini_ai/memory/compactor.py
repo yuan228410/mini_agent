@@ -108,8 +108,9 @@ class Compactor:
                  context_usage_threshold: float = 0.8, context_length: int = 128000,
                  keep_budget_ratio: float = 0.2,
                  early_compact_ratio: float = 0.85,
-                 max_cached_summaries: int = 200,
-                 context_builder=None, skill_loader=None, history_db=None, project_path="",
+                max_cached_summaries: int = 200,
+                max_summary_sections: int = 50,
+                context_builder=None, skill_loader=None, history_db=None, project_path="",
                  summary_dir: Path | None = None):
         self.memory = memory_store
         self.keep_recent = keep_recent
@@ -118,6 +119,7 @@ class Compactor:
         self.keep_budget_ratio = keep_budget_ratio
         self.early_compact_ratio = early_compact_ratio
         self.max_cached_summaries = max_cached_summaries
+        self.max_summary_sections = max_summary_sections
         self.context_builder = context_builder
         self.skill_loader = skill_loader
         self.history_db = history_db
@@ -281,8 +283,8 @@ class Compactor:
         if path.exists():
             text = path.read_text(encoding="utf-8")
             sections = text.split("\n## 压缩 ")
-            if len(sections) > 10:
-                path.write_text("## 压缩 " + "\n## 压缩 ".join(sections[-10:]), encoding="utf-8")
+            if len(sections) > self.max_summary_sections:
+                path.write_text("## 压缩 " + "\n## 压缩 ".join(sections[-self.max_summary_sections:]), encoding="utf-8")
 
     def _split_rounds(self, non_system: list[dict]) -> list[dict]:
         rounds = []

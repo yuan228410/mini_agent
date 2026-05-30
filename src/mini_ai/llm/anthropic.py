@@ -43,11 +43,16 @@ def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
                     blocks.append({"type": "text", "text": content})
                 for t in tc:
                     fn = t["function"]
+                    try:
+                        parsed = json.loads(fn["arguments"]) if fn.get("arguments") else {}
+                    except (json.JSONDecodeError, TypeError):
+                        parsed = {}
+                        logger.warning(f"[Anth] tool_call 参数解析失败: {fn.get('arguments', '')[:200]}")
                     blocks.append({
                         "type": "tool_use",
                         "id": t["id"],
                         "name": fn["name"],
-                        "input": json.loads(fn["arguments"]) if fn.get("arguments") else {},
+                        "input": parsed,
                     })
                 result.append({"role": "assistant", "content": blocks})
             else:

@@ -28,6 +28,7 @@ class ToolRegistry:
         self._by_name: dict[str, object] = {}
         self._display = None
         self._project_path = ""
+        # 并行执行的工具白名单（不含写操作工具，避免文件竞态）
         self._parallel_tools: set[str] = {
             "dispatch_subagent", "spawn_teammate",
             "read_file", "search_files", "list_dir",
@@ -189,12 +190,12 @@ class ToolRegistry:
     def render_todos(self) -> str:
         return update_todos._store.render()
 
-    def register_blackboard(self, blackboard, workflow_dirs=None):
+    def register_blackboard(self, blackboard, workflow_dirs=None, bus=None, manager=None):
         from . import blackboard_tools
         blackboard_tools.configure(blackboard=blackboard)
         self.add_tools(*blackboard_tools.ALL_BLACKBOARD_TOOLS)
         from . import workflow_tools
-        workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs)
+        workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs, bus=bus, manager=manager)
         self.add_tools(*workflow_tools.ALL_WORKFLOW_TOOLS)
 
     def register_memory_tools(self, memory_store):
@@ -238,8 +239,8 @@ def register_display(display) -> None:
     _registry.register_display(display)
 
 
-def register_blackboard(blackboard, workflow_dirs=None) -> None:
-    _registry.register_blackboard(blackboard, workflow_dirs)
+def register_blackboard(blackboard, workflow_dirs=None, bus=None, manager=None) -> None:
+    _registry.register_blackboard(blackboard, workflow_dirs, bus=bus, manager=manager)
 
 
 def register_memory_tools(memory_store) -> None:

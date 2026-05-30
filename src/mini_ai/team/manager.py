@@ -9,6 +9,7 @@ from pathlib import Path
 
 from ..config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
 from ..logger import logger
+from .prompts import build_team_prompt
 
 _BASE_TOOL_NAMES = tuple(TEAMMATE["base_tools"])
 _MAX_TEAMMATES = TEAMMATE["max_teammates"]
@@ -28,8 +29,12 @@ class TeammateManager:
         self.threads: dict[str, threading.Thread] = {}
         self._wake_events: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
+        self._display = None
         self._mark_offline()
         self.bus.set_wake_callback(self._wake_teammate)
+
+    def set_display(self, display):
+        self._display = display
 
     def _load_config(self) -> dict:
         if self.config_path.exists():
@@ -65,6 +70,11 @@ class TeammateManager:
             if m:
                 m["status"] = status
                 self._save_config()
+        if self._display:
+            try:
+                self._display.teammate_status(name, status)
+            except Exception:
+                pass
 
     def spawn(self, name: str, role: str, prompt: str) -> str:
         _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -82,7 +92,7 @@ class TeammateManager:
                     member["role"] = role
                     member["status"] = "working"
                     self._save_config()
-                    return f"'{name}' 已在队中，任务已发送至 inbox"
+                    return f"'{name}' 已在队中，新任务已发送至 inbox。等待它完成后自动通知你即可。"
                 member["role"] = role
                 member["status"] = "working"
             else:
@@ -101,37 +111,57 @@ class TeammateManager:
         parent_ctx = _cv.copy_context()
         thread = threading.Thread(
             target=parent_ctx.run,
-            args=(self._teammate_loop, name, role, prompt),
+            args=(self._teammate_loop, name, role, prompt, self._display),
             daemon=True,
         )
         with self.lock:
             self.threads[name] = thread
         thread.start()
-        return f"已召入队友 '{name}'（职司：{role}）"
+        return f"已召入队友 '{name}'（职司：{role}），它将独立完成任务并回禀你。你不需要再做相同的分析工作，等待它完成后自动通知你即可。"
 
     def _wake_teammate(self, name: str):
         ev = self._wake_events.get(name)
         if ev:
             ev.set()
 
-    def _teammate_loop(self, name: str, role: str, prompt: str):
+    def _teammate_loop(self, name: str, role: str, prompt: str, lead_display=None):
         from ..runner import run_agent
         from ..tools.team_tools import set_caller
 
         set_caller(name)
 
-        system_prompt = (
-            f"你是 agent team 中的队友，名叫 {name}，职司 {role}。\n"
-            f"工作区：{self.project_dir}。\n"
-            "收到任务后独立完成，完成后用 send_message 回禀 lead。\n"
-            "可通过 send_message 与其他队友直接通信协作。\n"
-            "用 blackboard_write 保存结果供他人读取，用 blackboard_read 获取他人成果。\n"
-        )
+        tm_display = None
+        ctx = None
+        if lead_display:
+            try:
+                from ..web.display import WebDisplay
+                tm_display = WebDisplay(lead_display.queue, lead_display.loop)
+                tm_display.set_teammate(name)
+            except ImportError:
+                tm_display = None
+            from ..config import RequestContext, MODEL_CONFIG as _MC
+            ctx = RequestContext(model_config=_MC, display=tm_display)
 
+        from ..context import ContextBuilder
+        from ..skills import SkillLoader
+        from ..config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
+
+        ctx_builder = ContextBuilder(DATA_DIR)
+        _sl = SkillLoader(DATA_DIR / "skills", _SP)
+        base_prompt = ctx_builder.build(skill_loader=_sl, project_path=str(self.project_dir), exclude_character=True)
         tool_names = list(_BASE_TOOL_NAMES) + [
             "send_message", "list_teammates",
             "blackboard_read", "blackboard_write", "blackboard_list",
+            "dispatch_subagent",
         ]
+        team_rules = build_team_prompt(
+            f"你是 agent team 中的队友，名叫 {name}，职司 {role}。",
+            tool_names,
+            has_messaging=True,
+        )
+        system_prompt = team_rules + "\n\n---\n\n" + base_prompt if base_prompt else team_rules
+
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt},
@@ -143,7 +173,8 @@ class TeammateManager:
             self._set_status(name, "offline")
             return
 
-        while True:
+        try:
+         while True:
             ev.clear()
             inbox = self.bus.read_inbox(name)
             if inbox:
@@ -168,7 +199,7 @@ class TeammateManager:
             logger.info(f"[队友▶] {name} 开始工作，消息数={len(messages)}")
             try:
                 result = run_agent(messages, max_turns=TEAMMATE["max_turns"], tool_names=tool_names,
-                                 context_length=MODEL_CONFIG.get("context_length", 128000))
+                                     context_length=MODEL_CONFIG.get("context_length", 128000), ctx=ctx)
             except Exception as exc:
                 logger.error(f"[队友✗] {name} 异常: {exc}")
                 self.bus.send(name, "lead", f"Error: 执行异常 {exc}")
@@ -178,7 +209,9 @@ class TeammateManager:
                 self.bus.send(name, "lead",
                               f"队友 {name} 任务未完成（超出轮次或执行失败）")
 
-            messages = [messages[0]]
+            max_history = TEAMMATE.get('max_history', 20)
+            if len(messages) > max_history:
+                messages = [messages[0]] + messages[-(max_history - 1):]
             logger.info(f"[队友■] {name} 空闲，等待 inbox")
             self._set_status(name, "idle")
             has_work = False
@@ -206,6 +239,9 @@ class TeammateManager:
                     logger.info(f"[队友⏱] {name} 空闲超时 ({_IDLE_TIMEOUT}s)，自动退出")
                     self._set_status(name, "shutdown")
                     return
+        except Exception as exc:
+            logger.error(f"[队友✗] {name} 未预期异常，线程退出: {exc}", exc_info=True)
+            self._set_status(name, "offline")
 
     def list_all(self) -> str:
         with self.lock:

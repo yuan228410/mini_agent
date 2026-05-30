@@ -46,10 +46,17 @@ teammate:
   max_teammates: 10
   max_turns: 20
   idle_timeout: 300
+  max_history: 20
+  task_timeout: 600
   base_tools:
     - run_command
     - web_fetch
     - load_skill
+    - read_file
+    - write_file
+    - edit_file
+    - search_files
+    - list_dir
 
 tool:
   max_result_chars: 8000
@@ -134,7 +141,7 @@ logging:
 | `teammate_recv` | `5` | 队友等待 inbox 超时（秒） |
 | `lead_wait` | `1800` | lead 等待队友回禀上限（秒） |
 | `lead_poll_interval` | `2` | lead 轮询 inbox 间隔（秒） |
-| `web_fetch` | `30` | 网页抓取超时（秒） |
+| `web_fetch` | `20` | 网页抓取超时（秒） |
 
 ### compactor
 
@@ -145,6 +152,7 @@ logging:
 | `keep_budget_ratio` | `0.2` | 压缩后保留轮次占上下文窗口比例 |
 | `early_compact_ratio` | `0.85` | 预压缩触发阈值相对 context_usage_threshold 的比例 |
 | `max_cached_summaries` | `200` | 增量压缩轮次摘要缓存条数上限，超过时自动清理最旧摘要，防止长时间对话内存泄漏 |
+| `max_summary_sections` | `50` | 压缩摘要文件保留的最大段落数，超过时截断旧段落 |
 | `context_limit` | `50` | 加载到 LLM 上下文的消息条数 |
 
 ### teammate
@@ -154,7 +162,9 @@ logging:
 | `max_teammates` | `10` | 最大队友数量 |
 | `max_turns` | `20` | 队友每轮最大 LLM 调用次数 |
 | `idle_timeout` | `300` | 空闲超时自动退出（秒），`0` 表示不超时 |
-| `base_tools` | `[run_command, web_fetch, load_skill]` | 队友基础工具白名单 |
+| `max_history` | `20` | 任务完成后保留的最近消息数，用于多轮交互时保持上下文 |
+| `task_timeout` | `600` | DAG 工作流单任务超时（秒），可在任务节点中用 `timeout` 字段覆盖 |
+| `base_tools` | `[run_command, web_fetch, load_skill, read_file, write_file, edit_file, search_files, list_dir]` | 队友基础工具白名单（通信/黑板/dispatch_subagent 工具自动附加） |
 
 ### tool
 

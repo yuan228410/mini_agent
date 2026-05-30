@@ -21,17 +21,6 @@ src/mini_ai/
 └── character/           # 人设（SOUL.md + RULES.md）
 ```
 
-## 架构原则（Agent 需要知道的）
-
-- **模块化**：一个文件一个职责
-- **工具模式**：`tools/xxx.py` 导出 `definition` + `execute(args)` + 可选 `configure(**kwargs)`，通过 ToolRegistry 注册
-- **记忆系统**：三层（情景/长期/画像）+ HistoryDB（SQLite 全文搜索）+ Compactor（自动摘要），`remember`/`recall`/`forget` 主动工具
-- **工作空间**：CLI 按 CWD 自动绑定，Web 手动管理，每个工作空间独立记忆/历史
-- **上下文隔离**：子代理/队友的回禀不回传主循环
-- **错误恢复**：LLM 429/5xx 自动重试 3 次，工具缺参返回错误而非抛异常，连续 3 次工具错误提前退出
-- **依赖注入**：工具通过 `configure(**kwargs)` 注入外部依赖
-- **配置分离**：运行时走 `~/.mini_ai/config.yaml`，包内数据只读
-
 ## 行为规则
 
 **不要主动提交代码** — 除非用户明确说"提交"或"commit"，否则只报告完成状态

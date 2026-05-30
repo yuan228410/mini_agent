@@ -4,6 +4,7 @@ import {
   ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct,
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, getWorkspaces, exportSession,
+  getSystemPrompt,
   type WsEvent, type HistoryMessage,
 } from '../api'
 import MessageItem from './MessageItem.vue'
@@ -17,6 +18,8 @@ interface Message {
   tools?: { name: string; args: string; result: string; elapsed: number; tool_call_id?: string }[]
   streaming?: boolean
   timestamp?: string
+  teammate?: string
+  teammateColor?: string
 }
 
 interface SessionState {
@@ -42,6 +45,24 @@ const messages = ref<Message[]>([])
 const isStreaming = ref(false)
 const planMode = ref(false)
 const todosContent = ref('')
+const teammateColorMap: Record<string, string> = {
+  researcher: '#4a9eff',
+  coder: '#e8922d',
+  reviewer: '#9b59b6',
+  tester: '#27ae60',
+  planner: '#e67e22',
+}
+
+function _tmLabel(tm: string): string {
+  if (tm.startsWith('sub:')) return `📦 ${tm.slice(4)}`
+  if (tm.startsWith('wf:')) return `🔀 ${tm.slice(3)}`
+  return `🤖 ${tm}`
+}
+
+function _tmColor(name: string): string {
+  const base = name.replace(/^(sub:|wf:)/, '')
+  return teammateColorMap[base] || '#888'
+}
 
 const chatContainer = ref<HTMLElement>()
 const props = defineProps<{ workspace?: string }>()
@@ -51,9 +72,12 @@ let _unsubWs: (() => void) | null = null
 let _flushTimer: number | null = null
 let _scrollTimer: number | null = null
 let _isNearBottom = true
+let _streamingWatchdog: number | null = null
+let _lastWsEventTime = 0
 const FLUSH_INTERVAL = 50
 const SCROLL_INTERVAL = 100
 const BOTTOM_THRESHOLD = 80
+const STREAMING_TIMEOUT = 120_000  // 2 min — 若 isStreaming 期间无任何 WS 事件则兜底重置
 
 function _state(sid: string): SessionState {
   const key = _cacheKey(sid, props.workspace)
@@ -117,12 +141,14 @@ onMounted(async () => {
   ensureWs().catch(() => {})
 })
 
-watch(() => props.workspace, (ws) => {
+watch(() => props.workspace, async (ws) => {
   const effectiveWs = ws || 'default'
   if (!_initialized) {
     _initialized = true
-    initSession(effectiveWs).catch(() => {})
-    fetchConfig().catch(() => {})
+    await initSession(effectiveWs).catch(() => {})
+    if (activeSessionId.value) {
+      fetchConfig().catch(() => {})
+    }
   }
 })
 
@@ -131,18 +157,24 @@ onUnmounted(() => {
   closeWs()
   if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
   if (_scrollTimer !== null) { clearTimeout(_scrollTimer); _scrollTimer = null }
+  if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
 })
 
 async function initSession(ws?: string) {
   console.time('[perf] initSession')
+  const effectiveWs = ws || props.workspace || 'default'
   const stored = localStorage.getItem(SESSION_KEY)
   if (stored) {
     activeSessionId.value = stored
-    await restoreHistory(stored, ws || props.workspace || 'default')
+    await restoreHistory(stored, effectiveWs)
+  } else if (effectiveWs === 'default') {
+    await newSession(effectiveWs)
   } else {
-    await newSession()
+    // 非 default 工作空间不自动创建会话，等用户手动新建
+    activeSessionId.value = ''
+    _load('')
   }
-  preloadAllSessions(ws || props.workspace || 'default')
+  preloadAllSessions(effectiveWs)
   console.timeEnd('[perf] initSession')
 }
 
@@ -215,11 +247,38 @@ async function fetchConfig() {
   } catch {}
 }
 
+
+function _resetStreaming(sid: string, reason: string) {
+  const key = _cacheKey(sid, props.workspace)
+  const s = _states.get(key)
+  if (s) s.isStreaming = false
+  if (sid === activeSessionId.value) {
+    isStreaming.value = false
+  }
+  console.warn(`[mini-ai] isStreaming reset: sid=${sid} reason=${reason}`)
+  emit('status-change', sid, 'idle')
+  const last = s?.messages[s.messages.length - 1]
+  if (last && last.streaming) last.streaming = false
+  if (s) messages.value = [...s.messages]
+  if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
+}
+
+function _startStreamingWatchdog(sid: string) {
+  if (_streamingWatchdog !== null) clearTimeout(_streamingWatchdog)
+  _streamingWatchdog = window.setTimeout(() => {
+    _streamingWatchdog = null
+    if (isStreaming.value) {
+      _resetStreaming(sid, 'watchdog-timeout')
+    }
+  }, STREAMING_TIMEOUT)
+}
+
 function handleWsEvent(event: WsEvent) {
   const sid = event.data?.session_id || activeSessionId.value
   const s = _state(sid)
 
   _processEvent(s, event)
+  _lastWsEventTime = Date.now()
 
   const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error'
 
@@ -229,6 +288,7 @@ function handleWsEvent(event: WsEvent) {
     if (isTerminal) {
       if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
       _doFlush()
+      console.log(`[mini-ai] terminal event: sid=${sid} event=${event.event}`)
       if (event.data?.prompt_tokens !== undefined) {
         emit('config-update', {
           prompt_tokens: event.data.prompt_tokens,
@@ -236,8 +296,10 @@ function handleWsEvent(event: WsEvent) {
         })
       }
       fetchConfig()
+      if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
     } else {
       _scheduleFlush()
+      if (isStreaming.value) _startStreamingWatchdog(sid)
       if (event.data?.prompt_tokens !== undefined && event.data.prompt_tokens > 0) {
         emit('config-update', {
           prompt_tokens: event.data.prompt_tokens,
@@ -271,7 +333,15 @@ function _processEvent(s: SessionState, event: WsEvent) {
 
   switch (event.event) {
     case 'thinking_start':
-      s._currentThinking = ''
+      {
+        const tm = event.data.teammate || ''
+        if (tm) {
+          const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (tmMsg) tmMsg.thinking = { chars: 0, elapsed: 0, content: '' }
+        } else {
+          s._currentThinking = ''
+        }
+      }
       _startNewAssistantMsg(s)
       break
     case 'thinking':
@@ -285,23 +355,55 @@ function _processEvent(s: SessionState, event: WsEvent) {
       break
     case 'thinking_end':
       {
-        const m = s.messages[s.messages.length - 1]
-        if (m && m.role === 'assistant' && m.thinking) {
-          m.thinking.chars = event.data.chars || m.thinking.chars
-          m.thinking.elapsed = event.data.elapsed || 0
+        const tm = event.data.teammate || ''
+        if (tm) {
+          const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (tmMsg && tmMsg.thinking) {
+            tmMsg.thinking.chars = event.data.chars || tmMsg.thinking.chars
+            tmMsg.thinking.elapsed = event.data.elapsed || 0
+          }
+        } else {
+          const m = s.messages[s.messages.length - 1]
+          if (m && m.role === 'assistant' && m.thinking) {
+            m.thinking.chars = event.data.chars || m.thinking.chars
+            m.thinking.elapsed = event.data.elapsed || 0
+          }
         }
       }
       break
     case 'text':
-      s._currentContent += event.data.content || ''
+      {
+        const tm = event.data.teammate || ''
+        if (tm) {
+          const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (tmMsg) {
+            tmMsg.content = (tmMsg.content || '') + (event.data.content || '')
+            messages.value = [...s.messages]
+          }
+        } else {
+          s._currentContent += event.data.content || ''
+        }
+      }
       break
     case 'tool_start':
       {
-        const m = s.messages[s.messages.length - 1]
-        if (m && m.role === 'assistant') {
-          if (!m.tools) m.tools = []
-          m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
+        const tm = event.data.teammate || ''
+        if (tm) {
+          let tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (!tmMsg) {
+            tmMsg = { role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), teammate: tm, teammateColor: _tmColor(tm) }
+            s.messages.push(tmMsg)
+          }
+          if (!tmMsg.tools) tmMsg.tools = []
+          tmMsg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
           messages.value = [...s.messages]
+        } else {
+          const m = s.messages[s.messages.length - 1]
+          if (m && m.role === 'assistant') {
+            if (!m.tools) m.tools = []
+            m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
+            messages.value = [...s.messages]
+          }
         }
       }
       break
@@ -311,6 +413,21 @@ function _processEvent(s: SessionState, event: WsEvent) {
       break
     case 'tool_result':
       {
+        const tm = event.data.teammate || ''
+        if (tm) {
+          const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (tmMsg && tmMsg.tools) {
+            const tcId = event.data.tool_call_id || ''
+            let target: any = null
+            if (tcId) target = tmMsg.tools.find((t: any) => t.tool_call_id === tcId)
+            if (!target) target = tmMsg.tools.find((t: any) => t.result === '...')
+            if (!target) target = tmMsg.tools[tmMsg.tools.length - 1]
+            target.result = event.data.result || ''
+            target.elapsed = event.data.elapsed || 0
+          }
+          messages.value = [...s.messages]
+          break
+        }
         const tcId = event.data.tool_call_id || ''
         const m = s.messages[s.messages.length - 1]
         if (m && m.role === 'assistant' && m.tools && m.tools.length > 0) {
@@ -337,6 +454,23 @@ function _processEvent(s: SessionState, event: WsEvent) {
       break
     case 'aborted':
       s._currentContent += '\n\n⚠ 已中断生成'
+      break
+    case 'teammate_status':
+      if (event.data) {
+        const tmName = event.data.name || ''
+        const tmStatus = event.data.status || ''
+        if (tmName && (tmStatus === 'idle' || tmStatus === 'shutdown' || tmStatus === 'offline')) {
+          const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tmName && m.streaming)
+          if (tmMsg) {
+            tmMsg.streaming = false
+            messages.value = [...s.messages]
+          }
+        }
+      }
+      window.dispatchEvent(new CustomEvent('ws-message', { detail: event }))
+      break
+    case 'blackboard_update':
+      window.dispatchEvent(new CustomEvent('ws-message', { detail: event }))
       break
     case 'error':
       s._currentContent += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
@@ -389,6 +523,18 @@ async function sendMessage(text: string) {
     await fetchConfig()
     return
   }
+  if (text === '/prompt') {
+    try {
+      const resp = await getSystemPrompt(props.workspace || undefined)
+      const s = _state(activeSessionId.value)
+      const promptContent = '📋 系统提示词（' + resp.length + ' 字符）：\n\n' + resp.system_prompt
+      s.messages = [...s.messages, { role: 'assistant', content: promptContent, timestamp: _localTs() }]
+      messages.value = [...s.messages]
+    } catch (e: any) {
+      console.error('getSystemPrompt failed', e)
+    }
+    return
+  }
 
   const sid = activeSessionId.value
   _save()
@@ -397,6 +543,8 @@ async function sendMessage(text: string) {
   s._currentThinking = ''
   s.isStreaming = true
   isStreaming.value = true
+  _startStreamingWatchdog(sid)
+  console.log(`[mini-ai] sendMessage: sid=${sid} isStreaming=true`)
   s.messages = [...s.messages, { role: 'user', content: text, timestamp: _localTs() }, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
   messages.value = [...s.messages]
 
@@ -427,6 +575,8 @@ async function sendMessage(text: string) {
 }
 
 function stopGeneration() {
+  console.log(`[mini-ai] stopGeneration: sid=${activeSessionId.value}`)
+  if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
   abortChat(activeSessionId.value, props.workspace)
   isStreaming.value = false
   const key = _cacheKey(activeSessionId.value, props.workspace)
@@ -467,6 +617,12 @@ async function switchToSession(sid: string, ws?: string) {
     await restoreHistory(sid, ws || props.workspace || 'default')
   } else {
     _load(sid)
+  }
+  // 如果切回的会话仍在 streaming，启动 watchdog 兜底
+  const loadedS = _state(sid)
+  if (loadedS.isStreaming) {
+    _startStreamingWatchdog(sid)
+    console.log(`[mini-ai] switchToSession: sid=${sid} isStreaming=true, watchdog started`)
   }
   await fetchConfig()
 }
@@ -513,6 +669,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
         :style="{ animationDelay: `${i * 0.05}s` }"
         class="fade-in-up"
       />
+
     </div>
   </div>
   <div class="input-area">
@@ -615,6 +772,8 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   color: var(--fg-muted);
   font-size: 0.95rem;
 }
+
+
 
 .input-area {
   flex-shrink: 0;

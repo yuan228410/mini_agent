@@ -58,6 +58,8 @@ def _lead_tool_defs() -> list[dict]:
     return _LEAD_TOOLS
 
 
+_bus = None
+
 def _inject_todos(messages: list[dict]):
     todos_text = render_todos()
     base = messages[0]["content"]
@@ -68,13 +70,13 @@ def _inject_todos(messages: list[dict]):
 
 
 def _run_loop_compat(messages, tools, inject_fn, disp, ctx=None):
-    """兼容包装：保持 CommandHandler 和 wait_for_teammates 的调用签名。"""
     msg, _ = run_tool_loop(
         messages, tools,
         streaming=STREAMING,
         display=disp,
         inject_fn=inject_fn,
         ctx=ctx,
+        bus=_bus,
     )
     return msg
 
@@ -141,7 +143,9 @@ def main():
     register(skill_loader)
     register_subagents(SUBAGENT_LOADER)
 
+    global _bus
     bus = MessageBus(ws_dir / ".team" / "inbox")
+    _bus = bus
     team_mgr = TeammateManager(
         team_dir=ws_dir / ".team",
         bus=bus,
@@ -154,7 +158,7 @@ def main():
 
     bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
     workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
-    register_blackboard(bb, workflow_dirs=workflow_dirs)
+    register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
 
     req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
 
@@ -175,12 +179,13 @@ def main():
         context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
         keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
         early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
-                    max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
+        max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
+        max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
         context_length=MODEL_CONFIG.get("context_length", 128000),
-        context_builder=ctx,
-        skill_loader=skill_loader,
-        history_db=history_db,
-        project_path=str(Path.cwd()),
+                    context_builder=ctx,
+                    skill_loader=skill_loader,
+                    history_db=history_db,
+                    project_path=str(Path.cwd()),
         summary_dir=ws_dir,
     )
 
@@ -188,7 +193,8 @@ def main():
         disp=disp, store=store, sessions=sessions, compactor=compactor,
         inject_fn=_inject_todos, run_tool_fn=_run_loop_compat,
         lead_tools=_lead_tool_defs(), ctx=req_ctx, workspace_mgr=ws_mgr,
-        history_db=history_db,
+        history_db=history_db, context_builder=ctx, skill_loader=skill_loader,
+        project_path=ws.project_path,
     )
 
     system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
@@ -211,14 +217,14 @@ def main():
     )
 
     def _flush_deferred(history_db, messages, deferred_list):
-        tool_results_map = {m.get("name", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
+        tool_results_map = {m.get("tool_call_id", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
         for am in deferred_list:
             enriched_tcs = []
             for tc in am.get("tool_calls", []):
                 tc_copy = {k: v for k, v in tc.items()}
-                fn_name = tc.get("function", {}).get("name", "")
-                if fn_name and fn_name in tool_results_map:
-                    tc_copy["_result"] = tool_results_map[fn_name][:2000]
+                tc_id = tc.get("id", "")
+                if tc_id and tc_id in tool_results_map:
+                    tc_copy["_result"] = tool_results_map[tc_id][:2000]
                 enriched_tcs.append(tc_copy)
             am_meta = {}
             if am.get("thinking"):
@@ -238,6 +244,15 @@ def main():
         if result == "continue":
             continue
         if result == "reload_workspace":
+            # 清理旧资源
+            global _LEAD_TOOLS
+            _LEAD_TOOLS = None
+            try:
+                history_db.close()
+            except Exception:
+                pass
+            shutdown_teammates(bus, team_mgr)
+
             ws_name = _raw.get("active_workspace", "default")
             ws = ws_mgr.get(ws_name)
             if ws:
@@ -256,6 +271,7 @@ def main():
                     keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
                     early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
                     max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
+                    max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
                     context_length=MODEL_CONFIG.get("context_length", 128000),
                     context_builder=ctx,
                     skill_loader=skill_loader,
@@ -309,6 +325,7 @@ def main():
                 inject_fn=_inject_todos,
                 ctx=req_ctx,
                 persist_fn=_persist,
+                bus=bus,
             )
             _flush_deferred(history_db, messages, _cli_deferred_assistant)
 
@@ -326,6 +343,7 @@ def main():
                         inject_fn=_inject_todos,
                         ctx=req_ctx,
                         persist_fn=_persist,
+                        bus=bus,
                     )
                     _flush_deferred(history_db, messages, _cli_deferred_assistant)
                     if msg2 and msg2.get("content"):

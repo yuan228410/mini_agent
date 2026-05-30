@@ -20,7 +20,7 @@ _write_def = {
         "parameters": {
             "type": "object",
             "properties": {
-                "key": {"type": "string", "description": "数据的唯一标识，例如 search_result、design_doc"},
+                "key": {"type": "string", "description": "数据的唯一标识，建议格式：角色_主题（如 researcher_search_result、coder_backend）"},
                 "value": {"type": "string", "description": "要存储的内容"},
             },
             "required": ["key", "value"],
@@ -54,10 +54,11 @@ _read_def = {
 
 
 def _read_exec(args: dict) -> str:
-    value = _blackboard.get(args.get("key", ""))
-    if not value:
+    _MISS = object()
+    value = _blackboard.get(args.get("key", ""), default=_MISS)
+    if value is _MISS:
         return f"blackboard[{args['key']}] 不存在"
-    return value
+    return value if value else "(空)" 
 
 
 # ── blackboard_list ──

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """基于文件 JSONL 的队友邮箱系统"""
+import fcntl
 import json
 import re
 import threading
@@ -56,7 +57,11 @@ class MessageBus:
             if inbox_path.exists() and inbox_path.stat().st_size > _MAX_INBOX_CHARS:
                 return f"Error: {to} 的 inbox 已满，请等待对方读取后再发送"
             with inbox_path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                try:
+                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                finally:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             on_send = self._on_send
             ev = self._wake_events.get(to)
         if on_send:
@@ -71,10 +76,19 @@ class MessageBus:
             return []
         inbox_path = self.dir / f"{name}.jsonl"
         with self._lock:
-            if not inbox_path.exists():
+            try:
+                if not inbox_path.exists():
+                    return []
+                with inbox_path.open("r+", encoding="utf-8") as f:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+                    try:
+                        lines = f.read().splitlines()
+                        f.seek(0)
+                        f.truncate()
+                    finally:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except (OSError, FileNotFoundError):
                 return []
-            lines = inbox_path.read_text(encoding="utf-8").splitlines()
-            inbox_path.write_text("", encoding="utf-8")
         messages = []
         for line in lines:
             if not line.strip():
@@ -92,5 +106,9 @@ class MessageBus:
                 continue
             result = self.send(sender, name, content, "broadcast")
             if not result.startswith("Error"):
+                count += 1
+        if sender != "lead":
+            lr = self.send(sender, "lead", content, "broadcast")
+            if not lr.startswith("Error"):
                 count += 1
         return f"已广播给 {count} 位队友"

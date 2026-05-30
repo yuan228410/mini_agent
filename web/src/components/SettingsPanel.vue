@@ -2,7 +2,7 @@
 import { ref, reactive, onMounted, computed } from 'vue'
 import { getSettings, updateSettings, addModel, removeModel, getMcpStatus, addMcpServer, removeMcpServer, type SettingsResponse, type McpConnectedServer, type McpConfiguredServer } from '../api'
 
-const props = defineProps<{ visible: boolean }>()
+const props = defineProps<{ visible?: boolean, embedded?: boolean }>()
 const emit = defineEmits(['close'])
 
 const loading = ref(true)
@@ -52,6 +52,10 @@ const globalFields = reactive({
   max_result_chars: 8000,
   log_level: 'WARNING',
   mcp_enabled: false,
+  max_teammates: 10,
+  tm_max_turns: 20,
+  idle_timeout: 300,
+  max_history: 20,
 })
 
 const showAddModel = ref(false)
@@ -135,6 +139,12 @@ async function loadSettings() {
 
     const tool = s.tool || {}
     globalFields.max_result_chars = tool.max_result_chars ?? 8000
+
+    const tm = s.teammate || {}
+    globalFields.max_teammates = tm.max_teammates ?? 10
+    globalFields.tm_max_turns = tm.max_turns ?? 20
+    globalFields.idle_timeout = tm.idle_timeout ?? 300
+    globalFields.max_history = tm.max_history ?? 20
 
     const l = s.logging || {}
     globalFields.log_level = l.level || 'WARNING'
@@ -245,6 +255,12 @@ async function save() {
       max_cached_summaries: globalFields.max_cached_summaries,
     }
     updates.tool = { max_result_chars: globalFields.max_result_chars }
+    updates.teammate = {
+      max_teammates: globalFields.max_teammates,
+      max_turns: globalFields.tm_max_turns,
+      idle_timeout: globalFields.idle_timeout,
+      max_history: globalFields.max_history,
+    }
     updates.logging = { level: globalFields.log_level }
     updates.mcp = { enabled: globalFields.mcp_enabled }
 
@@ -258,9 +274,9 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="settings-overlay" @click="emit('close')">
-      <div class="settings-panel" @click.stop>
+<Teleport to="body" :disabled="!!embedded">
+    <div v-if="visible || embedded" :class="[embedded ? 'settings-embedded-wrap' : 'settings-overlay']" @click="embedded ? null : emit('close')">
+      <div :class="[embedded ? 'settings-embedded-inner' : 'settings-panel']" @click.stop>
         <div class="settings-header">
           <h3 class="settings-title">⚙ 设置</h3>
           <button class="settings-close" @click="emit('close')">✕</button>
@@ -469,6 +485,29 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
             </div>
           </div>
 
+          <!-- Teammate -->
+          <div class="settings-section">
+            <div class="section-title">🤝 队友</div>
+            <div class="field">
+              <label>最大队友数</label>
+              <input type="number" v-model.number="globalFields.max_teammates" min="1" max="50" />
+            </div>
+            <div class="field">
+              <label>队友最大工具轮次</label>
+              <input type="number" v-model.number="globalFields.tm_max_turns" min="5" max="100" />
+            </div>
+            <div class="field">
+              <label>空闲超时（秒）</label>
+              <input type="number" v-model.number="globalFields.idle_timeout" min="0" max="3600" step="30" />
+              <small>0 = 永不自动退出</small>
+            </div>
+            <div class="field">
+              <label>历史消息保留数</label>
+              <input type="number" v-model.number="globalFields.max_history" min="0" max="100" />
+              <small>队友任务完成后保留的最近消息数</small>
+            </div>
+          </div>
+
           <!-- Web & Logging -->
           <div class="settings-section">
             <div class="section-title">其他</div>
@@ -522,7 +561,7 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
       </div>
     </div>
     <!-- Add Model Modal -->
-    <Teleport to="body">
+    <Teleport to="body" :disabled="!!embedded">
       <div v-if="showAddModel" class="modal-overlay" @click="showAddModel = false; resetNewModel()">
         <div class="modal-card" @click.stop>
           <div class="modal-header">
@@ -572,9 +611,35 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
       </div>
     </Teleport>
   </Teleport>
+
 </template>
 
 <style scoped>
+.settings-embedded-wrap {
+  position: static !important;
+  background: transparent !important;
+  inset: auto !important;
+  z-index: auto !important;
+  display: flex !important;
+  height: 100% !important;
+  align-items: stretch !important;
+  justify-content: flex-end !important;
+}
+.settings-embedded-inner {
+  position: static !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.settings-embedded-inner .settings-header { display: none; }
+.settings-embedded-inner .settings-close { display: none; }
+
+.settings-embedded-wrap { position: static !important; background: transparent !important; inset: auto !important; z-index: auto !important; display: flex !important; height: 100% !important; align-items: stretch !important; justify-content: flex-end !important; }
+.settings-embedded-inner { position: static !important; width: 100% !important; height: 100% !important; max-height: 100% !important; border-radius: 0 !important; box-shadow: none !important; overflow-y: auto !important; }
+.settings-embedded-inner .settings-header { display: none; }
+.settings-embedded-inner .settings-close { display: none; }
 .settings-overlay {
   position: fixed;
   inset: 0;
@@ -870,5 +935,28 @@ const modelNames = computed(() => Object.keys(settings.models || {}))
   gap: 0.8rem;
   padding: 1rem 1.5rem;
   border-top: 0.5px solid var(--border);
+}
+
+.settings-overlay-embedded {
+    position: static !important;
+    background: transparent !important;
+    inset: auto !important;
+    z-index: auto !important;
+    display: flex !important;
+    height: 100% !important;
+    pointer-events: auto !important;
+}
+.settings-panel-embedded {
+    position: static !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow-y: auto !important;
+}
+.settings-panel-embedded .settings-header,
+.settings-panel-embedded .settings-close {
+    display: none;
 }
 </style>

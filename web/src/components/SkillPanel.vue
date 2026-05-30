@@ -2,7 +2,7 @@
 import { ref, onMounted, watch } from 'vue'
 import { getSkills, deleteSkill, getMcpStatus, type SkillInfo, type McpConnectedServer, type McpConfiguredServer } from '../api'
 
-const props = defineProps<{ visible: boolean, username?: string, workspace?: string }>()
+const props = defineProps<{ visible?: boolean, username?: string, workspace?: string, embedded?: boolean }>()
 const emit = defineEmits(['close', 'use'])
 const skills = ref<SkillInfo[]>([])
 const mcpEnabled = ref(false)
@@ -62,9 +62,9 @@ async function onDelete(name: string, tier: string) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="skill-overlay" @click="emit('close')">
-      <div class="skill-panel" @click.stop>
+<Teleport to="body" :disabled="!!embedded">
+    <div v-if="visible || embedded" :class="[embedded ? 'skill-overlay-embedded' : 'skill-overlay']" @click="embedded ? null : emit('close')">
+      <div :class="[embedded ? 'skill-panel-embedded' : 'skill-panel']" @click.stop>
         <div class="skill-header">
           <h3 class="skill-title">工具</h3>
           <button class="skill-close" @click="emit('close')">✕</button>
@@ -124,6 +124,7 @@ async function onDelete(name: string, tier: string) {
       </div>
     </div>
   </Teleport>
+
 </template>
 
 <style scoped>
@@ -200,6 +201,10 @@ async function onDelete(name: string, tier: string) {
   overflow-y: auto;
   padding: 0.5rem 0;
 }
+.skill-embedded-wrap { position: static !important; background: transparent !important; inset: auto !important; z-index: auto !important; display: flex !important; height: 100% !important; align-items: stretch !important; justify-content: flex-end !important; }
+.skill-embedded-inner { position: static !important; width: 100% !important; height: 100% !important; max-height: 100% !important; border-radius: 0 !important; box-shadow: none !important; }
+.skill-embedded-inner .skill-header { display: none; }
+.skill-embedded-inner .skill-close { display: none; }
 .skill-empty {
   padding: 2rem;
   text-align: center;
@@ -335,5 +340,48 @@ async function onDelete(name: string, tier: string) {
   color: var(--fg-dim);
   display: block;
   margin-top: 0.1rem;
+}
+.skill-embedded-wrap {
+  position: static !important;
+  background: transparent !important;
+  inset: auto !important;
+  z-index: auto !important;
+  display: flex !important;
+  height: 100% !important;
+  align-items: stretch !important;
+  justify-content: flex-end !important;
+}
+.skill-embedded-inner {
+  position: static !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+.skill-embedded-inner .skill-header { display: none; }
+.skill-embedded-inner .skill-close { display: none; }
+
+.skill-overlay-embedded {
+    position: static !important;
+    background: transparent !important;
+    inset: auto !important;
+    z-index: auto !important;
+    display: flex !important;
+    height: 100% !important;
+    pointer-events: auto !important;
+}
+.skill-panel-embedded {
+    position: static !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    overflow-y: auto !important;
+}
+.skill-panel-embedded .skill-header,
+.skill-panel-embedded .skill-close {
+    display: none;
 }
 </style>

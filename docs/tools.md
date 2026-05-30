@@ -99,7 +99,7 @@
 |------|------|
 | `run_workflow(tasks)` | 提交 DAG 工作流并执行。tasks 为任务数组，支持 `depends_on` / `condition` / `max_retry` |
 | `workflow_status()` | 查看当前工作流的各节点状态和结果摘要 |
-| `load_workflow(name, params?)` | 加载预定义 YAML 工作流模板，替换 `{param}` 占位符 |
+| `load_workflow(name)` | 加载预定义 YAML 工作流模板 |
 
 ## 关键机制
 
@@ -116,6 +116,7 @@
 - **网络抓取**：`web_fetch`
 - **技能查询**：`list_skills`、`load_skill`
 - **记忆/历史检索**：`recall`、`search_history`
+- **技能删除**：`delete_skill`
 
 LLM 一次返回的多个工具调用会先按类型分组（并行组 / 串行组），再逐组执行：并行组内的工具并发运行，串行组的工具逐一顺序执行。并行线程中通过 `copy_context()` 保持 `contextvars` 上下文（如 `team_caller` 身份）。
 

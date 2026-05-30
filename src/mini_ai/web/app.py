@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routes import chat, models, skills, config, commands, workspaces, files
+from .routes import chat, models, skills, config, commands, workspaces, files, team
 from .deps import init_components, shutdown_mcp
 
 @asynccontextmanager
@@ -32,6 +32,7 @@ def create_app() -> FastAPI:
     app.include_router(config.router, prefix="/api")
     app.include_router(workspaces.router, prefix="/api")
     app.include_router(files.router, prefix="/api")
+    app.include_router(team.router, prefix="/api")
 
     dist_dir = Path(__file__).parent.parent.parent.parent / "web" / "dist"
     if dist_dir.exists():

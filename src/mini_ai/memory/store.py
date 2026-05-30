@@ -117,7 +117,14 @@ class MemoryStore:
 
     # ── 长期层 ──
     def _read_file(self, path: Path) -> str:
-        return path.read_text(encoding="utf-8") if path.exists() else ""
+        if not path.exists():
+            return ""
+        try:
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as e:
+            from .logger import logger
+            logger.warning(f"[MemoryStore] 读取 {path} 失败: {e}")
+            return ""
 
     def read_memory(self) -> str:
         texts = [self._read_file(p / "MEMORY.md") for p in self._tier_paths()]
@@ -130,6 +137,12 @@ class MemoryStore:
 
     def write_memory(self, content: str) -> None:
         with self._lock:
+            if self.memory_file.exists():
+                try:
+                    import shutil
+                    shutil.copy2(self.memory_file, self.memory_file.with_suffix(".md.bak"))
+                except OSError:
+                    pass
             self.memory_file.write_text(content.strip() + "\n", encoding="utf-8")
 
     def write_memory_at(self, content: str, level: str) -> None:
@@ -152,6 +165,12 @@ class MemoryStore:
 
     def write_user(self, content: str) -> None:
         with self._lock:
+            if self.user_file.exists():
+                try:
+                    import shutil
+                    shutil.copy2(self.user_file, self.user_file.with_suffix(".md.bak"))
+                except OSError:
+                    pass
             self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
 
     def write_user_at(self, content: str, level: str) -> None:

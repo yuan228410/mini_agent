@@ -289,14 +289,15 @@ coder 内部：
 
 ### 特点
 
-- **持久队友**：spawn 后持续运行，空闲超时（`idle_timeout`）自动退出
+- **持久队友**：spawn 后持续运行，空闲超时（`idle_timeout` 默认 300 秒）自动退出，设为 0 永不退出
+- **max_history（默认20）**：队友任务完成后保留的最近消息数，0 则仅保留 system prompt，用于多轮交互时保持上下文
 - **P2P 通信**：队友可通过 `send_message` 直接互通，`list_teammates` 发现彼此
-- **共享黑板**：线程安全的 KV 存储，可选持久化到文件，重启不丢失
+- **共享黑板**：线程安全的 KV 存储，可选持久化到文件，重启不丢失，500 条上限自动淘汰最旧条目
 - **Event 唤醒**：`threading.Event` 精确唤醒，有消息 0ms 响应
-- **工具白名单**：队友可使用 `run_command`、`web_fetch`、`load_skill`、`send_message`、`list_teammates`、`blackboard_read/write/list`
+- **工具白名单**：队友可使用 `run_command`、`web_fetch`、`load_skill`、`read_file`、`write_file`、`edit_file`、`search_files`、`list_dir`、`send_message`、`list_teammates`、`blackboard_read/write/list`、`dispatch_subagent`
 - **上下文安全阀**：队友 `prompt_tokens > context_length × 88%` 自动终止并回禀
 - **inbox 容量限制**：单个 inbox 上限 100KB，防止无限膨胀
-- **上下文重置**：每轮任务完成后清空消息历史，防止无限增长
+- **上下文重置**：每轮任务完成后按 `max_history` 保留最近消息，防止无限增长
 
 ---
 
@@ -318,9 +319,27 @@ DAG 工作流让你定义有依赖关系的多步任务，系统自动编排：�
   ])
 ```
 
-`{research}` 和 `{design}` 会被自动替换为前置任务的返回结果。`agent` 支持两种格式：
+`{research}` 和 `{design}` 会被自动替换为前置任务的返回结果。`agent` 支持以下格式：
 - `subagent:xxx` — 使用子代理（一次性）
-- 队友名字 — 使用已 spawn 的队友（持久）
+- 队友名字 — 使用已 spawn 的队友（持久），Orchestrator 自动通过 inbox 派发并等待结果
+- 其他名称 — 队友不存在时自动创建一次性 agent 执行
+
+### 单任务超时
+
+每个任务可单独设置超时时间，防止个别任务卡死拖慢整个流程：
+
+```
+→ run_workflow(tasks=[
+    {"id": "fetch", "agent": "subagent:researcher", "prompt": "从慢速 API 获取数据",
+     "timeout": 120},   # 这个任务最长等 120 秒
+    {"id": "process", "agent": "subagent:coder", "prompt": "处理: {fetch}",
+     "depends_on": ["fetch"]},  # 使用全局默认超时（600 秒）
+  ])
+```
+
+- 全局默认值：`teammate.task_timeout: 600`（10 分钟）
+- 任务级 `timeout` 字段覆盖全局默认值
+- 超时后任务标记为 failed，不阻塞后续任务判断
 
 ### 并行 + 合并
 
@@ -422,9 +441,11 @@ tasks:
 | 维度 | dispatch_subagent | spawn_teammate |
 |------|-------------------|----------------|
 | 生命周期 | 一次性，完即销毁 | 持久，可多轮交互 |
-| 通信 | 无，只返回最终结果 | 双向 inbox 通信 |
+| 通信 | 无，只返回最终结果 | 双向 inbox + 黑板 |
 | 并行 | ✅ 自动并行 | ✅ 自动并行 |
-| 上下文 | 隔离，不保留 | 隔离，每轮重置 |
+| 上下文 | 隔离，不保留 | 保留最近 N 轮历史 |
+| 文件操作 | 取决于工具白名单 | ✅（read/write/edit/search） |
+| 子代理派遣 | ❌ | ✅（dispatch_subagent） |
 | 适用场景 | 并行搜索、独立分析 | 编码+审查接力、多角色协作 |
 
 > 一次性 = subagent，持久角色 = teammate

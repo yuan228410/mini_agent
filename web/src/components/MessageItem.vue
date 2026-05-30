@@ -18,6 +18,8 @@ const props = defineProps<{
     tools?: { name: string; args: string; result: string; elapsed: number }[]
     streaming?: boolean
     timestamp?: string
+    teammate?: string
+    teammateColor?: string
   }
 }>()
 
@@ -38,7 +40,17 @@ const renderedContent = computed(() => {
 })
 
 const isUser = computed(() => props.message.role === 'user')
-const label = computed(() => props.message.role === 'user' ? 'You' : 'mini_ai')
+const isTeammate = computed(() => !!props.message.teammate)
+const label = computed(() => {
+  if (props.message.role === 'user') return 'You'
+  if (props.message.teammate) {
+    const tm = props.message.teammate
+    if (tm.startsWith('sub:')) return `📦 ${tm.slice(4)}`
+    if (tm.startsWith('wf:')) return `🔀 ${tm.slice(3)}`
+    return `🤖 ${tm}`
+  }
+  return 'mini_ai'
+})
 const timeLabel = computed(() => {
   const ts = props.message.timestamp
   if (!ts) return ''
@@ -47,9 +59,15 @@ const timeLabel = computed(() => {
 </script>
 
 <template>
-  <div class="message" :class="{ 'message--user': isUser, 'message--assistant': !isUser }">
+  <div class="message" :class="{
+      'message--user': isUser,
+      'message--assistant': !isUser,
+      'message--teammate': isTeammate,
+    }"
+    :style="isTeammate ? { borderLeftColor: message.teammateColor || '#888' } : {}"
+  >
     <div class="message-row">
-      <span class="message-label">{{ label }}</span>
+      <span class="message-label" :style="isTeammate ? { color: message.teammateColor || '#888' } : {}">{{ label }}</span>
       <span v-if="timeLabel" class="message-time">{{ timeLabel }}</span>
     </div>
     <ThinkingBlock v-if="message.thinking" :thinking="message.thinking" />
@@ -83,6 +101,11 @@ const timeLabel = computed(() => {
 .message--assistant .message-row {
   color: #5b8a5e;
   font-weight: 500;
+}
+
+.message--teammate {
+  border-left: 3px solid #888;
+  padding-left: 0.5rem;
 }
 
 .message--user .message-time {

@@ -19,6 +19,7 @@ class TaskNode:
     error: str | None = None
     retry_count: int = 0
     max_retry: int = 1
+    timeout: int = 0  # 单任务超时秒数，0 表示使用默认 600s
 
 
 class TaskGraph:
@@ -73,7 +74,7 @@ class TaskGraph:
                     raise ValueError(f"禁止访问私有属性: {node.attr}")
                 val = _resolve(node.value)
                 if isinstance(val, dict):
-                    return val.get(node.attr, "")
+                    return val.get(node.attr, "")  # TODO: 若开放外部 DAG 模板，需加白名单限制属性访问
                 if isinstance(val, str):
                     return getattr(val, node.attr, "")
                 raise ValueError(f"不支持对 {type(val).__name__} 的属性访问")

@@ -22,6 +22,7 @@ _WEB_COMMANDS = [
     {"name": "/workspace remove", "desc": "移除工作空间（保留数据）", "has_arg": True, "arg_name": "名称"},
     {"name": "/workspace delete", "desc": "删除工作空间（含数据）", "has_arg": True, "arg_name": "名称"},
  {"name": "/mcp", "desc": "查看 MCP 服务器状态", "has_arg": False},
+    {"name": "/prompt", "desc": "预览系统提示词", "has_arg": False},
 ]
 
 @router.get("/commands")

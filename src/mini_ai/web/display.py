@@ -6,6 +6,7 @@ class WebDisplay:
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
         self.queue = queue
         self.loop = loop
+        self._teammate = ""
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
         self._tool_start_time = 0.0
@@ -15,6 +16,9 @@ class WebDisplay:
         self._streaming = False
         self.thinking_mode = "collapsed"
         self.tool_detail = "summary"
+
+    def set_teammate(self, name: str):
+        self._teammate = name
 
     def _push(self, event: str, data: dict | None = None):
         from mini_ai.llm import get_usage
@@ -30,11 +34,17 @@ class WebDisplay:
     def thinking_start(self):
         self._thinking_buf = ""
         self._thinking_start_time = time.monotonic()
-        self._push("thinking_start")
+        data: dict = {}
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("thinking_start", data)
 
     def thinking_chunk(self, text: str):
         self._thinking_buf += text
-        self._push("thinking", {"content": text})
+        data = {"content": text}
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("thinking", data)
 
     def thinking_end(self):
         elapsed = time.monotonic() - self._thinking_start_time
@@ -42,38 +52,63 @@ class WebDisplay:
         if self._thinking_buf:
             self._last_thinking = self._thinking_buf
         self._had_thinking = True
-        self._push("thinking_end", {"chars": n_chars, "elapsed": round(elapsed, 1)})
+        data = {"chars": n_chars, "elapsed": round(elapsed, 1)}
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("thinking_end", data)
         self._thinking_buf = ""
 
     def text_chunk(self, text: str):
         self._stream_buf += text
         self._streaming = True
-        self._push("text", {"content": text})
+        data = {"content": text}
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("text", data)
 
     def text_end(self, full_text: str | None = None):
         if full_text:
             self._stream_buf = ""
             self._streaming = True
-            self._push("text", {"content": full_text})
+            data = {"content": full_text}
+            if self._teammate:
+                data["teammate"] = self._teammate
+            self._push("text", data)
         self._stream_buf = ""
         self._streaming = False
         self._had_thinking = False
 
     def tool_call_start(self, name: str, args_summary: str, tool_call_id: str = ""):
         self._tool_start_time = time.monotonic()
-        self._push("tool_start", {"name": name, "args": args_summary, "tool_call_id": tool_call_id})
+        data = {"name": name, "args": args_summary, "tool_call_id": tool_call_id}
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("tool_start", data)
 
     def tool_result(self, name: str, result: str, elapsed: float | None = None, tool_call_id: str = ""):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
         if result.startswith("📋TODO\n"):
             self._push("todos", {"content": result[6:]})
-            self._push("tool_result", {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id})
+            rdata = {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id}
+            if self._teammate: rdata["teammate"] = self._teammate
+            self._push("tool_result", rdata)
             return
-        self._push("tool_result", {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id})
+        rdata = {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id}
+        if self._teammate: rdata["teammate"] = self._teammate
+        self._push("tool_result", rdata)
 
     def assistant_prefix(self):
         pass
+
+    def teammate_status(self, name: str, status: str):
+        self._push("teammate_status", {"name": name, "status": status})
+
+    def blackboard_update(self, key: str, author: str):
+        self._push("blackboard_update", {"key": key, "author": author})
+
+    def inbox_message(self, to: str, from_user: str, count: int):
+        self._push("inbox_message", {"to": to, "from": from_user, "count": count})
 
     def info(self, text: str):
         pass

@@ -184,7 +184,7 @@ async function batchDelete() {
   if (selectedSessions.value.size === 0) return
   if (!confirm(`确定删除选中的 ${selectedSessions.value.size} 个会话？`)) return
   const ids = Array.from(selectedSessions.value)
-  await batchDeleteSessions(ids, activeWorkspace.value || undefined)
+  await batchDeleteSessions(ids, batchTargetWs.value || undefined)
   selectedSessions.value = new Set()
   batchMode.value = false
   batchTargetWs.value = "default"
@@ -192,8 +192,9 @@ async function batchDelete() {
 }
 
 async function doDelete(sid: string) {
+  const ws = contextMenu.value?.ws || activeWorkspace.value
   contextMenu.value = null
-  await deleteSession(sid, activeWorkspace.value || undefined)
+  await deleteSession(sid, ws || undefined)
   await loadAllSessions()
   if (activeSessionId.value === sid) {
     const all = getAllSessions()

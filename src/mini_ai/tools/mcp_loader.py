@@ -154,15 +154,21 @@ class MCPLoader:
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         self._started.wait(timeout=30)
-        if not self._loop:
-            logger.warning("[MCP] 后台 event loop 启动失败")
+        if not self._loop or not self._thread.is_alive():
+            logger.warning("[MCP] 后台 event loop 启动失败或线程异常退出")
             return []
         future = asyncio.run_coroutine_threadsafe(self._start_all(), self._loop)
         try:
             future.result(timeout=60)
+        except TimeoutError:
+            logger.warning("[MCP] 初始化超时 (60s)")
+            return self._tool_modules
+        except (OSError, ConnectionError) as e:
+            logger.warning(f"[MCP] 连接异常: {e}")
+            return self._tool_modules
         except Exception as e:
             logger.warning(f"[MCP] 初始化失败: {e}")
-        return self._tool_modules
+            return self._tool_modules
 
     def stop_sync(self):
         if not self._loop:
@@ -187,6 +193,8 @@ class MCPLoader:
         except asyncio.TimeoutError:
             future.cancel()
             return f"[MCP 错误] 工具调用超时 ({timeout}s)"
+        except (OSError, ConnectionError) as e:
+            return f"[MCP 错误] 连接失败: {e}"
         except Exception as e:
             return f"[MCP 错误] 调用失败: {e}"
 
@@ -226,8 +234,8 @@ class MCPLoader:
     def _run_loop(self):
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._started.set()
         try:
+            self._started.set()
             self._loop.run_forever()
         finally:
             self._loop.close()

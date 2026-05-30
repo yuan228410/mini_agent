@@ -14,6 +14,8 @@ from ...llm import get_usage, reset_usage, chat as llm_chat
 from ...runner import run_tool_loop
 from ...tools import get_definitions, register_memory_tools, register_history_tools, register
 from ...logger import logger
+from ...tools import register_team, register_blackboard
+from ...config import PACKAGE_DIR
 from ..display import WebDisplay
 
 router = APIRouter()
@@ -31,6 +33,7 @@ def _cache_key(username: str, workspace: str | None, sid: str) -> str:
 # 扁平结构，统一 key 格式
 _SESSIONS: dict[str, list[dict]] = {}
 _SESSION_MODELS: dict[str, str] = {}
+_SESSION_ACCESS: dict[str, float] = {}  # key → last access timestamp
 _LAST_USAGE: dict[str, dict] = {}
 _SESSION_LOCKS: dict[str, threading.Lock] = {}
 _SESSION_STATUS: dict[str, str] = {}
@@ -38,6 +41,27 @@ _SESSION_ABORTS: dict[str, threading.Event] = {}
 _META_CACHE: dict[str, dict] = {}
 _SESSION_COMPONENTS: dict[str, dict] = {}
 _SESSION_PLAN_MODE: dict[str, bool] = {}
+_TEAM_COMPONENTS: dict[str, dict] = {}
+
+_MAX_CACHED_SESSIONS = 50
+
+def _touch_session(cache_key: str):
+    """记录会话访问时间，超限时淘汰最久未活跃的"""
+    _SESSION_ACCESS[cache_key] = time.monotonic()
+    if len(_SESSION_ACCESS) > _MAX_CACHED_SESSIONS:
+        oldest = sorted(_SESSION_ACCESS, key=_SESSION_ACCESS.get)[:len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5]
+        for k in oldest:
+            _SESSIONS.pop(k, None)
+            _SESSION_COMPONENTS.pop(k, None)
+            _META_CACHE.pop(k, None)
+            _SESSION_STATUS.pop(k, None)
+            _SESSION_MODELS.pop(k, None)
+            _SESSION_LOCKS.pop(k, None)
+            _SESSION_ACCESS.pop(k, None)
+        logger.debug(f"[Web] 淘汰 {len(oldest)} 个非活跃会话缓存")
+
+def _ws_key(username: str, workspace: str | None) -> str:
+    return f"{username}:{workspace or 'default'}"
 # 注意：_SESSION_WORKSPACE 已删除，workspace 已编码在 key 中
 
 
@@ -97,14 +121,31 @@ def _get_session_lock(username: str, workspace: str | None, sid: str) -> threadi
         return _SESSION_LOCKS[key]
 
 
+_WEB_LEAD_TOOLS: list[dict] | None = None
+
 def _lead_tool_defs() -> list[dict]:
-    return [d for d in get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
+    global _WEB_LEAD_TOOLS
+    if _WEB_LEAD_TOOLS is None:
+        _WEB_LEAD_TOOLS = [d for d in get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
+    return _WEB_LEAD_TOOLS
+
+def _invalidate_lead_tools():
+    """工具注册变更时清空缓存（如 MCP 加载、子代理注册）"""
+    global _WEB_LEAD_TOOLS
+    _WEB_LEAD_TOOLS = None
 
 def _get_or_create_components(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> dict:
     cache_key = _cache_key(username, workspace, sid)
     with _sessions_lock:
         if cache_key in _SESSION_COMPONENTS:
-            return _SESSION_COMPONENTS[cache_key]
+            comp = _SESSION_COMPONENTS[cache_key]
+            wk = _ws_key(username, workspace)
+            team_comp = _TEAM_COMPONENTS.get(wk, {})
+            if team_comp and not comp.get("bus"):
+                comp["bus"] = team_comp.get("bus")
+                comp["team_mgr"] = team_comp.get("team_mgr")
+                comp["blackboard"] = team_comp.get("blackboard")
+            return comp
 
     from ...memory import MemoryStore, Compactor
     from ...memory.history_db import HistoryDB
@@ -169,6 +210,19 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         "project_path": project_path,
         "skill_loader": skill_loader,
     }
+    wk = _ws_key(username, workspace)
+    with _sessions_lock:
+        if wk not in _TEAM_COMPONENTS and ws_dir:
+            from ...team import MessageBus, TeammateManager, Blackboard
+            team_dir = ws_dir / ".team"
+            bus = MessageBus(team_dir / "inbox")
+            team_mgr = TeammateManager(team_dir=team_dir, bus=bus, project_dir=ws_dir)
+            bb = Blackboard(persist_path=team_dir / "blackboard.json")
+            _TEAM_COMPONENTS[wk] = {"bus": bus, "team_mgr": team_mgr, "blackboard": bb}
+    team_comp = _TEAM_COMPONENTS.get(wk, {})
+    components["bus"] = team_comp.get("bus")
+    components["team_mgr"] = team_comp.get("team_mgr")
+    components["blackboard"] = team_comp.get("blackboard")
     with _sessions_lock:
         if cache_key in _SESSION_COMPONENTS:
             history_db.close()
@@ -345,16 +399,19 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             return sid, None
 
         # 全新会话
-        logger.info(f"[session] 创建新会话 sid={sid} ws={workspace}")
+        import traceback
+        caller = ''.join(traceback.format_stack()[-5:-1])
+        logger.info(f"[session] 自动创建新会话 sid={sid} ws={workspace} caller=\n{caller}")
         prompt = _build_system_prompt(username, sid, base, workspace)
         _SESSIONS[cache_key] = [{"role": "system", "content": prompt, "name": "新会话", "timestamp": _now()}]
         _update_meta_cache(username, sid, workspace, _SESSIONS[cache_key])
     logger.debug(f"[perf] _get_or_create_session sid={sid} ws={workspace} create={create} time={time.time()-_t0:.3f}s")
+    _touch_session(cache_key)
     return sid, _SESSIONS[cache_key]
 
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
-                         messages: list[dict], tools: list[dict],
+                         messages: list[dict], tools: list[dict] | None = None,
                          max_turns: int = 0, abort_event=None,
                          model_name=None, session_lock=None,
                          session_key: str = "",
@@ -373,11 +430,24 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         register_memory_tools(comp["store"])
         register_history_tools(comp["history_db"])
         register(comp["skill_loader"])
+        if comp.get("project_path"):
+            from ...tools import set_project_path
+            set_project_path(comp["project_path"])
+        if comp.get("bus") and comp.get("team_mgr"):
+            register_team(comp["bus"], comp["team_mgr"])
+        if comp.get("blackboard"):
+            workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
+            register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
+
+        if tools is None:
+            tools = _lead_tool_defs()
 
         if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
             messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 
         disp = WebDisplay(queue, loop)
+        if comp.get("team_mgr"):
+            comp["team_mgr"].set_display(disp)
         plan_mode = _SESSION_PLAN_MODE.get(session_key, False)
         if plan_mode:
             tools = []
@@ -421,16 +491,72 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             max_turns=max_turns,
             ctx=ctx,
             persist_fn=_persist,
+            bus=comp.get("bus"),
         )
+        _touch_session(session_key)
         logger.debug(f"[Web] run_tool_loop done key={session_key} msg={'yes' if msg else 'None'} content={len(msg.get('content') or '') if msg else 0}")
-        tool_results_map = {m.get("name", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
+
+        # ── 兜底：run_tool_loop 结束后等待仍在工作的队友 ──
+        # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只处理 loop 退出后到达的消息
+        bus = comp.get("bus")
+        team_mgr = comp.get("team_mgr")
+        if bus and team_mgr:
+            from ...config import TIMEOUTS
+
+            def _inject_inbox(inbox_msgs, label="兜底"):
+                from ...team.loop import format_inbox_messages
+                inbox_text = format_inbox_messages(inbox_msgs)
+                if not inbox_text:
+                    return False
+                messages.append({"role": "user", "content": inbox_text, "timestamp": _now()})
+                messages.append({"role": "user", "content": "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。", "timestamp": _now()})
+                comp["history_db"].append("user", inbox_text, session_id=comp_key)
+                logger.info(f"[Web-Team] {label}回禀注入，继续 run_tool_loop")
+                return True
+
+            lead_wait = TIMEOUTS.get("lead_wait", 300)
+            poll_interval = TIMEOUTS.get("lead_poll_interval", 5)
+            waited = 0
+            while waited < lead_wait:
+                if abort_event and abort_event.is_set():
+                    break
+                with team_mgr.lock:
+                    has_working = any(m.get("status") == "working" for m in team_mgr.config.get("members", []))
+                if not has_working:
+                    break
+                time.sleep(poll_interval)
+                waited += poll_interval
+                inbox = bus.read_inbox("lead")
+                if inbox and _inject_inbox(inbox):
+                    msg, _ = run_tool_loop(
+                        messages, tools,
+                        streaming=STREAMING, display=disp,
+                        inject_fn=_inject_todos, abort_event=abort_event,
+                        max_turns=max_turns, ctx=ctx, persist_fn=_persist,
+                        bus=bus,
+                    )
+                    logger.info("[Web-Team] 兜底回禀处理后 run_tool_loop done")
+                    waited = 0
+            final_inbox = bus.read_inbox("lead")
+            if final_inbox and _inject_inbox(final_inbox, label="最终"):
+                msg, _ = run_tool_loop(
+                    messages, tools,
+                    streaming=STREAMING, display=disp,
+                    inject_fn=_inject_todos, abort_event=abort_event,
+                    max_turns=max_turns, ctx=ctx, persist_fn=_persist,
+                    bus=bus,
+                )
+        else:
+            logger.debug(f"[Web-Team] 无 Team 组件，跳过回禀等待")
+
+        tool_results_map = {m.get("tool_call_id", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
         for am in _deferred_assistant:
             enriched_tcs = []
             for tc in am.get("tool_calls", []):
                 tc_copy = {k: v for k, v in tc.items()}
-                fn_name = tc.get("function", {}).get("name", "")
-                if fn_name and fn_name in tool_results_map:
-                    tc_copy["_result"] = tool_results_map[fn_name][:2000]
+                tc_id = tc.get("id", "")
+                if tc_id and tc_id in tool_results_map:
+                    tc_copy["_result"] = tool_results_map[tc_id][:2000]
                 enriched_tcs.append(tc_copy)
             am_meta = {}
             if am.get("thinking"):
@@ -476,6 +602,7 @@ async def create_session(body: dict):
     workspace = body.get("workspace") or "default"
     if not username:
         return {"error": "缺少 username"}
+    logger.info(f"[session] 用户主动创建会话 ws={workspace}")
     base = _resolve_base(username, workspace)
     sid = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
     cache_key = _cache_key(username, workspace, sid)
@@ -523,7 +650,7 @@ async def list_sessions(username: str = Query(...), workspace: str | None = Quer
         sessions.append(_build_meta(sid, _SESSIONS[cache_key], username, workspace))
         logger.info(f"[session] default 工作空间无会话，自动创建 sid={sid}")
     sessions.sort(key=lambda s: s.get("updated_at", "") or s.get("created_at", ""), reverse=True)
-    logger.info(f"[perf] list_sessions ws={workspace} count={len(sessions)} time={time.time()-_t0:.3f}s")
+    logger.debug(f"[perf] list_sessions ws={workspace} count={len(sessions)} time={time.time()-_t0:.3f}s")
     return {"sessions": sessions}
 
 
@@ -554,6 +681,17 @@ async def delete_session(body: dict):
         _SESSION_STATUS.pop(cache_key, None)
         _SESSION_MODELS.pop(cache_key, None)
         _SESSION_LOCKS.pop(cache_key, None)
+        _SESSION_ACCESS.pop(cache_key, None)
+    wk = _ws_key(username, ws)
+    remaining = sum(1 for k in _SESSIONS if k.startswith(f"{username}:{ws or 'default'}:") and k != cache_key)
+    if remaining == 0:
+        team_comp = _TEAM_COMPONENTS.get(wk)
+        if team_comp:
+            team_mgr = team_comp.get("team_mgr")
+            if team_mgr:
+                for m in team_mgr.config.get("members", []):
+                    if m.get("status") in ("idle", "working"):
+                        team_comp["bus"].send("lead", m["name"], "会话结束，请退出。", "shutdown_request")
     from ...tools.update_todos import cleanup_session
     cleanup_session(cache_key)
     session_dir = _resolve_base(username, ws) / session_id
@@ -589,6 +727,7 @@ async def batch_delete_sessions(body: dict):
         _SESSION_STATUS.pop(cache_key, None)
         _SESSION_MODELS.pop(cache_key, None)
         _SESSION_LOCKS.pop(cache_key, None)
+        _SESSION_ACCESS.pop(cache_key, None)
         from ...tools.update_todos import cleanup_session
         cleanup_session(cache_key)
         session_dir = base / sid
@@ -636,7 +775,7 @@ async def chat_ws_endpoint(ws: WebSocket):
             try:
                 await ws.send_json(data)
             except Exception as e:
-                pass
+                logger.warning(f'[Web] _send failed: {e}, event={data.get("event")}')
 
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None):
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name}")
@@ -659,7 +798,7 @@ async def chat_ws_endpoint(ws: WebSocket):
         from ...config import RUNNER
         max_turns_web = RUNNER.get("max_turns", 20)
         future = loop.run_in_executor(
-            None, _run_tool_loop_sync, queue, loop, messages, _lead_tool_defs(), max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name
+            None, _run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name
         )
 
         complete_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -674,11 +813,14 @@ async def chat_ws_endpoint(ws: WebSocket):
                     event["data"]["session_id"] = sid
                     if event["event"] == "complete" and "prompt_tokens" in event["data"]:
                         complete_usage = {"prompt_tokens": event["data"]["prompt_tokens"], "completion_tokens": event["data"].get("completion_tokens", 0)}
+                    if event["event"] in ("done", "aborted", "error", "complete"):
+                        logger.debug(f'[Web] terminal event from queue sid={sid} event={event["event"]}')
                     await _send(event)
                     if event["event"] in ("done", "aborted", "error", "complete"):
                         break
                 except asyncio.TimeoutError:
                     if future.done():
+                        logger.debug(f"[Web] future.done() timeout exit sid={sid}")
                         break
         except Exception as e:
             logger.error(f"[Web] WS chat task error: {e}", exc_info=True)
@@ -705,6 +847,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                 "event": "done",
                 "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
             })
+            logger.debug(f"[Web] done sent ok sid={sid}")
 
         _active_tasks.pop(session_key, None)
 
@@ -753,7 +896,15 @@ async def chat_ws_endpoint(ws: WebSocket):
                         continue
 
                     ws_name = data.get("workspace")
-                    sid, _ = _get_or_create_session(username, session_id, workspace=ws_name)
+                    if session_id:
+                        sid, _ = _get_or_create_session(username, session_id, workspace=ws_name, create=False)
+                        if _ is None:
+                            sid, _ = _get_or_create_session(username, session_id, workspace=ws_name)
+                    elif (ws_name or "default") == "default":
+                        sid, _ = _get_or_create_session(username, session_id, workspace=ws_name)
+                    else:
+                        await _send({"event": "error", "data": {"error": "非 default 工作空间请先新建会话"}})
+                        continue
                     task_key = _cache_key(username, ws_name, sid)
                     if task_key in _active_tasks:
                         await _send({"event": "error", "data": {"error": "该会话正在生成中", "session_id": sid}})

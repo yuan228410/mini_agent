@@ -395,6 +395,15 @@ export async function getConfig(sessionId?: string, workspace?: string): Promise
   return resp.json()
 }
 
+export async function getSystemPrompt(workspace?: string): Promise<{system_prompt: string, length: number}> {
+  const params = new URLSearchParams()
+  const u = _username()
+  if (u) params.set('username', u)
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _fetch(`/api/system-prompt?${params.toString()}`)
+  return resp.json()
+}
+
 export async function resetChat(sessionId?: string, workspace?: string): Promise<any> {
   const body: any = { ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
@@ -506,6 +515,7 @@ export interface SettingsResponse {
   web: Record<string, any>
   logging: Record<string, any>
   mcp: { enabled: boolean; servers?: Record<string, any> }
+  teammate: Record<string, any>
 }
 
 export async function getSettings(): Promise<SettingsResponse> {
@@ -636,4 +646,42 @@ export async function exportSession(sessionId: string, workspace?: string, limit
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
+}
+
+export async function getTeamStatus(username: string, workspace: string): Promise<any> {
+  const params = new URLSearchParams()
+  params.set('username', username)
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _origFetch(`/api/team/status?${params.toString()}`)
+  if (!resp.ok) throw new Error('获取 Team 状态失败')
+  return resp.json()
+}
+
+export async function getBlackboard(username: string, workspace: string): Promise<any> {
+  const params = new URLSearchParams()
+  params.set('username', username)
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _origFetch(`/api/team/blackboard?${params.toString()}`)
+  if (!resp.ok) throw new Error('获取黑板失败')
+  return resp.json()
+}
+
+export async function dismissTeammate(username: string, workspace: string, name: string): Promise<any> {
+  const resp = await _origFetch('/api/team/dismiss', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, workspace, name }),
+  })
+  if (!resp.ok) throw new Error('解散队友失败')
+  return resp.json()
+}
+
+export async function clearBlackboard(username: string, workspace: string): Promise<any> {
+  const resp = await _origFetch('/api/team/blackboard/clear', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, workspace }),
+  })
+  if (!resp.ok) throw new Error('清空黑板失败')
+  return resp.json()
 }

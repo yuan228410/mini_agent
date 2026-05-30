@@ -18,6 +18,7 @@ class HistoryDB:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.workspace = workspace
         self._lock = threading.Lock()
+        self._fts_available = True
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
@@ -43,11 +44,22 @@ class HistoryDB:
                     "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=id)"
                 )
             except sqlite3.OperationalError:
+                self._fts_available = False
+                logger.warning("[HistoryDB] FTS5 不可用，全文搜索将退化为模糊匹配")
                 pass
+
+    def _ensure_conn(self):
+        try:
+            self._conn.execute("SELECT 1")
+        except Exception:
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._init_schema()
 
     def append(self, role: str, content: str, session_id: str = "", metadata: str = ""):
         ts = datetime.now(_UTC8).isoformat()
         with self._lock:
+            self._ensure_conn()
             with self._conn:
                 cur = self._conn.execute(
                     "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
@@ -59,6 +71,9 @@ class HistoryDB:
                         (cur.lastrowid, content),
                     )
                 except sqlite3.OperationalError:
+                    if self._fts_available:
+                        self._fts_available = False
+                        logger.warning("[HistoryDB] FTS5 写入失败，后续搜索将退化为模糊匹配")
                     pass
 
 
@@ -66,6 +81,7 @@ class HistoryDB:
     def purge(self):
         """彻底删除所有历史消息（不可恢复）"""
         with self._lock:
+            self._ensure_conn()
             with self._conn:
                 self._conn.execute(
                     "DELETE FROM messages WHERE workspace=?",
@@ -80,6 +96,7 @@ class HistoryDB:
             return 0
         placeholders = ",".join("?" * len(ids))
         with self._lock:
+            self._ensure_conn()
             with self._conn:
                 cur = self._conn.execute(
                     f"DELETE FROM messages WHERE workspace=? AND id IN ({placeholders})",
@@ -95,6 +112,7 @@ class HistoryDB:
     def update_session_name(self, session_id: str, name: str):
         """更新指定会话的 system 消息 metadata 中的 name"""
         with self._lock:
+            self._ensure_conn()
             with self._conn:
                 row = self._conn.execute(
                     "SELECT id, metadata FROM messages WHERE workspace=? AND session_id=? AND role='system' ORDER BY id LIMIT 1",
@@ -115,6 +133,7 @@ class HistoryDB:
     def delete_by_session(self, session_id: str) -> int:
         """删除指定会话的所有消息"""
         with self._lock:
+            self._ensure_conn()
             with self._conn:
                 try:
                     self._conn.execute(
@@ -134,18 +153,23 @@ class HistoryDB:
         """保留最近 N 条消息，删除其余"""
         if keep_count <= 0:
             with self._lock:
+                self._ensure_conn()
                 with self._conn:
                     cur = self._conn.execute(
                         "DELETE FROM messages WHERE workspace=?",
                         (self.workspace,),
                     )
                     try:
-                        self._conn.execute("DELETE FROM messages_fts")
+                        self._conn.execute(
+                            "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=?)",
+                            (self.workspace,),
+                        )
                     except Exception:
                         pass
             logger.info(f"[HistoryDB] 删除所有消息: {cur.rowcount} 条")
             return cur.rowcount
         with self._lock:
+            self._ensure_conn()
             with self._conn:
                 row = self._conn.execute(
                     "SELECT id FROM messages WHERE workspace=? ORDER BY id DESC LIMIT 1 OFFSET ?",
@@ -168,6 +192,7 @@ class HistoryDB:
     def list_for_review(self, limit: int = 100) -> list[dict]:
         """列出消息供审核（含 id），用于选择性删除"""
         with self._lock:
+            self._ensure_conn()
             rows = self._conn.execute(
                 "SELECT id, role, content, ts FROM messages WHERE workspace=? ORDER BY id",
                 (self.workspace,),
@@ -196,6 +221,7 @@ class HistoryDB:
             params.append(f"%{keyword}%")
 
         with self._lock:
+            self._ensure_conn()
             rows = self._conn.execute(
                 f"SELECT id, ts, role, content FROM messages "
                 f"WHERE {' AND '.join(conditions)} "
@@ -207,6 +233,7 @@ class HistoryDB:
 
     def load_all(self, session_id: str = "", limit: int = 0) -> list[dict]:
         with self._lock:
+            self._ensure_conn()
             if session_id:
                 if limit > 0:
                     rows = self._conn.execute(
@@ -235,7 +262,10 @@ class HistoryDB:
             if metadata:
                 try:
                     extra = json.loads(metadata)
-                    msg.update(extra)
+                    # 只合并非核心字段，防止 metadata 中的 role/content 覆盖真实值
+                    for k, v in extra.items():
+                        if k not in ("role", "content"):
+                            msg[k] = v
                 except json.JSONDecodeError:
                     pass
             results.append(msg)
@@ -243,6 +273,7 @@ class HistoryDB:
 
     def count(self) -> int:
         with self._lock:
+            self._ensure_conn()
             row = self._conn.execute(
                 "SELECT COUNT(*) FROM messages WHERE workspace=?",
                 (self.workspace,),

@@ -56,12 +56,15 @@ definition = {
 
 
 def _rebuild_dispatch_definition():
-    """通知 dispatch_subagent 重建带新列表的工具定义"""
+    """通知 dispatch_subagent 重建带新列表的工具定义，并同步 ToolRegistry 缓存"""
     from ..tools import dispatch_subagent as dsa
     subagent_list = _loader.list_specs()
     new_def = dsa.build_definition(subagent_list)
     dsa._definition = new_def
     dsa.definition = new_def
+    # 同步更新 ToolRegistry 中的缓存定义
+    from ..tools import _registry
+    _registry._by_name["dispatch_subagent"] = dsa
     logger.info(f"[注册子代理] 已刷新 dispatch_subagent 工具定义")
 
 

@@ -14,6 +14,10 @@ Team 系统让 lead 组建一支 Agent 团队，持久队友在后台独立运�
 | `list_teammates()` | lead + teammates | 查看队友状态 |
 | `dismiss_team()` | lead | 解散全部队友 |
 | `read_inbox()` | teammates（自动） | 读取邮箱（teammate 内部自动调用） |
+| `blackboard_write(key, value)` | lead + teammates | 写入共享黑板 |
+| `blackboard_read(key)` | lead + teammates | 读取共享黑板 |
+| `blackboard_list(prefix?)` | lead + teammates | 列出黑板 key |
+| `dispatch_subagent(type, task, inputs?)` | lead + teammates | 派遣一次性子代理 |
 
 ## 队友生命周期
 
@@ -102,10 +106,17 @@ teammate:
   max_teammates: 10        # 最大队友数
   max_turns: 20            # 每个队友每轮最大 LLM 调用次数
   idle_timeout: 300        # 空闲超时（秒），0 表示不超时
-  base_tools:              # 基础工具白名单
+  max_history: 20          # 任务完成后保留的最近消息数，多轮交互时保持上下文
+  task_timeout: 600        # DAG 工作流单任务超时（秒），可在任务节点中覆盖
+  base_tools:              # 基础工具白名单（通信/黑板/dispatch_subagent 自动附加）
     - run_command
     - web_fetch
     - load_skill
+    - read_file
+    - write_file
+    - edit_file
+    - search_files
+    - list_dir
 ```
 
 ## Team vs Subagent vs Workflow 选型

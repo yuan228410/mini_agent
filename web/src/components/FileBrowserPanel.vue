@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, nextTick, watch } from 'vue'
+import { ref, nextTick, watch, onMounted } from 'vue'
 import hljs from 'highlight.js'
 
 interface FileItem {
@@ -15,7 +15,7 @@ interface Breadcrumb {
   path: string
 }
 
-const props = defineProps<{ visible: boolean; workspace: string }>()
+const props = defineProps<{ visible?: boolean, embedded?: boolean; workspace: string }>()
 const emit = defineEmits(['close'])
 
 const items = ref<FileItem[]>([])
@@ -40,6 +40,14 @@ watch(() => props.visible, (v) => {
 
 watch(() => props.workspace, () => {
   loadDir('')
+})
+
+onMounted(() => {
+  if (props.embedded && props.workspace) loadDir('')
+})
+
+watch(() => props.embedded, (v) => {
+  if (v && props.workspace) loadDir('')
 })
 
 async function loadDir(path: string) {
@@ -180,9 +188,10 @@ function startResize(e: MouseEvent) {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="visible" class="fb-overlay" @click="emit('close')">
-      <div class="fb-panel" :style="{ width: panelWidth + 'px' }" @click.stop>
+<Teleport to="body" :disabled="!!embedded">
+    <div v-if="visible || embedded" :class="[embedded ? 'fb-overlay-embedded' : 'fb-overlay']" @click="embedded ? null : emit('close')">
+      <div :class="[embedded ? 'fb-embedded-inner' : 'fb-panel']" @click.stop :style="embedded ? {} : { width: panelWidth + 'px' }">
+
         <div class="fb-resize-handle" @mousedown.prevent="startResize"></div>
         <div class="fb-header">
           <h3 class="fb-title">文件</h3>
@@ -229,9 +238,11 @@ function startResize(e: MouseEvent) {
           <div v-if="previewLoading" class="fb-loading">加载中...</div>
           <div v-if="previewHasMore && !previewLoading" class="fb-loading">↓ 滚动加载更多</div>
         </div>
+      
       </div>
     </div>
   </Teleport>
+
 </template>
 
 <style scoped>
@@ -370,6 +381,7 @@ function startResize(e: MouseEvent) {
   flex-shrink: 0;
 }
 
+
 .fb-empty {
   padding: 2rem;
   text-align: center;
@@ -444,5 +456,56 @@ function startResize(e: MouseEvent) {
   padding: 0.5rem;
   font-size: 0.75rem;
   color: var(--fg-dim);
+}
+.fb-embedded .fb-resize-handle { display: none; }
+.fb-embedded-wrap {
+  position: static !important;
+  background: transparent !important;
+  inset: auto !important;
+  z-index: auto !important;
+  display: flex !important;
+  height: 100% !important;
+  align-items: stretch !important;
+  justify-content: flex-end !important;
+}
+.fb-embedded-inner {
+  position: static !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-height: 100% !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+.fb-embedded-inner .fb-resize-handle {
+  display: none;
+}
+
+.fb-overlay-embedded {
+    position: static !important;
+    background: transparent !important;
+    inset: auto !important;
+    z-index: auto !important;
+    display: flex !important;
+    flex-direction: column !important;
+    height: 100% !important;
+    pointer-events: auto !important;
+}
+.fb-panel-embedded {
+    position: static !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+}
+.fb-panel-embedded .fb-header,
+.fb-panel-embedded .fb-close {
+    display: none;
 }
 </style>

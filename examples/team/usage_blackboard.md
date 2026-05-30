@@ -60,6 +60,8 @@ reviewer 综合分析后写入: blackboard_write("final_report", "综合报告..
 - **可选持久化**：数据存储在 `~/.mini_ai/.team/blackboard.json`，重启不丢失
 - **作者追踪**：每次写入记录作者名，便于溯源
 - **命名空间**：用 prefix 约定组织 key，如 `research.xxx`、`code.xxx`
+- **自动淘汰**：达到 500 条上限时自动淘汰最旧条目，防止内存无限增长
+- **空值安全**：明确区分"key 不存在"和"值为空"，避免误读
 
 ## 注意事项
 

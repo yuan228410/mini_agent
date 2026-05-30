@@ -21,11 +21,11 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
     ws = workspace or None
     from .chat import _cache_key
     cache_key = _cache_key(username, ws, session_id)
-    _, messages = _get_or_create_session(username, session_id, workspace=ws)
+    _, messages = _get_or_create_session(username, session_id, workspace=ws, create=False)
     usage = _LAST_USAGE.get(cache_key, {"prompt_tokens": 0, "completion_tokens": 0})
     model_name = _SESSION_MODELS.get(cache_key)
     model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
-    logger.info(f"[perf] get_config sid={session_id} ws={workspace} time={time.time()-_t0:.3f}s")
+    logger.debug(f"[perf] get_config sid={session_id} ws={workspace} time={time.time()-_t0:.3f}s")
     return {
         "version": __version__,
         "model": model_cfg.get("model", "?"),
@@ -318,3 +318,22 @@ async def remove_mcp_server(name: str, username: str = ""):
         yaml.dump(_raw, f, default_flow_style=False, allow_unicode=True)
 
     return {"status": "ok", "removed": name}
+
+
+@router.get("/system-prompt")
+async def get_system_prompt(username: str = Query(...), workspace: str = Query(default="")):
+    """预览当前系统提示词"""
+    if not username:
+        return {"error": "缺少 username"}
+    from .chat import _get_or_create_components, _resolve_base
+    from ...context import ContextBuilder
+    from ...skills import SkillLoader
+    from ...config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
+    base = _resolve_base(username, workspace or None)
+    comp_key = "default"
+    comp = _get_or_create_components(username, comp_key, base, workspace or None)
+    ctx_builder = ContextBuilder(DATA_DIR)
+    _sl = SkillLoader(DATA_DIR / "skills", _SP)
+    project_path = str(base) if base else ""
+    prompt = ctx_builder.build(memory_store=comp["store"], skill_loader=_sl, project_path=project_path)
+    return {"system_prompt": prompt, "length": len(prompt)}

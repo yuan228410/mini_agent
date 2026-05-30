@@ -31,7 +31,7 @@ async def list_workspaces(username: str = Query(...)):
     elif not ws:
         mgr.create("default", os.path.join(os.getcwd(), username))
     workspaces = mgr.list_all()
-    logger.info(f"[perf] list_workspaces user={username} count={len(workspaces)} time={time.time()-_t0:.3f}s")
+    logger.debug(f"[perf] list_workspaces user={username} count={len(workspaces)} time={time.time()-_t0:.3f}s")
     return {"workspaces": workspaces, "active": "default"}
 
 

@@ -2,6 +2,8 @@
 import threading
 from pathlib import Path
 
+from .logger import logger
+
 
 class ContextBuilder:
     """按优先级组装系统提示词。
@@ -45,12 +47,13 @@ class ContextBuilder:
                 self._file_cache.pop(str(path), None)
         return text
 
-    def build(self, memory_store=None, skill_loader=None, project_path: str = "") -> str:
+    def build(self, memory_store=None, skill_loader=None, project_path: str = "", exclude_character: bool = False) -> str:
         parts = []
 
-        soul = self._read_doc("SOUL.md")
-        if soul:
-            parts.append(soul)
+        if not exclude_character:
+            soul = self._read_doc("SOUL.md")
+            if soul:
+                parts.append(soul)
 
         if memory_store:
             if memory_store.has_memory():
@@ -71,9 +74,10 @@ class ContextBuilder:
         if cwd_docs:
             parts.append(cwd_docs)
 
-        rules = self._read_doc("RULES.md")
-        if rules:
-            parts.append(rules)
+        if not exclude_character:
+            rules = self._read_doc("RULES.md")
+            if rules:
+                parts.append(rules)
 
         return "\n\n---\n\n".join(parts) if parts else ""
 
@@ -89,7 +93,9 @@ class ContextBuilder:
                 path = d / name
                 text = self._read_cached(path)
                 if text:
+                    logger.debug(f"[Context] 加载项目规范: {path} ({len(text)} 字符)")
                     return f"## 项目规范（{name}）\n\n以下是你所在项目的技术文档，描述项目架构和工具，不是你的身份定义：\n\n{text}"
+        logger.debug(f"[Context] 未找到项目规范 (搜索: {search_dirs})")
         return None
 
     def _read_doc(self, name: str) -> str | None:
