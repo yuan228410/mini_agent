@@ -12,8 +12,6 @@ const props = defineProps<{
   planMode?: boolean
 }>()
 
-const expanded = ref(false)
-
 const usagePct = computed(() => {
   if (!props.context_length) return '0'
   const pct = (props.prompt_tokens / props.context_length) * 100
@@ -23,26 +21,20 @@ const usagePct = computed(() => {
 </script>
 
 <template>
-  <div
-    class="status-bar"
-    @mouseenter="expanded = true"
-    @mouseleave="expanded = false"
-    :class="{ 'status-bar--expanded': expanded }"
-  >
+  <div class="status-bar">
     <span class="status-item" :class="{ 'plan-mode': planMode }">{{ planMode ? '📋 计划' : '⚡ 执行' }}</span>
     <span class="status-sep">·</span>
     <span class="status-item">{{ model }}</span>
     <span class="status-sep">·</span>
-    <span class="status-item">ctx {{ usagePct }}%</span>
-    <span :class="['status-popup', { 'status-popup--show': expanded }]">
-      <span class="status-item">v{{ version }}</span>
-      <span class="status-sep">·</span>
-      <span class="status-item">↑{{ prompt_tokens }} ↓{{ completion_tokens }}</span>
-      <span class="status-sep">·</span>
-      <span class="status-item">sys {{ system_prompt_tokens }}</span>
-      <span class="status-sep">·</span>
-      <span class="status-item">msg {{ history_count }}</span>
-    </span>
+    <span class="status-item">ctx {{ usagePct }}% ({{ prompt_tokens }}/{{ context_length }})</span>
+    <span class="status-sep">·</span>
+    <span class="status-item">v{{ version }}</span>
+    <span class="status-sep">·</span>
+    <span class="status-item">↑{{ prompt_tokens }} ↓{{ completion_tokens }}</span>
+    <span class="status-sep">·</span>
+    <span class="status-item">sys {{ system_prompt_tokens }}</span>
+    <span class="status-sep">·</span>
+    <span class="status-item">msg {{ history_count }}</span>
   </div>
 </template>
 
@@ -64,23 +56,5 @@ const usagePct = computed(() => {
 
 .status-sep {
   color: var(--border);
-}
-
-.status-popup {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  max-width: 0;
-  overflow: hidden;
-  opacity: 0;
-  transition: max-width 0.35s ease, opacity 0.25s ease, margin-left 0.35s ease;
-  margin-left: 0;
-  white-space: nowrap;
-}
-
-.status-popup--show {
-  max-width: 500px;
-  opacity: 1;
-  margin-left: 0.1rem;
 }
 </style>

@@ -9,7 +9,7 @@ import {
   type SessionInfo, type WorkspaceInfo, type BrowseDir,
 } from '../api'
 
-const props = defineProps<{ visible: boolean }>()
+const props = defineProps<{ width: number; collapsed: boolean }>()
 const emit = defineEmits(['switch-session', 'status-change', 'toggle', 'workspace-change'])
 
 const WORKSPACE_KEY = 'mini-ai-active-workspace'
@@ -366,7 +366,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 </script>
 
 <template>
-  <div v-if="visible" class="sidebar" @click="closeContextMenu">
+  <div v-if="!collapsed" class="sidebar" :style="{ width: width + 'px' }" @click="closeContextMenu">
     <div class="sidebar-header">
       <span class="sidebar-brand">mini_ai</span>
       <button class="ws-add-ws-btn" @click="showAddWsPopup = !showAddWsPopup; if (showAddWsPopup) { wsMode = 'add'; newWsName = ''; newWsPath = ''; addWsPath = '' }" title="添加工作空间">+ 空间</button>
@@ -530,7 +530,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 
 <style scoped>
 .sidebar {
-  width: 260px; flex-shrink: 0; display: flex; flex-direction: column;
+  flex-shrink: 0; display: flex; flex-direction: column;
   border-right: 0.5px solid var(--border); background: var(--bg); overflow: hidden;
 }
 

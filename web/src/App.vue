@@ -13,6 +13,7 @@ import FileBrowserPanel from './components/FileBrowserPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 
 const SIDEBAR_KEY = 'mini-ai-sidebar-open'
+const SIDEBAR_WIDTH_KEY = 'mini-ai-sidebar-width'
 
 const theme = ref<Theme>('light')
 const config = ref({
@@ -26,10 +27,36 @@ const config = ref({
   session_id: '',
   username: '',
 })
-const showSidebar = ref(true)
+const sidebarWidth = ref(260)
+const sidebarCollapsed = ref(false)
 const rightPanelTab = ref<string>('files')
 const rightPanelCollapsed = ref(false)
 const rightPanelWidth = ref(300)
+
+function startSidebarResize(e: MouseEvent) {
+  const startX = e.clientX
+  const startWidth = sidebarWidth.value
+  function onMove(ev: MouseEvent) {
+    const delta = ev.clientX - startX
+    const w = startWidth + delta
+    if (w < 60) {
+      sidebarCollapsed.value = true
+    } else {
+      sidebarCollapsed.value = false
+      sidebarWidth.value = Math.max(160, Math.min(320, w))
+    }
+  }
+  function onUp() {
+    document.removeEventListener('mousemove', onMove)
+    document.removeEventListener('mouseup', onUp)
+    if (!sidebarCollapsed.value) {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value))
+    }
+    localStorage.setItem(SIDEBAR_KEY, String(!sidebarCollapsed.value))
+  }
+  document.addEventListener('mousemove', onMove)
+  document.addEventListener('mouseup', onUp)
+}
 
 function startRightPanelResize(e: MouseEvent) {
   const startX = e.clientX
@@ -65,7 +92,10 @@ const todosCollapsed = ref(false)
 onMounted(async () => {
   theme.value = initTheme()
   const saved = localStorage.getItem(SIDEBAR_KEY)
-  if (saved !== null) showSidebar.value = saved === 'true'
+  if (saved !== null) sidebarCollapsed.value = saved === 'false'
+
+  const savedWidth = localStorage.getItem(SIDEBAR_WIDTH_KEY)
+  if (savedWidth !== null) sidebarWidth.value = parseInt(savedWidth) || 260
 
   if (hasUsername()) {
     currentUsername.value = getUsername()
@@ -122,8 +152,8 @@ function onStatusChange(sid: string, status: 'idle' | 'generating') {
 }
 
 function toggleSidebar() {
-  showSidebar.value = !showSidebar.value
-  localStorage.setItem(SIDEBAR_KEY, String(showSidebar.value))
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem(SIDEBAR_KEY, String(!sidebarCollapsed.value))
 }
 
 function onUseSkill(name: string) {
@@ -197,8 +227,8 @@ function logout() {
   <template v-else>
     <header class="app-header">
       <div class="header-left">
-        <button class="sidebar-toggle" @click="toggleSidebar" :title="showSidebar ? '收起侧栏' : '展开侧栏'">
-          <span class="toggle-icon">{{ showSidebar ? '☰' : '☰' }}</span>
+        <button class="sidebar-toggle" @click="toggleSidebar" :title="sidebarCollapsed ? '展开侧栏' : '收起侧栏'">
+          <span class="toggle-icon">{{ sidebarCollapsed ? '▶' : '☰' }}</span>
         </button>
         <h1 class="brand">mini_ai</h1>
         <span class="username-badge">{{ currentUsername }}</span>
@@ -224,12 +254,14 @@ function logout() {
     <div class="main-area">
       <SessionSidebar
         ref="sidebarRef"
-        :visible="showSidebar"
+        :width="sidebarWidth"
+        :collapsed="sidebarCollapsed"
         @switch-session="onSwitchSession"
         @status-change="onStatusChange"
         @toggle="toggleSidebar"
         @workspace-change="onWorkspaceChange"
       />
+      <div class="sidebar-resize-handle" @mousedown.prevent="startSidebarResize"></div>
       <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" @todos-update="onTodosUpdate" />
       <div class="rp-resize-handle" @mousedown.prevent="startRightPanelResize"></div>
       <div class="right-panel" :class="{ 'rp-collapsed': rightPanelCollapsed }" :style="rightPanelCollapsed ? {} : { width: rightPanelWidth + 'px' }">
@@ -587,6 +619,18 @@ function logout() {
   flex: 1;
   display: flex;
   overflow: hidden;
+}
+
+.sidebar-resize-handle {
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  z-index: 10;
+}
+.sidebar-resize-handle:hover {
+  background: var(--accent);
+  opacity: 0.3;
 }
 
 .rp-resize-handle {

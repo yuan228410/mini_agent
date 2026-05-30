@@ -209,6 +209,7 @@ async function newSession(ws?: string) {
     activeSessionId.value = resp.session_id
     localStorage.setItem(SESSION_KEY, resp.session_id)
     _load(resp.session_id)
+    await fetchConfig()
   } catch {
     activeSessionId.value = 'default'
     _load('default')

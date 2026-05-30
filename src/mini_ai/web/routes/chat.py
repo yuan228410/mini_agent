@@ -378,12 +378,12 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
         # 检查内存缓存
         if cache_key in _SESSIONS:
             existing = _SESSIONS[cache_key]
-            if len(existing) > 1:
+            if len(existing) >= 1:
                 return sid, existing
 
         # 尝试从数据库加载
         loaded = _load_from_db(username, sid, base, workspace)
-        if loaded and len(loaded) > 1:
+        if loaded and len(loaded) >= 1:
             if loaded[0].get("role") != "system":
                 prompt = _build_system_prompt(username, sid, base, workspace)
                 saved_name = _load_session_name(base, sid) or "新会话"
