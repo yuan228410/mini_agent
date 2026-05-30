@@ -33,6 +33,12 @@ class MessageBus:
         with self._lock:
             self._wake_events[name] = event
 
+    def close(self):
+        """清理资源：清空唤醒回调与事件注册。"""
+        with self._lock:
+            self._on_send = None
+            self._wake_events.clear()
+
     @staticmethod
     def _valid(name: str) -> bool:
         return bool(_NAME_RE.fullmatch(name))

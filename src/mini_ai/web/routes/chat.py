@@ -51,8 +51,13 @@ def _touch_session(cache_key: str):
     if len(_SESSION_ACCESS) > _MAX_CACHED_SESSIONS:
         oldest = sorted(_SESSION_ACCESS, key=_SESSION_ACCESS.get)[:len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5]
         for k in oldest:
+            comp = _SESSION_COMPONENTS.pop(k, None)
+            if comp:
+                try:
+                    comp.get("history_db") and comp["history_db"].close()
+                except Exception:
+                    pass
             _SESSIONS.pop(k, None)
-            _SESSION_COMPONENTS.pop(k, None)
             _META_CACHE.pop(k, None)
             _SESSION_STATUS.pop(k, None)
             _SESSION_MODELS.pop(k, None)
@@ -194,10 +199,10 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
         early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
         max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
+        max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         context_builder=ctx_builder,
         skill_loader=skill_loader,
-        history_db=history_db,
         project_path=project_path,
         summary_dir=session_dir,
     )
@@ -267,13 +272,16 @@ def _build_meta(sid: str, messages: list[dict], username: str, workspace: str | 
     cache_key = _cache_key(username, workspace, sid)
     non_system = [m for m in messages if m["role"] != "system"]
     first_user = next((m.get("content", "")[:50] for m in non_system if m["role"] == "user"), "")
-    name = messages[0].get("name", "") if messages else ""
+    # meta.json 是名称的 source of truth，始终优先读取
+    name = ""
+    try:
+        base = _resolve_base(username, workspace or "default")
+        name = _load_session_name(base, sid)
+    except Exception:
+        pass
+    # meta.json 无记录时，从消息中取
     if not name:
-        try:
-            base = _resolve_base(username, workspace or "default")
-            name = _load_session_name(base, sid)
-        except Exception:
-            pass
+        name = messages[0].get("name", "") if messages else ""
     if not name:
         name = first_user or "新会话"
     return {

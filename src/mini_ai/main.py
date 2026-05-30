@@ -2,13 +2,15 @@ import json
 import argparse
 import threading
 from pathlib import Path
+from dataclasses import dataclass, field
+from datetime import datetime
 
 from . import __version__
 from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, SessionManager
 from .memory.history_db import HistoryDB
-from datetime import datetime
-from .config import DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING, DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw
+from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
+                     DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw)
 from .context import ContextBuilder
 from .llm import get_usage, reset_usage, estimate_tokens
 from .logger import logger
@@ -16,20 +18,39 @@ from .runner import run_tool_loop
 from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
-from .team.loop import wait_for_teammates, cleanup_inbox
-from .tools import get_definitions, register, register_subagents, register_team, register_display, register_blackboard, register_memory_tools, register_history_tools, render_todos, set_project_path
+from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
+from .tools import (get_definitions, register, register_subagents, register_team,
+                    register_display, register_blackboard, register_memory_tools,
+                    register_history_tools, render_todos, set_project_path)
 from .workspace import WorkspaceManager
 
-SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
-_MCP_LOADER = None
+# ═══════════════════════════════════════════
+# 应用全局上下文 — 跨 workspace 重载的共享状态
+# ═══════════════════════════════════════════
 
-_LEAD_TOOLS = None
+@dataclass
+class AppContext:
+    """跨 workspace 重载的全局可变状态。"""
+    bus: MessageBus | None = None
+    mcp_loader: object | None = None
+    lead_tools_cache: list[dict] | None = None
 
 
+_app_ctx = AppContext()
+_subagent_loader = SubagentLoader(PACKAGE_DIR / "subagents")
 
-def _init_mcp():
-    global _MCP_LOADER, _LEAD_TOOLS
+
+def get_app_context() -> AppContext:
+    """供外部模块获取全局 AppContext（如 commands.py 的 /mcp 命令）。"""
+    return _app_ctx
+
+
+# ═══════════════════════════════════════════
+# MCP 初始化 / 关闭
+# ═══════════════════════════════════════════
+
+def _init_mcp(ctx: AppContext):
     if not MCP.get("enabled") or not MCP.get("servers"):
         return
     try:
@@ -37,71 +58,225 @@ def _init_mcp():
     except ImportError:
         logger.warning("[MCP] mcp 包未安装，跳过 MCP 初始化 (pip install mcp)")
         return
-    _MCP_LOADER = MCPLoader()
-    modules = _MCP_LOADER.start_sync()
+    ctx.mcp_loader = MCPLoader()
+    modules = ctx.mcp_loader.start_sync()
     if modules:
         from .tools import _registry
         _registry.add_tools(*modules)
-        _LEAD_TOOLS = None
+        ctx.lead_tools_cache = None
         logger.info(f"[MCP] 已注册 {len(modules)} 个 MCP 工具")
 
-def _shutdown_mcp():
-    global _MCP_LOADER
-    if _MCP_LOADER:
-        _MCP_LOADER.stop_sync()
-        _MCP_LOADER = None
 
-def _lead_tool_defs() -> list[dict]:
-    global _LEAD_TOOLS
-    if _LEAD_TOOLS is None:
-        _LEAD_TOOLS = [d for d in get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
-    return _LEAD_TOOLS
+def _shutdown_mcp(ctx: AppContext):
+    if ctx.mcp_loader:
+        ctx.mcp_loader.stop_sync()
+        ctx.mcp_loader = None
 
 
-_bus = None
+# ═══════════════════════════════════════════
+# 工具辅助
+# ═══════════════════════════════════════════
+
+def _lead_tool_defs(ctx: AppContext) -> list[dict]:
+    if ctx.lead_tools_cache is None:
+        ctx.lead_tools_cache = [
+            d for d in get_definitions()
+            if d["function"]["name"] not in ("read_inbox", "list_teammates")
+        ]
+    return ctx.lead_tools_cache
+
 
 def _inject_todos(messages: list[dict]):
     todos_text = render_todos()
     base = messages[0]["content"]
     marker = "\n\n## 当前任务计划"
     if marker in base:
-        base = base[: base.index(marker)]
+        base = base[:base.index(marker)]
     messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
-def _run_loop_compat(messages, tools, inject_fn, disp, ctx=None):
-    msg, _ = run_tool_loop(
-        messages, tools,
-        streaming=STREAMING,
-        display=disp,
-        inject_fn=inject_fn,
-        ctx=ctx,
-        bus=_bus,
+# ═══════════════════════════════════════════
+# Workspace 会话
+# ═══════════════════════════════════════════
+
+@dataclass
+class SessionContext:
+    """一个 workspace 对应的完整会话状态。"""
+    skill_loader: SkillLoader
+    store: MemoryStore
+    history_db: HistoryDB
+    sessions: SessionManager
+    compactor: Compactor
+    context_builder: ContextBuilder
+    team_mgr: TeammateManager
+    blackboard: Blackboard
+    lead_event: threading.Event
+    cmd: CommandHandler = None  # 主循环 handler，reload 解包时赋予
+
+
+def _create_workspace_session(
+    ws,
+    disp: Display,
+    app_ctx: AppContext,
+    ws_mgr: WorkspaceManager,
+) -> tuple[SessionContext, list[dict]]:
+    """为指定 workspace 创建完整的会话状态，返回 (session, messages, cmd_handler)。"""
+    ws_dir = ws.ws_dir
+    ws_name = ws.name
+
+    logger.info(f"[Workspace] {ws_name} → {ws_dir} (project: {ws.project_path or Path.cwd()})")
+
+    set_project_path(ws.project_path or str(Path.cwd()))
+
+    # ── 技能 ──
+    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS,
+                               workspace_skills_dir=ws_dir / "skills")
+    register(skill_loader)
+    register_subagents(_subagent_loader)
+
+    # ── Team + Bus ──
+    bus = MessageBus(ws_dir / ".team" / "inbox")
+    app_ctx.bus = bus
+    team_mgr = TeammateManager(team_dir=ws_dir / ".team", bus=bus, project_dir=ws_dir)
+    register_team(bus, team_mgr)
+    register_display(disp)
+
+    # ── MCP ──
+    _init_mcp(app_ctx)
+
+    # ── Blackboard + Workflow ──
+    bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
+    workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
+    register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
+
+    lead_event = threading.Event()
+    bus.register_wake("lead", lead_event)
+
+    # ── 记忆 + 历史 ──
+    store = MemoryStore(ws_dir / "memory_data", global_memory_dir=DATA_DIR / "memory")
+    history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
+    sessions = SessionManager(ws_dir / "memory_data" / "sessions")
+    register_memory_tools(store)
+    register_history_tools(history_db)
+
+    # ── Context ──
+    ctx_builder = ContextBuilder(DATA_DIR)
+
+    # ── Compactor ──
+    compactor = Compactor(
+        store,
+        keep_recent=COMPACTOR.get("keep_recent", 50),
+        context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
+        keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
+        early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
+        max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
+        max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
+        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_builder=ctx_builder,
+        skill_loader=skill_loader,
+        project_path=ws.project_path or str(Path.cwd()),
+        summary_dir=ws_dir,
     )
-    return msg
+
+    # ── CommandHandler（含 run_loop 闭包）──
+    req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
+
+    def _run_loop(messages, tools, inject_fn, disp, ctx=None):
+        msg, _ = run_tool_loop(
+            messages, tools,
+            streaming=STREAMING,
+            display=disp,
+            inject_fn=inject_fn,
+            ctx=ctx,
+            bus=app_ctx.bus,
+        )
+        return msg
+
+    cmd = CommandHandler(
+        disp=disp, store=store, sessions=sessions, compactor=compactor,
+        inject_fn=_inject_todos, run_tool_fn=_run_loop,
+        lead_tools=_lead_tool_defs(app_ctx), ctx=req_ctx, workspace_mgr=ws_mgr,
+        history_db=history_db, context_builder=ctx_builder, skill_loader=skill_loader,
+        project_path=ws.project_path,
+    )
+
+    # ── 构建消息 ──
+    system_prompt = ctx_builder.build(memory_store=store, skill_loader=skill_loader,
+                                       project_path=ws.project_path)
+    messages = [{"role": "system", "content": system_prompt}]
+    _inject_todos(messages)
+
+    ctx_limit = COMPACTOR.get("context_limit", 50)
+    restored = history_db.load_all(limit=ctx_limit)
+    if restored:
+        messages.extend(restored)
+        logger.info(f"[恢复] {len(restored)} 条历史消息")
+
+    session = SessionContext(
+        skill_loader=skill_loader,
+        store=store,
+        history_db=history_db,
+        sessions=sessions,
+        compactor=compactor,
+        context_builder=ctx_builder,
+        team_mgr=team_mgr,
+        blackboard=bb,
+        lead_event=lead_event,
+        cmd=cmd,
+    )
+    return session, messages
+
+
+# ═══════════════════════════════════════════
+# main
+# ═══════════════════════════════════════════
+
+def _flush_deferred(history_db, messages, deferred_list):
+    """把延迟的 assistant 消息（含 tool_calls）写入历史 DB。"""
+    tool_results_map = {m.get("tool_call_id", ""): m.get("content", "")
+                        for m in messages if m.get("role") == "tool"}
+    for am in deferred_list:
+        enriched_tcs = []
+        for tc in am.get("tool_calls", []):
+            tc_copy = dict(tc)
+            tc_id = tc.get("id", "")
+            if tc_id and tc_id in tool_results_map:
+                tc_copy["_result"] = tool_results_map[tc_id][:2000]
+            enriched_tcs.append(tc_copy)
+        am_meta = {}
+        if am.get("thinking"):
+            am_meta["thinking"] = am["thinking"]
+        am_meta["tool_calls"] = enriched_tcs
+        history_db.append("assistant", am.get("content") or "",
+                          metadata=json.dumps(am_meta))
+    deferred_list.clear()
 
 
 def main():
     parser = argparse.ArgumentParser(prog="mini-ai", description="智能对话 Agent")
-    parser.add_argument("-v", "--version", action="version", version=f"mini-ai {__version__}")
+    parser.add_argument("-v", "--version", action="version",
+                        version=f"mini-ai {__version__}")
     parser.add_argument("--web", action="store_true", help="启动 Web 界面")
     parser.add_argument("--port", type=int, default=8765, help="Web 端口 (默认 8765)")
     args = parser.parse_args()
 
+    # ── Web 模式 ──
     if args.web:
         from .web.app import create_app
         import uvicorn
-        dist_dir = __import__("pathlib").Path(__file__).parent.parent.parent / "web" / "dist"
+        dist_dir = Path(__file__).parent.parent.parent / "web" / "dist"
         if not dist_dir.exists():
-            print(f"提示: 前端未构建，请先执行: cd web && pnpm install && pnpm build")
-            print(f"      开发模式可分别启动后端和前端 (pnpm dev)")
+            print("提示: 前端未构建，请先执行: cd web && pnpm install && pnpm build")
+            print("      开发模式可分别启动后端和前端 (pnpm dev)")
         print(f"mini_ai Web 界面启动: http://localhost:{args.port}")
         import signal
         app = create_app()
-        config = uvicorn.Config(app, host="0.0.0.0", port=args.port, timeout_graceful_shutdown=3)
+        config = uvicorn.Config(app, host="0.0.0.0", port=args.port,
+                                timeout_graceful_shutdown=3)
         server = uvicorn.Server(config)
         original_sigint = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT, lambda sig, frame: signal.raise_signal(signal.SIGTERM))
+        signal.signal(signal.SIGINT,
+                      lambda sig, frame: signal.raise_signal(signal.SIGTERM))
         try:
             server.run()
         except KeyboardInterrupt:
@@ -109,6 +284,38 @@ def main():
         finally:
             signal.signal(signal.SIGINT, original_sigint)
         return
+
+    # ── CLI 模式 ──
+    ws_mgr = WorkspaceManager(DATA_DIR, ensure_default=False)
+
+    # 显示
+    disp = Display(
+        thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
+        tool_detail=DISPLAY.get("tool_detail", "summary"),
+        on_status_update=None,  # 延后设置
+    )
+
+    # 首次工作空间
+    cwd = Path.cwd()
+    cwd_name = cwd.name
+    ws = ws_mgr.get(cwd_name)
+    if not ws:
+        ws_mgr.create(cwd_name, str(cwd))
+        ws = ws_mgr.get(cwd_name)
+    if ws and not ws.project_path:
+        ws.update_project_path(str(cwd))
+
+    # 通过 _create_workspace_session 创建会话
+    session, messages = _create_workspace_session(ws, disp, _app_ctx, ws_mgr)
+    cmd = session.cmd
+
+    # 从 session 解包常用变量
+    history_db = session.history_db
+    compactor = session.compactor
+    bus = _app_ctx.bus
+    team_mgr = session.team_mgr
+
+    # 延后设置状态更新回调（需要 messages/history_db 引用）
     def _update_status():
         usage = get_usage()
         disp.status_bar(
@@ -119,120 +326,19 @@ def main():
             system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
             history_count=history_db.count(),
         )
+    disp.on_status_update = _update_status
 
-    disp = Display(
-        thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
-        tool_detail=DISPLAY.get("tool_detail", "summary"),
-        on_status_update=_update_status,
-    )
-
-    ws_mgr = WorkspaceManager(DATA_DIR, ensure_default=False)
-    cwd = Path.cwd()
-    cwd_name = cwd.name
-    ws = ws_mgr.get(cwd_name)
-    if not ws:
-        ws_mgr.create(cwd_name, str(cwd))
-        ws = ws_mgr.get(cwd_name)
-    if ws and not ws.project_path:
-        ws.update_project_path(str(cwd))
-    ws_dir = ws.ws_dir
-    logger.info(f"[Workspace] {cwd_name} → {ws_dir} (project: {ws.project_path or cwd})")
-
-    set_project_path(ws.project_path or str(cwd))
-    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, workspace_skills_dir=ws_dir / "skills")
-    register(skill_loader)
-    register_subagents(SUBAGENT_LOADER)
-
-    global _bus
-    bus = MessageBus(ws_dir / ".team" / "inbox")
-    _bus = bus
-    team_mgr = TeammateManager(
-        team_dir=ws_dir / ".team",
-        bus=bus,
-        project_dir=ws_dir,
-    )
-    register_team(bus, team_mgr)
-    register_display(disp)
-
-    _init_mcp()
-
-    bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
-    workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
-    register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
-
-    req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
-
-    lead_event = threading.Event()
-    bus.register_wake("lead", lead_event)
-
-    store = MemoryStore(ws_dir / "memory_data",
-                     global_memory_dir=DATA_DIR / "memory")
-    history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=cwd_name)
-    sessions = SessionManager(ws_dir / "memory_data" / "sessions")
-    register_memory_tools(store)
-    register_history_tools(history_db)
-    ctx = ContextBuilder(DATA_DIR)
-
-    compactor = Compactor(
-        store,
-        keep_recent=COMPACTOR.get("keep_recent", 50),
-        context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
-        keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
-        early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
-        max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
-        max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
-        context_length=MODEL_CONFIG.get("context_length", 128000),
-                    context_builder=ctx,
-                    skill_loader=skill_loader,
-                    history_db=history_db,
-                    project_path=str(Path.cwd()),
-        summary_dir=ws_dir,
-    )
-
-    cmd = CommandHandler(
-        disp=disp, store=store, sessions=sessions, compactor=compactor,
-        inject_fn=_inject_todos, run_tool_fn=_run_loop_compat,
-        lead_tools=_lead_tool_defs(), ctx=req_ctx, workspace_mgr=ws_mgr,
-        history_db=history_db, context_builder=ctx, skill_loader=skill_loader,
-        project_path=ws.project_path,
-    )
-
-    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
-    messages = [{"role": "system", "content": system_prompt}]
-    _inject_todos(messages)
-
-    _ctx_limit = COMPACTOR.get("context_limit", 50)
-    restored = history_db.load_all(limit=_ctx_limit)
-    if restored:
-        messages.extend(restored)
-        logger.info(f"[恢复] {len(restored)} 条历史消息")
-
+    # 初始状态栏
     disp.status_bar(
         model=MODEL_CONFIG.get("model", "?"),
         context_length=MODEL_CONFIG.get("context_length", 128000),
         prompt_tokens=0,
         completion_tokens=0,
         system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
-        history_count=len(restored),
+        history_count=history_db.count(),
     )
 
-    def _flush_deferred(history_db, messages, deferred_list):
-        tool_results_map = {m.get("tool_call_id", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
-        for am in deferred_list:
-            enriched_tcs = []
-            for tc in am.get("tool_calls", []):
-                tc_copy = {k: v for k, v in tc.items()}
-                tc_id = tc.get("id", "")
-                if tc_id and tc_id in tool_results_map:
-                    tc_copy["_result"] = tool_results_map[tc_id][:2000]
-                enriched_tcs.append(tc_copy)
-            am_meta = {}
-            if am.get("thinking"):
-                am_meta["thinking"] = am["thinking"]
-            am_meta["tool_calls"] = enriched_tcs
-            history_db.append("assistant", am.get("content") or "", metadata=json.dumps(am_meta))
-        deferred_list.clear()
-
+    # ── 主循环 ──
     while True:
         user_input = disp.user_input(plan_mode=cmd.plan_mode).strip()
         if not user_input:
@@ -245,54 +351,26 @@ def main():
             continue
         if result == "reload_workspace":
             # 清理旧资源
-            global _LEAD_TOOLS
-            _LEAD_TOOLS = None
+            _app_ctx.lead_tools_cache = None
             try:
                 history_db.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[reload] history_db.close() 异常: {e}")
             shutdown_teammates(bus, team_mgr)
+            bus.close()
 
+            # 重新加载
             ws_name = _raw.get("active_workspace", "default")
             ws = ws_mgr.get(ws_name)
             if ws:
-                ws_dir = ws.ws_dir
-                skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, workspace_skills_dir=ws_dir / "skills")
-                register(skill_loader)
-                set_project_path(ws.project_path or "")
-                store = MemoryStore(ws_dir / "memory_data",
-                                 global_memory_dir=DATA_DIR / "memory")
-                history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
-                sessions = SessionManager(ws_dir / "memory_data" / "sessions")
-                compactor = Compactor(
-                    store,
-                    keep_recent=COMPACTOR.get("keep_recent", 50),
-                    context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
-                    keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
-                    early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
-                    max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
-                    max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
-                    context_length=MODEL_CONFIG.get("context_length", 128000),
-                    context_builder=ctx,
-                    skill_loader=skill_loader,
-                    history_db=history_db,
-                    project_path=ws.project_path or "",
-                    summary_dir=ws_dir,
-                )
-                register_memory_tools(store)
-                register_history_tools(history_db)
-                system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
-                messages = [{"role": "system", "content": system_prompt}]
-                _inject_todos(messages)
-                _ctx_limit2 = COMPACTOR.get("context_limit", 50)
-                restored2 = history_db.load_all(limit=_ctx_limit2)
-                if restored2:
-                    messages.extend(restored2)
-                cmd.store = store
-                cmd.sessions = sessions
-                cmd.compactor = compactor
-                cmd.history_db = history_db
-                disp.info(f"工作空间 '{ws_name}' 已加载（{len(restored2)} 条历史）")
+                session, messages = _create_workspace_session(
+                    ws, disp, _app_ctx, ws_mgr)
+                history_db = session.history_db
+                compactor = session.compactor
+                cmd = session.cmd
+                bus = _app_ctx.bus
+                team_mgr = session.team_mgr
+                disp.info(f"工作空间 '{ws_name}' 已加载（{len(messages) - 1} 条历史）")
             continue
 
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
@@ -302,65 +380,69 @@ def main():
 
         try:
             reset_usage()
-            tools = [] if cmd.plan_mode else _lead_tool_defs()
+            tools = [] if cmd.plan_mode else _lead_tool_defs(_app_ctx)
 
-            _cli_deferred_assistant = []
+            _cli_deferred = []
 
             def _persist(m):
                 if m["role"] == "tool":
-                    history_db.append("tool", m.get("content", ""), metadata=json.dumps({"name": m.get("name", ""), "tool_call_id": m.get("tool_call_id", "")}))
+                    history_db.append("tool", m.get("content", ""),
+                                      metadata=json.dumps({"name": m.get("name", ""),
+                                                           "tool_call_id": m.get("tool_call_id", "")}))
                 elif m["role"] == "assistant":
                     if m.get("tool_calls"):
-                        _cli_deferred_assistant.append(m)
+                        _cli_deferred.append(m)
                     else:
-                        meta = {}
-                        if m.get("thinking"):
-                            meta["thinking"] = m["thinking"]
-                        history_db.append("assistant", m.get("content", ""), metadata=json.dumps(meta) if meta else "")
+                        meta = {"thinking": m["thinking"]} if m.get("thinking") else {}
+                        history_db.append("assistant", m.get("content", ""),
+                                          metadata=json.dumps(meta) if meta else "")
 
             msg, _ = run_tool_loop(
                 messages, tools,
                 streaming=STREAMING,
                 display=disp,
                 inject_fn=_inject_todos,
-                ctx=req_ctx,
+                ctx=cmd.ctx,
                 persist_fn=_persist,
                 bus=bus,
             )
-            _flush_deferred(history_db, messages, _cli_deferred_assistant)
+            _flush_deferred(history_db, messages, _cli_deferred)  # 异常时跳过，避免写入不完整消息
 
+            # 计划模式自动执行
             if cmd.plan_mode and msg and msg.get("content"):
                 if PLAN.get("approval", True):
                     msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
                 else:
                     cmd.plan_mode = False
                     msg["content"] += "\n\n⚡ 已自动切换到执行模式"
-                    tools = _lead_tool_defs()
+                    tools = _lead_tool_defs(_app_ctx)
                     msg2, _ = run_tool_loop(
                         messages, tools,
                         streaming=STREAMING,
                         display=disp,
                         inject_fn=_inject_todos,
-                        ctx=req_ctx,
+                        ctx=cmd.ctx,
                         persist_fn=_persist,
                         bus=bus,
                     )
-                    _flush_deferred(history_db, messages, _cli_deferred_assistant)
+                    _flush_deferred(history_db, messages, _cli_deferred)
                     if msg2 and msg2.get("content"):
                         msg = msg2
 
+            # 等待队友回禀
             if not cmd.plan_mode:
                 teammate_msg = wait_for_teammates(
-                    bus, team_mgr, lead_event,
-                    _run_loop_compat, messages, _lead_tool_defs(),
-                    _inject_todos, disp, history_db=history_db, ctx=req_ctx,
+                    bus, team_mgr, session.lead_event,
+                    cmd.run_tool_fn, messages, _lead_tool_defs(_app_ctx),
+                    _inject_todos, disp, history_db=history_db, ctx=cmd.ctx,
                 )
                 if teammate_msg:
                     msg = teammate_msg
 
             if msg and msg.get("content"):
                 ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-                messages.append({"role": "assistant", "content": msg["content"], "timestamp": ts2})
+                messages.append({"role": "assistant", "content": msg["content"],
+                                 "timestamp": ts2})
 
             cleanup_inbox(bus)
 
@@ -377,6 +459,7 @@ def main():
             if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
                 from .llm import chat
                 messages = compactor.compact(chat, messages, inject_fn=_inject_todos)
+
         except KeyboardInterrupt:
             disp.info("⚠ 已中断")
             cleanup_inbox(bus)

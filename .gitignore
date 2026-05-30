@@ -17,3 +17,4 @@ uv.lock
 web/node_modules/
 web/dist/
 .claude/
+src/mini_ai/web/static/

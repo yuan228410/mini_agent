@@ -70,6 +70,7 @@ const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change', 
 
 let _unsubWs: (() => void) | null = null
 let _flushTimer: number | null = null
+let _flushSid = ''
 let _scrollTimer: number | null = null
 let _isNearBottom = true
 let _streamingWatchdog: number | null = null
@@ -88,11 +89,13 @@ function _state(sid: string): SessionState {
 }
 
 function _save() {
+  // 先同步 UI 到 state，再 flush pending 流式内容（顺序重要：flush 修改的是 state）
   const key = _cacheKey(activeSessionId.value, props.workspace)
   const s = _states.get(key)
   if (!s) return
   s.messages = [...messages.value]
   s.isStreaming = isStreaming.value
+  _flushState(activeSessionId.value)
 }
 
 function _load(sid: string) {
@@ -103,7 +106,8 @@ function _load(sid: string) {
   }
 }
 
-function _scheduleFlush() {
+function _scheduleFlush(sid: string) {
+  _flushSid = sid
   if (_flushTimer !== null) return
   _flushTimer = window.setTimeout(() => {
     _flushTimer = null
@@ -111,18 +115,31 @@ function _scheduleFlush() {
   }, FLUSH_INTERVAL)
 }
 
-function _doFlush() {
-  const sid = activeSessionId.value
+function _flushState(sid: string) {
   const key = _cacheKey(sid, props.workspace)
   const s = _states.get(key)
   if (!s) return
-  const lastIdx = s.messages.length - 1
-  if (lastIdx >= 0) {
-    const old = s.messages[lastIdx]
-    s.messages[lastIdx] = { ...old, content: s._currentContent }
+  // 只在 _currentContent 非空时同步（避免空字符串覆盖已完成的消息）
+  if (s._currentContent) {
+    const lastIdx = s.messages.length - 1
+    if (lastIdx >= 0) {
+      s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
+    }
   }
-  messages.value = [...s.messages]
-  isStreaming.value = s.isStreaming
+}
+
+function _doFlush(sid?: string) {
+  const targetSid = sid || _flushSid || activeSessionId.value
+  _flushSid = ''  // 用完即清
+  _flushState(targetSid)
+  // 仅活跃会话刷新 UI
+  if (targetSid === activeSessionId.value) {
+    const key = _cacheKey(targetSid, props.workspace)
+    const s = _states.get(key)
+    if (!s) return
+    messages.value = [...s.messages]
+    isStreaming.value = s.isStreaming
+  }
 }
 
 function _scheduleScroll() {
@@ -288,7 +305,7 @@ function handleWsEvent(event: WsEvent) {
   if (sid === activeSessionId.value) {
     if (isTerminal) {
       if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
-      _doFlush()
+      _doFlush(sid)
       console.log(`[mini-ai] terminal event: sid=${sid} event=${event.event}`)
       if (event.data?.prompt_tokens !== undefined) {
         emit('config-update', {
@@ -299,7 +316,7 @@ function handleWsEvent(event: WsEvent) {
       fetchConfig()
       if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
     } else {
-      _scheduleFlush()
+      _scheduleFlush(sid)
       if (isStreaming.value) _startStreamingWatchdog(sid)
       if (event.data?.prompt_tokens !== undefined && event.data.prompt_tokens > 0) {
         emit('config-update', {
@@ -614,6 +631,7 @@ async function switchToSession(sid: string, ws?: string) {
   activeSessionId.value = sid
   localStorage.setItem(SESSION_KEY, sid)
   const s = _state(sid)
+  _flushState(sid)  // 同步目标会话的 pending 流式内容
   if (s.messages.length === 0) {
     await restoreHistory(sid, ws || props.workspace || 'default')
   } else {

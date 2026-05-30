@@ -1,4 +1,8 @@
-"""配置加载"""
+"""配置加载 — 支持延迟初始化和优雅降级。
+
+模块导入时自动尝试加载配置，失败不退出进程。
+提供 init_config() 供显式重新加载。
+"""
 import copy
 import os
 import sys
@@ -14,15 +18,41 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 def user_data_dir(username: str) -> Path:
     """返回用户数据根目录。所有用户统一用 DATA_DIR/users/<name>"""
     if not username:
-        username = "default"  # 保底，不应出现
+        username = "default"
     d = DATA_DIR / "users" / username
     d.mkdir(parents=True, exist_ok=True)
     return d
 
 
 class ConfigError(Exception):
+    """配置加载/校验失败"""
     pass
 
+
+_config_path = DATA_DIR / "config.yaml"
+
+# ── 模块级状态（init_config 填充）──
+
+_config_error: str | None = None
+_raw: dict = {}
+MODEL_CONFIG: dict = {}
+AVAILABLE_MODELS: list[str] = []
+TIMEOUTS: dict = {}
+COMPACTOR: dict = {}
+TEAMMATE: dict = {}
+TOOL: dict = {}
+API_MODE: str = "openai"
+STREAMING: bool = False
+RUNNER: dict = {"context_usage_limit": 0.88, "max_turns": 50}
+THINKING: dict = {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
+DISPLAY: dict = {"thinking_mode": "collapsed", "tool_detail": "summary"}
+WEB: dict = {"history_limit": 200}
+LOGGING: dict = {}
+PLAN: dict = {"approval": True}
+MCP: dict = {"enabled": False}
+SKILL_PATHS: list[Path] = []
+
+# ── 内部：加载 & 校验 ──
 
 def _load_and_validate(config_path: Path) -> dict:
     if not config_path.exists():
@@ -53,43 +83,60 @@ def _load_and_validate(config_path: Path) -> dict:
     return raw
 
 
-_config_path = DATA_DIR / "config.yaml"
+def _apply_config(raw: dict) -> None:
+    """从 raw dict 刷新所有模块级配置变量。"""
+    global MODEL_CONFIG, AVAILABLE_MODELS, TIMEOUTS, COMPACTOR, TEAMMATE, TOOL
+    global API_MODE, STREAMING, RUNNER, THINKING, DISPLAY, WEB, LOGGING, PLAN, MCP, SKILL_PATHS
 
-try:
-    _raw = _load_and_validate(_config_path)
-except ConfigError as e:
-    print(f"Error: {e}", file=sys.stderr)
-    sys.exit(1)
+    active_model = raw["active_model"]
+    models = raw["models"]
+    MODEL_CONFIG = copy.deepcopy(models[active_model])
+    AVAILABLE_MODELS = list(models.keys())
 
-_active_model = _raw["active_model"]
-_models = _raw["models"]
-MODEL_CONFIG = copy.deepcopy(_models[_active_model])
-
-TIMEOUTS = (_raw.get("timeouts") or {})
-COMPACTOR = (_raw.get("compactor") or {})
-TEAMMATE = (_raw.get("teammate") or {})
-TOOL = (_raw.get("tool") or {})
-API_MODE = MODEL_CONFIG.get("api_mode", "openai")
-STREAMING = _raw.get("streaming", False)
-RUNNER = (_raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 50})
-_global_thinking = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"})
-_model_thinking = MODEL_CONFIG.get("thinking") or {}
-THINKING = {**_global_thinking, **_model_thinking}
-DISPLAY = (_raw.get("display") or {"thinking_mode": "collapsed", "tool_detail": "summary"})
-WEB = (_raw.get("web") or {"history_limit": 200})
-LOGGING = (_raw.get("logging") or {})
-PLAN = (_raw.get("plan") or {"approval": True})
-MCP = (_raw.get("mcp") or {"enabled": False})
-SKILL_PATHS = [Path(p) for p in (_raw.get("skill_paths") or [])]
+    TIMEOUTS = raw.get("timeouts") or {}
+    COMPACTOR = raw.get("compactor") or {}
+    TEAMMATE = raw.get("teammate") or {}
+    TOOL = raw.get("tool") or {}
+    API_MODE = MODEL_CONFIG.get("api_mode", "openai")
+    STREAMING = raw.get("streaming", False)
+    RUNNER = raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 50}
+    _global_thinking = raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
+    _model_thinking = MODEL_CONFIG.get("thinking") or {}
+    THINKING = {**_global_thinking, **_model_thinking}
+    DISPLAY = raw.get("display") or {"thinking_mode": "collapsed", "tool_detail": "summary"}
+    WEB = raw.get("web") or {"history_limit": 200}
+    LOGGING = raw.get("logging") or {}
+    PLAN = raw.get("plan") or {"approval": True}
+    MCP = raw.get("mcp") or {"enabled": False}
+    SKILL_PATHS = [Path(p) for p in (raw.get("skill_paths") or [])]
 
 
-AVAILABLE_MODELS = list(_models.keys())
+# ── 公开 API ──
+
+def init_config() -> None:
+    """显式加载/重载配置。失败时设置 _config_error，不退出进程。"""
+    global _config_error, _raw
+
+    try:
+        _raw = _load_and_validate(_config_path)
+        _apply_config(_raw)
+        _config_error = None
+    except ConfigError as e:
+        _config_error = str(e)
+        print(f"警告: {e}，使用默认配置", file=sys.stderr)
+
+
+# ── 模块导入时自动尝试加载（优雅降级）──
+
+init_config()
 
 
 def get_model_config(name: str) -> dict | None:
-    if name not in _models:
+    """获取指定名称的模型配置"""
+    models = _raw.get("models", {})
+    if name not in models:
         return None
-    return copy.deepcopy(_models[name])
+    return copy.deepcopy(models[name])
 
 
 import requests as _requests
@@ -105,10 +152,12 @@ class RequestContext:
 
 
 def switch_model(name: str) -> str | None:
-    global API_MODE
-    if name not in _models:
+    """切换模型并持久化到 config.yaml"""
+    global API_MODE, THINKING
+    models = _raw.get("models", {})
+    if name not in models:
         return None
-    model_cfg = _models[name]
+    model_cfg = copy.deepcopy(models[name])
     required = ("api_url", "api_key", "model")
     missing = [k for k in required if k not in model_cfg]
     if missing:
@@ -119,7 +168,6 @@ def switch_model(name: str) -> str | None:
     MODEL_CONFIG.clear()
     MODEL_CONFIG.update(model_cfg)
     API_MODE = MODEL_CONFIG.get("api_mode", "openai")
-    global THINKING
+    _global_thinking = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"})
     _model_thinking = model_cfg.get("thinking") or {}
     THINKING = {**_global_thinking, **_model_thinking}
-    return None

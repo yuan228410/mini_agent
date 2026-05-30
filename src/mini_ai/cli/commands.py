@@ -303,11 +303,12 @@ class CommandHandler:
             if not _MCP_SERVERS:
                 self.disp.info("MCP 已启用但未配置服务器 (config.yaml → mcp.servers)")
                 return "continue"
-            from ..main import _MCP_LOADER
-            if not _MCP_LOADER:
+            from ..main import get_app_context
+            mcp_loader = get_app_context().mcp_loader
+            if not mcp_loader:
                 self.disp.info("MCP Loader 未初始化")
                 return "continue"
-            conns = _MCP_LOADER._connections
+            conns = mcp_loader._connections
             if not conns:
                 self.disp.info("MCP 无已连接服务器")
                 return "continue"

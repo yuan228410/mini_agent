@@ -67,36 +67,45 @@ class Orchestrator:
             )
 
     def _execute_task(self, task: TaskNode, prompt: str):
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+
         logger.info(f"[Orchestrator] 派遣 [{task.id}] → {task.agent}: {prompt[:80]}...")
 
         task_timeout = task.timeout or TEAMMATE.get('task_timeout', 600)
-        result = [None]
-        error = [None]
 
-        def _run():
+        executor = ThreadPoolExecutor(max_workers=1)
+        try:
+            future = executor.submit(self._run_task, task, prompt)
             try:
-                if task.agent.startswith("subagent:"):
-                    result[0] = self._run_subagent(task.agent[9:], prompt)
-                else:
-                    result[0] = self._run_teammate(task.agent, prompt)
+                result = future.result(timeout=task_timeout)
+                error = None
+            except FutureTimeoutError:
+                logger.warning(f"[Orchestrator] 任务 [{task.id}] 超时 ({task_timeout}s)")
+                result = None
+                error = f"任务超时 ({task_timeout}s)"
             except Exception as exc:
-                error[0] = str(exc)
-
-        t = threading.Thread(target=_run, daemon=True)
-        t.start()
-        t.join(timeout=task_timeout)
-        if t.is_alive():
-            logger.warning(f"[Orchestrator] 任务 [{task.id}] 超时 ({task_timeout}s)")
-            error[0] = f"任务超时 ({task_timeout}s)"
+                result = None
+                error = str(exc)
+                logger.error(f"[Orchestrator] 任务 [{task.id}] 异常: {exc}", exc_info=True)
+        finally:
+            # 不等待后台线程（超时后任务可能还在跑）
+            executor.shutdown(wait=False)
 
         with self._condition:
-            if error[0]:
-                self._pending_results[task.id] = (None, error[0])
-            elif result[0]:
-                self._pending_results[task.id] = (result[0], None)
+            if error:
+                self._pending_results[task.id] = (None, error)
+            elif result:
+                self._pending_results[task.id] = (result, None)
             else:
                 self._pending_results[task.id] = (None, "执行返回空结果")
             self._condition.notify()
+
+    def _run_task(self, task: TaskNode, prompt: str) -> str | None:
+        """执行单个任务：子代理或队友。"""
+        if task.agent.startswith("subagent:"):
+            return self._run_subagent(task.agent[9:], prompt)
+        else:
+            return self._run_teammate(task.agent, prompt)
 
     def _run_subagent(self, agent_type: str, prompt: str) -> str | None:
         from ..tools.dispatch_subagent import execute as dispatch_exec
@@ -181,8 +190,8 @@ class Orchestrator:
                     from ..web.display import WebDisplay
                     sub_display = WebDisplay(lead_display.queue, lead_display.loop)
                     sub_display.set_teammate(f"wf:{agent_name}")
-            except (ImportError, AttributeError):
-                pass
+            except (ImportError, AttributeError) as exc:
+                logger.debug(f"[Orchestrator] 创建队友 display 失败: {exc}")
 
         ctx = None
         if sub_display:

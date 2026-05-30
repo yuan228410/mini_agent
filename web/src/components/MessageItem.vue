@@ -259,5 +259,6 @@ const timeLabel = computed(() => {
 
 .message--user .message-body {
   color: var(--fg);
+  text-align: left;
 }
 </style>
