@@ -1,13 +1,17 @@
 """文件浏览与预览 API"""
 import os
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, Query
+from fastapi.responses import FileResponse
 
 from ...config import DATA_DIR, user_data_dir
 from ...workspace import WorkspaceManager
 
 router = APIRouter()
+
+_UTC8 = timezone(timedelta(hours=8))
 
 def _get_ws_mgr(username: str) -> WorkspaceManager:
     from .workspaces import _get_mgr
@@ -16,18 +20,52 @@ def _get_ws_mgr(username: str) -> WorkspaceManager:
 _EXT_LANG = {
     ".py": "python", ".js": "javascript", ".ts": "typescript", ".tsx": "tsx",
     ".jsx": "jsx", ".vue": "vue", ".html": "html", ".css": "css", ".scss": "scss",
+    ".less": "less", ".sass": "sass",
     ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".toml": "toml",
     ".md": "markdown", ".sh": "bash", ".bash": "bash", ".zsh": "bash",
     ".rs": "rust", ".go": "go", ".java": "java", ".c": "c", ".cpp": "cpp",
     ".h": "c", ".hpp": "cpp", ".rb": "ruby", ".php": "php", ".sql": "sql",
     ".xml": "xml", ".svg": "xml", ".dockerfile": "dockerfile",
     ".gitignore": "plaintext", ".env": "plaintext", ".txt": "plaintext",
+    ".swift": "swift", ".kt": "kotlin", ".scala": "scala",
+    ".r": "r", ".lua": "lua", ".dart": "dart",
+    ".erl": "erlang", ".ex": "elixir", ".exs": "elixir",
+    ".clj": "clojure", ".groovy": "groovy",
+    ".tf": "hcl", ".proto": "protobuf",
+    ".conf": "ini", ".ini": "ini", ".cfg": "ini",
+    ".cmake": "cmake", ".patch": "diff", ".diff": "diff",
+    ".prisma": "prisma", ".elm": "elm",
+    ".tex": "latex", ".sty": "tex",
+    ".graphql": "graphql", ".gql": "graphql",
+    ".vim": "vim",
+    ".lock": "plaintext", ".dockerignore": "plaintext",
+    ".editorconfig": "ini", ".prettierrc": "json",
+}
+
+_BINARY_EXTENSIONS = {
+    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp",
+    ".pdf", ".zip", ".gz", ".tar", ".rar", ".7z", ".bz2", ".xz",
+    ".exe", ".dll", ".so", ".dylib", ".bin",
+    ".mp3", ".mp4", ".avi", ".mov", ".mkv", ".wav", ".flac", ".ogg",
+    ".ttf", ".woff", ".woff2", ".eot", ".otf",
+    ".db", ".sqlite", ".sqlite3",
+    ".pyc", ".pyo", ".class", ".o", ".obj", ".a",
+    ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+    ".ipynb",
+}
+
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp", ".svg"}
+
+_IMAGE_MIME = {
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+    ".gif": "image/gif", ".bmp": "image/bmp", ".ico": "image/x-icon",
+    ".webp": "image/webp", ".svg": "image/svg+xml",
 }
 
 _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", "build", ".tox", ".egg-info"}
 
-
 _WEB_CWD = Path.cwd()
+
 
 def _get_project_root(workspace: str, username: str) -> Path | None:
     ws = _get_ws_mgr(username).get(workspace)
@@ -50,6 +88,27 @@ def _safe_resolve(root: Path, rel_path: str) -> Path | None:
     if not str(resolved).startswith(str(root_resolved)):
         return None
     return resolved
+
+
+def _is_binary_file(filepath: Path, ext: str) -> bool:
+    """检测文件是否为二进制。先查扩展名黑名单，再采样内容。"""
+    if ext in _BINARY_EXTENSIONS:
+        return True
+    if ext in _IMAGE_EXTENSIONS:
+        return True
+    try:
+        with open(filepath, "rb") as f:
+            chunk = f.read(1024)
+        if b"\x00" in chunk:
+            return True
+        non_printable = sum(1 for b in chunk if b < 0x20 and b not in (0x09, 0x0A, 0x0D))
+        return non_printable > len(chunk) * 0.3
+    except Exception:
+        return False
+
+
+def _format_time(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=_UTC8).isoformat()
 
 
 @router.get("/files/list")
@@ -87,9 +146,13 @@ async def list_files(
         if entry.is_dir():
             items.append({"name": entry.name, "type": "dir", "path": rel})
         else:
-            size = entry.stat().st_size
+            st = entry.stat()
             lang = _EXT_LANG.get(entry.suffix.lower(), "")
-            items.append({"name": entry.name, "type": "file", "path": rel, "size": size, "language": lang})
+            items.append({
+                "name": entry.name, "type": "file", "path": rel,
+                "size": st.st_size, "language": lang,
+                "modified": _format_time(st.st_mtime),
+            })
 
     breadcrumb = []
     if path:
@@ -129,7 +192,23 @@ async def read_file(
     if size > 5 * 1024 * 1024:
         return {"error": "文件过大（>5MB）", "size": size}
 
-    lang = _EXT_LANG.get(target.suffix.lower(), "")
+    ext = target.suffix.lower()
+    is_binary = _is_binary_file(target, ext)
+    is_image = ext in _IMAGE_EXTENSIONS
+    mime_type = _IMAGE_MIME.get(ext, "")
+    mtime = _format_time(target.stat().st_mtime)
+    lang = _EXT_LANG.get(ext, "")
+
+    if is_binary:
+        return {
+            "path": path,
+            "is_binary": True,
+            "is_image": is_image,
+            "mime_type": mime_type,
+            "size": size,
+            "modified": mtime,
+            "language": lang,
+        }
 
     try:
         with target.open("r", encoding="utf-8", errors="replace") as f:
@@ -149,7 +228,81 @@ async def read_file(
         "limit": limit,
         "total_lines": total_lines,
         "has_more": (offset + limit) < total_lines,
+        "size": size,
+        "modified": mtime,
+        "is_binary": False,
+        "is_image": False,
     }
+
+
+@router.get("/files/raw")
+async def raw_file(
+    path: str = Query(...),
+    workspace: str = Query(default=""),
+    username: str = Query(...),
+):
+    """返回原始文件内容（用于图片预览、下载等）。"""
+    root = _get_project_root(workspace, username)
+    if not root:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "工作空间无关联项目路径"}, status_code=404)
+
+    target = _safe_resolve(root, path)
+    if not target or not target.exists() or not target.is_file():
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "文件不存在"}, status_code=404)
+
+    ext = target.suffix.lower()
+    media_type = _IMAGE_MIME.get(ext, "application/octet-stream")
+    return FileResponse(target, media_type=media_type)
+
+
+@router.get("/files/search")
+async def search_files(
+    query: str = Query(...),
+    path: str = Query(default=""),
+    workspace: str = Query(default=""),
+    username: str = Query(...),
+):
+    """递归搜索文件名。"""
+    root = _get_project_root(workspace, username)
+    if not root:
+        return {"error": "工作空间无关联项目路径"}
+
+    root = root.resolve()
+    target = _safe_resolve(root, path) if path else root
+    if not target or not target.exists():
+        return {"error": "路径不存在"}
+
+    results = []
+    query_lower = query.lower()
+    try:
+        for entry in target.rglob("*"):
+            if entry.name in _IGNORE_DIRS:
+                continue
+            if entry.is_dir() and entry.name.startswith("."):
+                continue
+            # 跳过被忽略目录中的文件
+            parts = set(entry.parts)
+            if parts & _IGNORE_DIRS:
+                continue
+            if query_lower in entry.name.lower():
+                rel = str(entry.relative_to(root))
+                if entry.is_dir():
+                    results.append({"name": entry.name, "type": "dir", "path": rel})
+                else:
+                    st = entry.stat()
+                    lang = _EXT_LANG.get(entry.suffix.lower(), "")
+                    results.append({
+                        "name": entry.name, "type": "file", "path": rel,
+                        "size": st.st_size, "language": lang,
+                        "modified": _format_time(st.st_mtime),
+                    })
+    except PermissionError:
+        pass
+
+    results.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
+    return {"results": results[:100], "query": query}
 
 
 @router.get("/files/browse")
