@@ -117,6 +117,18 @@ def run_tool_loop(
                 _consecutive_errors += 1
                 if _consecutive_errors >= 3:
                     logger.warning(f"[runner] 连续 {_consecutive_errors} 次工具错误，提前退出")
+                    # 通知 LLM 工具连续失败，让其回复用户
+                    messages.append({"role": "user", "content": "⚠ 上述工具连续执行失败，请直接向用户说明情况并给出建议，不要再调用工具。", "timestamp": _now()})
+                    try:
+                        from .llm import chat as llm_chat
+                        final = llm_chat(messages, tools=None, ctx=ctx)
+                        if final and final.get("content"):
+                            if display:
+                                display.text_chunk(final["content"])
+                                display.text_end(final["content"])
+                            return final, spawned
+                    except Exception:
+                        pass
                     if bus:
                         from .team.loop import format_inbox_messages
                         inbox = bus.read_inbox("lead")
@@ -165,6 +177,18 @@ def run_tool_loop(
                 content = (m.get("content") or "")[:60].replace("\n", " ")
                 tool_summary.append(f"→{content}")
         logger.warning(f"[runner] 工具循环达到上限 {max_turns} 轮，强制退出。最近工具: {' | '.join(tool_summary[-20:])}")
+        # 通知 LLM 工具循环已达上限，让其总结当前进展回复用户
+        messages.append({"role": "user", "content": f"⚠ 你已调用 {max_turns} 轮工具，达到上限。请根据已有结果总结当前进展回复用户，不要再调用工具。", "timestamp": _now()})
+        try:
+            from .llm import chat as llm_chat
+            final = llm_chat(messages, tools=None, ctx=ctx)
+            if final and final.get("content"):
+                if display:
+                    display.text_chunk(final["content"])
+                    display.text_end(final["content"])
+                return final, spawned
+        except Exception:
+            pass
         if msg and msg.get("content"):
             return msg, spawned
         if display:

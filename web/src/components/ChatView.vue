@@ -657,8 +657,22 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
     <div class="messages" v-if="messages.length === 0">
       <div class="empty-state">
         <div class="empty-icon">m</div>
-        <p class="empty-title">mini_ai</p>
-        <p class="empty-sub">开始一段对话</p>
+        <h2 class="empty-title">mini_ai<span class="empty-dot">.</span></h2>
+        <p class="empty-sub">你的 AI 编程伙伴</p>
+        <div class="empty-hints">
+          <div class="empty-hint">
+            <span class="hint-icon">⌨</span>
+            <span>输入消息开始对话</span>
+          </div>
+          <div class="empty-hint">
+            <span class="hint-icon">/</span>
+            <span>输入 <code>/</code> 查看命令</span>
+          </div>
+          <div class="empty-hint">
+            <span class="hint-icon">⇧</span>
+            <span><code>Shift+Enter</code> 换行</span>
+          </div>
+        </div>
       </div>
     </div>
     <div class="messages">
@@ -666,8 +680,8 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
         v-for="(msg, i) in messages"
         :key="i"
         :message="msg"
-        :style="{ animationDelay: `${i * 0.05}s` }"
-        class="fade-in-up"
+        :style="{ animationDelay: `${Math.min(i * 0.04, 0.6)}s` }"
+        class="msg-anim"
       />
 
     </div>
@@ -732,6 +746,10 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   padding: 0.5rem 0;
 }
 
+.msg-anim {
+  animation: fadeInUp 0.35s ease both;
+}
+
 .messages {
   padding: 0 3%;
 }
@@ -741,36 +759,81 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 6rem 0;
-  opacity: 0.6;
+  padding: 5rem 0;
+  animation: fadeInUp 0.5s ease;
 }
 
 .empty-icon {
-  width: 64px;
-  height: 72px;
-  border-radius: 16px;
+  width: 72px;
+  height: 80px;
+  border-radius: 18px;
   background: var(--accent);
   color: var(--bg);
   font-family: 'Playfair Display', serif;
   font-weight: 700;
-  font-size: 2rem;
+  font-size: 2.4rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 1.5rem;
+  margin-bottom: 1.2rem;
+  box-shadow: 0 8px 32px rgba(232, 145, 45, 0.2);
 }
 
 .empty-title {
   font-family: 'Playfair Display', serif;
-  font-size: 1.5rem;
-  font-weight: 600;
+  font-size: 1.8rem;
+  font-weight: 700;
   color: var(--fg);
-  margin-bottom: 0.3rem;
+  margin-bottom: 0;
+}
+
+.empty-dot {
+  color: var(--accent);
 }
 
 .empty-sub {
   color: var(--fg-muted);
   font-size: 0.95rem;
+  margin-bottom: 2.5rem;
+  font-style: italic;
+}
+
+.empty-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.empty-hint {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  background: var(--bg-card);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+.empty-hint:hover {
+  background: var(--bg-thinking);
+  color: var(--fg);
+}
+
+.hint-icon {
+  font-size: 0.9rem;
+  width: 24px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.empty-hint :deep(code) {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  padding: 0.1em 0.4em;
+  background: var(--bg-code);
+  border-radius: 3px;
 }
 
 

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
 import { initTheme, toggleTheme, type Theme } from './theme'
-import { hasUsername, getUsername, setUsername } from './api'
+import { hasUsername, getUsername, setUsername, closeWs } from './api'
 import ChatView from './components/ChatView.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
 import ThemeToggle from './components/ThemeToggle.vue'
@@ -137,25 +137,60 @@ function submitUsername() {
   currentUsername.value = name
   needUsername.value = false
 }
+
+function logout() {
+  setUsername('')
+  currentUsername.value = ''
+  needUsername.value = true
+  closeWs()
+  sessionId.value = ''
+}
 </script>
 
 <template>
   <div v-if="needUsername" class="username-screen">
     <div class="username-card">
-      <div class="username-icon">m</div>
-      <h2 class="username-title">mini_ai</h2>
-      <p class="username-sub">输入用户名开始对话</p>
-      <div class="username-input-wrap">
-        <input
-          v-model="usernameInput"
-          class="username-input"
-          placeholder="用户名"
-          autofocus
-          @keydown.enter="submitUsername"
-        />
-        <button class="username-btn" :disabled="!usernameInput.trim()" @click="submitUsername">
-          进入
-        </button>
+      <div class="username-card-left">
+        <div class="username-logo-wrap">
+          <div class="username-icon">m</div>
+        </div>
+        <h2 class="username-title">mini_ai</h2>
+        <p class="username-tagline">你的 AI 编程伙伴</p>
+        <div class="username-features">
+          <div class="feature-item">
+            <span class="feature-icon">🤖</span>
+            <span class="feature-text">多模型对话，灵活切换</span>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">🔧</span>
+            <span class="feature-text">工具调用 · MCP · 技能系统</span>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">👥</span>
+            <span class="feature-text">多 Agent 协作，团队模式</span>
+          </div>
+          <div class="feature-item">
+            <span class="feature-icon">📂</span>
+            <span class="feature-text">工作空间管理，项目隔离</span>
+          </div>
+        </div>
+      </div>
+      <div class="username-card-right">
+        <div class="username-form-wrap">
+          <p class="username-sub">开始使用 mini_ai</p>
+          <div class="username-input-wrap">
+            <input
+              v-model="usernameInput"
+              class="username-input"
+              placeholder="输入用户名"
+              autofocus
+              @keydown.enter="submitUsername"
+            />
+          </div>
+          <button class="username-btn" :disabled="!usernameInput.trim()" @click="submitUsername">
+            进入
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -167,6 +202,7 @@ function submitUsername() {
         </button>
         <h1 class="brand">mini_ai</h1>
         <span class="username-badge">{{ currentUsername }}</span>
+        <button class="logout-btn" @click="logout" title="退出登录">↪</button>
       </div>
       <div class="header-right">
         <ModelSelector :session-id="sessionId" :workspace="activeWorkspace || undefined" @switched="onModelSwitched" />
@@ -236,36 +272,89 @@ function submitUsername() {
   align-items: center;
   justify-content: center;
   background: var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+
+.username-screen::before {
+  content: '';
+  position: absolute;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+  top: -250px;
+  right: -150px;
+  pointer-events: none;
+}
+
+.username-screen::after {
+  content: '';
+  position: absolute;
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+  bottom: -200px;
+  left: -100px;
+  pointer-events: none;
 }
 
 .username-card {
   display: flex;
+  background: var(--bg-card);
+  border: 0.5px solid var(--border);
+  border-radius: 16px;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.03);
+  overflow: hidden;
+  position: relative;
+  z-index: 1;
+  min-width: 640px;
+  animation: scaleIn 0.4s ease-out;
+}
+
+.username-card-left {
+  display: flex;
   flex-direction: column;
+  align-items: flex-start;
+  padding: 3rem 2.5rem;
+  flex: 1;
+}
+
+.username-card-right {
+  display: flex;
   align-items: center;
-  padding: 3rem;
+  padding: 3rem 2.5rem;
+  background: var(--bg);
+  border-left: 0.5px solid var(--border);
+  min-width: 260px;
+}
+
+.username-logo-wrap {
+  margin-bottom: 1.2rem;
 }
 
 .username-icon {
-  width: 72px;
-  height: 72px;
-  border-radius: 18px;
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
   background: var(--accent);
   color: var(--bg);
   font-family: 'Playfair Display', serif;
   font-weight: 700;
-  font-size: 2.2rem;
+  font-size: 1.8rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin-bottom: 1.5rem;
+  box-shadow: 0 6px 20px rgba(232, 145, 45, 0.25);
 }
 
 .username-title {
   font-family: 'Playfair Display', serif;
-  font-size: 1.8rem;
+  font-size: 1.6rem;
   font-weight: 700;
   color: var(--fg);
-  margin-bottom: 0.5rem;
+  margin: 0 0 0.3rem 0;
 }
 
 .username-title::after {
@@ -273,48 +362,113 @@ function submitUsername() {
   color: var(--accent);
 }
 
+.username-tagline {
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  margin: 0 0 2rem 0;
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
+
+.username-features {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.feature-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.9rem;
+  color: var(--fg);
+}
+
+.feature-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.feature-text {
+  color: var(--fg-muted);
+}
+
+.username-form-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
 .username-sub {
   color: var(--fg-muted);
   font-size: 0.95rem;
-  margin-bottom: 2rem;
+  margin: 0 0 1.5rem 0;
+  text-align: center;
 }
 
 .username-input-wrap {
-  display: flex;
-  gap: 0.6rem;
-  width: 320px;
+  width: 100%;
+  margin-bottom: 1rem;
 }
 
 .username-input {
-  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
   font-family: 'Source Sans 3', sans-serif;
   font-size: 1rem;
-  padding: 0.6rem 1rem;
+  padding: 0.7rem 1rem;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--bg-input);
   color: var(--fg);
   outline: none;
-  transition: border-color 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .username-input:focus {
   border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.username-input::placeholder {
+  color: var(--fg-dim);
+  opacity: 0.6;
 }
 
 .username-btn {
-  padding: 0.6rem 1.2rem;
+  width: 100%;
+  padding: 0.7rem 1.4rem;
   border: none;
   border-radius: 8px;
   background: var(--accent);
   color: #fff;
   font-size: 0.95rem;
+  font-weight: 600;
   cursor: pointer;
-  transition: background 0.2s ease;
+  transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.username-btn::after {
+  content: ' →';
+  opacity: 0;
+  transition: opacity 0.2s ease, margin-left 0.2s ease;
 }
 
 .username-btn:hover:not(:disabled) {
   background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(232, 145, 45, 0.3);
+}
+
+.username-btn:hover:not(:disabled)::after {
+  opacity: 1;
+}
+
+.username-btn:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .username-btn:disabled {
@@ -376,6 +530,27 @@ function submitUsername() {
   padding: 0.15rem 0.5rem;
   border: 1px solid var(--border);
   border-radius: 4px;
+}
+
+.logout-btn {
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.85rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  color: var(--fg-dim);
+}
+
+.logout-btn:hover {
+  border-color: #e55;
+  color: #e55;
+  background: rgba(238, 85, 85, 0.08);
 }
 
 .header-right {
@@ -445,29 +620,51 @@ function submitUsername() {
   display: flex;
   align-items: center;
   border-bottom: 0.5px solid var(--border);
-  padding: 0 0.3rem;
-  gap: 1px;
+  padding: 0.35rem 0.4rem;
+  gap: 4px;
   flex-shrink: 0;
 }
 
 .rp-tab {
-  width: 32px;
-  height: 32px;
-  border: none;
+  width: 30px;
+  height: 30px;
+  border: 1px solid transparent;
   background: transparent;
   cursor: pointer;
   font-size: 0.85rem;
-  border-radius: 5px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: all 0.2s ease;
+  position: relative;
 }
 
-.rp-tab:hover { background: var(--bg-thinking); }
-.rp-tab.active { background: var(--accent); }
+.rp-tab:hover {
+  background: var(--bg-card);
+  border-color: var(--border);
+}
+
+.rp-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.rp-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
 .rp-collapse { margin-left: auto; font-size: 0.7rem; color: var(--fg-dim); }
-.rp-collapse:hover { color: var(--fg); background: var(--bg-card); }
+.rp-collapse:hover { color: var(--fg); background: var(--bg-card); border-color: var(--border); }
 
 .right-panel.rp-collapsed {
   width: 40px;
@@ -475,12 +672,20 @@ function submitUsername() {
 .right-panel.rp-collapsed .rp-tabs {
   flex-direction: column;
   border-bottom: none;
-  padding: 0.3rem 0;
+  padding: 0.4rem 0;
+  gap: 4px;
 }
 .right-panel.rp-collapsed .rp-tab {
-  width: 28px;
-  height: 28px;
-  font-size: 0.75rem;
+  width: 30px;
+  height: 30px;
+  font-size: 0.8rem;
+}
+.right-panel.rp-collapsed .rp-tab.active::after {
+  bottom: auto;
+  right: -5px;
+  left: auto;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .rp-body {

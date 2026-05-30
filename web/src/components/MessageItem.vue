@@ -79,9 +79,11 @@ const timeLabel = computed(() => {
 
 <style scoped>
 .message {
-  padding: 0.15rem 0 0.15rem 0;
-  border-bottom: 0.5px solid var(--border-light);
-  animation: fadeInUp 0.3s ease forwards;
+  padding: 0.6rem 0.8rem;
+  margin: 0.4rem 0;
+  border-bottom: none;
+  animation: fadeInUp 0.35s ease forwards;
+  border-radius: 10px;
 }
 
 
@@ -91,11 +93,17 @@ const timeLabel = computed(() => {
 
 .message--user {
   text-align: right;
+  background: var(--accent-soft);
+  margin-left: 8%;
 }
 
 .message--user .message-row {
   color: var(--accent);
   font-weight: 600;
+}
+
+.message--assistant {
+  margin-right: 8%;
 }
 
 .message--assistant .message-row {
@@ -105,7 +113,10 @@ const timeLabel = computed(() => {
 
 .message--teammate {
   border-left: 3px solid #888;
-  padding-left: 0.5rem;
+  padding-left: 0.6rem;
+  margin-left: 0;
+  background: var(--bg-tool);
+  border-radius: 0 8px 8px 0;
 }
 
 .message--user .message-time {
@@ -142,7 +153,7 @@ const timeLabel = computed(() => {
 
 .message-body {
   font-size: 1rem;
-  line-height: 1.75;
+  line-height: 1.65;
   color: var(--fg);
   word-break: break-word;
 }
@@ -181,7 +192,7 @@ const timeLabel = computed(() => {
   margin: 1em 0;
   padding: 1rem 1.2rem;
   background: var(--bg-code);
-  border-radius: 6px;
+  border-radius: 8px;
   overflow-x: auto;
   box-shadow: 0 1px 3px var(--shadow-code);
 }
