@@ -27,17 +27,13 @@ const wsSessions: Record<string, SessionInfo[]> = reactive({})
 const wsCollapsed: Record<string, boolean> = reactive({})
 
 const showAddWsPopup = ref(false)
+const wsPopupTab = ref<'add' | 'restore'>('add')
 const removedWorkspaces = ref<{name: string; project_path: string}[]>([])
-const showRemoved = ref(false)
-const wsMode = ref<'create' | 'add' | 'restore'>('add')
-const showCreateWs = ref(false)
-const newWsName = ref('')
-const newWsPath = ref('')
-const showAddWs = ref(false)
 const addWsPath = ref('')
+const addWsSubmitting = ref(false)
+const addWsError = ref('')
 
 const showDirPicker = ref(false)
-const dirTarget = ref<'create' | 'add'>('create')
 const dirCurrent = ref('')
 const dirParent = ref('')
 const dirDirs = ref<BrowseDir[]>([])
@@ -240,8 +236,11 @@ function handleEditKey(e: KeyboardEvent, sid: string) {
   if (e.key === 'Escape') { editingSid.value = '' }
 }
 
-async function openDirPicker(target: 'create' | 'add') {
-  dirTarget.value = target
+function _inferName(path: string): string {
+  return path.split('/').filter(Boolean).pop() || path.split('\\').filter(Boolean).pop() || ''
+}
+
+async function openDirPicker() {
   dirCurrent.value = ''
   dirDirs.value = []
   showDirPicker.value = true
@@ -260,35 +259,51 @@ async function loadDir(path: string) {
 }
 
 function selectDir(path: string) {
-  if (dirTarget.value === 'create') newWsPath.value = path
-  else addWsPath.value = path
+  addWsPath.value = path
   showDirPicker.value = false
+  // 自动提交
+  submitAddWs()
 }
 
-async function createWs() {
-  const name = newWsName.value.trim()
-  if (!name) return
-  await createWorkspace(name, newWsPath.value.trim())
-  newWsName.value = ''
-  newWsPath.value = ''
-  showCreateWs.value = false
-  await loadAll()
-}
-
-async function addWs() {
+async function submitAddWs() {
   const path = addWsPath.value.trim()
   if (!path) return
-  await addWorkspace(path)
-  addWsPath.value = ''
-  showAddWs.value = false
-  await loadAll()
+  addWsSubmitting.value = true
+  addWsError.value = ''
+  const name = _inferName(path)
+  if (!name) {
+    addWsError.value = '无法从路径推断名称'
+    addWsSubmitting.value = false
+    return
+  }
+  try {
+    const resp = await createWorkspace(name, path)
+    if (resp.error) {
+      addWsError.value = resp.error
+      addWsSubmitting.value = false
+      return
+    }
+    addWsPath.value = ''
+    showAddWsPopup.value = false
+    addWsError.value = ''
+    await loadAll()
+  } catch {
+    addWsError.value = '添加失败'
+  } finally {
+    addWsSubmitting.value = false
+  }
+}
+
+async function addWsByPath() {
+  const path = addWsPath.value.trim()
+  if (!path) return
+  await submitAddWs()
 }
 
 async function loadRemoved() {
   try {
     const resp = await listRemovedWorkspaces()
     removedWorkspaces.value = resp.removed || []
-    showRemoved.value = removedWorkspaces.value.length > 0
   } catch {}
 }
 
@@ -307,19 +322,6 @@ async function deleteRemovedWs(name: string) {
     const resp = await deleteRemovedWorkspace(name)
     if (resp.error) { alert(resp.error); return }
     await loadRemoved()
-  } catch {}
-}
-
-async function addExistingWs() {
-  const path = addWsPath.value.trim()
-  if (!path) return
-  const name = newWsName.value.trim() || path.split('/').pop() || path
-  try {
-    await createWorkspace(name, path)
-    newWsName.value = ''
-    addWsPath.value = ''
-    showAddWsPopup.value = false
-    await loadAll()
   } catch {}
 }
 
@@ -369,18 +371,35 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
   <div v-if="!collapsed" class="sidebar" :style="{ width: width + 'px' }" @click="closeContextMenu">
     <div class="sidebar-header">
       <span class="sidebar-brand">mini_ai</span>
-      <button class="ws-add-ws-btn" @click="showAddWsPopup = !showAddWsPopup; if (showAddWsPopup) { wsMode = 'add'; newWsName = ''; newWsPath = ''; addWsPath = '' }" title="添加工作空间">+ 空间</button>
+      <button class="ws-add-ws-btn" @click="showAddWsPopup = !showAddWsPopup; if (showAddWsPopup) { wsPopupTab = 'add'; addWsPath = ''; addWsError = ''; loadRemoved() }" title="添加工作空间">+ 空间</button>
     </div>
 
-    <!-- Add workspace popup -->
+    <!-- 工作空间弹窗 -->
     <div v-if="showAddWsPopup" class="add-ws-popup">
-      <div class="add-ws-mode-tabs">
-        <button :class="['add-ws-tab', { active: wsMode === 'add' }]" @click="wsMode = 'add'">添加现有目录</button>
-        <button :class="['add-ws-tab', { active: wsMode === 'create' }]" @click="wsMode = 'create'">新建</button>
-        <button v-if="removedWorkspaces.length > 0" :class="['add-ws-tab', { active: wsMode === 'restore' }]" @click="wsMode = 'restore'">恢复</button>
+      <div class="add-ws-tabs">
+        <button :class="['add-ws-tab', { active: wsPopupTab === 'add' }]" @click="wsPopupTab = 'add'">添加</button>
+        <button :class="['add-ws-tab', { active: wsPopupTab === 'restore' }]" @click="wsPopupTab = 'restore'">恢复</button>
       </div>
 
-      <template v-if="wsMode === 'restore'">
+      <template v-if="wsPopupTab === 'add'">
+        <div class="add-ws-field">
+          <div class="add-ws-path-row">
+            <input v-model="addWsPath" placeholder="输入文件夹路径，或点击 📂 浏览" class="add-ws-input add-ws-input-path" @keyup.enter="addWsByPath" />
+            <button class="add-ws-browse" @click="openDirPicker()" title="浏览目录">📂</button>
+          </div>
+          <div class="add-ws-hint">名称自动取文件夹名</div>
+        </div>
+        <div v-if="addWsError" class="add-ws-error">{{ addWsError }}</div>
+        <div class="add-ws-actions">
+          <button class="add-ws-btn-add" @click="addWsByPath" :disabled="!addWsPath.trim() || addWsSubmitting">
+            {{ addWsSubmitting ? '添加中…' : '添加' }}
+          </button>
+          <button class="add-ws-btn-ghost" @click="showAddWsPopup = false; wsPopupTab = 'add'">取消</button>
+        </div>
+      </template>
+
+      <template v-if="wsPopupTab === 'restore'">
+        <div v-if="removedWorkspaces.length === 0" class="add-ws-empty">无已移除的工作空间</div>
         <div v-for="r in removedWorkspaces" :key="r.name" class="removed-ws-item">
           <div class="removed-ws-info">
             <span class="removed-ws-name">{{ r.name }}</span>
@@ -390,43 +409,6 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
             <button class="removed-ws-btn-restore" @click="restoreWs(r.name)">恢复</button>
             <button class="removed-ws-btn-delete" @click="deleteRemovedWs(r.name)" title="彻底删除">🗑</button>
           </div>
-        </div>
-        <div v-if="removedWorkspaces.length === 0" class="removed-ws-empty">无已移除的工作空间</div>
-      </template>
-
-      <template v-if="wsMode === 'add'">
-        <div class="add-ws-field">
-          <label>选择目录</label>
-          <div class="add-ws-path-row">
-            <input v-model="addWsPath" placeholder="点击 📂 选择目录" class="add-ws-input add-ws-input-path" readonly />
-            <button class="add-ws-browse" @click="openDirPicker('add')" title="浏览">📂</button>
-          </div>
-        </div>
-        <div class="add-ws-field">
-          <label>名称（默认取目录名）</label>
-          <input v-model="newWsName" :placeholder="addWsPath ? addWsPath.split('/').pop() || '' : '自动取目录名'" class="add-ws-input" />
-        </div>
-        <div class="add-ws-actions">
-          <button class="add-ws-btn-add" @click="addExistingWs" :disabled="!addWsPath.trim()">添加</button>
-          <button class="add-ws-btn-ghost" @click="showAddWsPopup = false">取消</button>
-        </div>
-      </template>
-
-      <template v-else>
-        <div class="add-ws-field">
-          <label>名称</label>
-          <input v-model="newWsName" placeholder="my-project" class="add-ws-input" />
-        </div>
-        <div class="add-ws-field">
-          <label>项目路径（可选）</label>
-          <div class="add-ws-path-row">
-            <input v-model="newWsPath" placeholder="可选" class="add-ws-input add-ws-input-path" />
-            <button class="add-ws-browse" @click="openDirPicker('create')" title="浏览">📂</button>
-          </div>
-        </div>
-        <div class="add-ws-actions">
-          <button class="add-ws-btn-add" @click="createWs" :disabled="!newWsName.trim()">创建</button>
-          <button class="add-ws-btn-ghost" @click="showAddWsPopup = false">取消</button>
         </div>
       </template>
     </div>
@@ -511,7 +493,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
             </div>
           </div>
           <div class="dir-footer">
-            <span class="dir-selected">{{ dirTarget === 'create' ? newWsPath : addWsPath || '未选择' }}</span>
+            <span class="dir-selected">{{ addWsPath || '未选择' }}</span>
             <div class="dir-footer-actions">
               <button class="ws-mgr-btn ws-mgr-btn-ghost" @click="showDirPicker = false">取消</button>
               <button class="ws-mgr-btn" @click="selectDir(dirCurrent)">选择此目录</button>
@@ -641,6 +623,13 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 }
 .add-ws-browse:hover { border-color: var(--accent); }
 .add-ws-actions { display: flex; gap: 0.4rem; margin-top: 0.6rem; }
+.add-ws-hint { font-size: 0.7rem; color: var(--fg-dim); margin-top: 0.2rem; }
+.add-ws-error { font-size: 0.75rem; color: #e55; margin-top: 0.3rem; }
+.add-ws-empty { font-size: 0.8rem; color: var(--fg-dim); text-align: center; padding: 1rem 0; }
+.add-ws-tabs { display: flex; gap: 0; margin-bottom: 0.6rem; border-bottom: 0.5px solid var(--border-light); }
+.add-ws-tab { border: none; background: none; color: var(--fg-dim); font-size: 0.8rem; padding: 0.3rem 0.8rem; cursor: pointer; border-bottom: 2px solid transparent; transition: all 0.15s ease; }
+.add-ws-tab.active { color: var(--fg); border-bottom-color: var(--accent); }
+.add-ws-tab:hover:not(.active) { color: var(--fg); }
 .add-ws-btn-add {
   padding: 0.3rem 0.8rem;
   border: none;

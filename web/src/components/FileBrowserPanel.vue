@@ -17,7 +17,7 @@ interface Breadcrumb {
 }
 
 const props = defineProps<{ visible?: boolean, embedded?: boolean; workspace: string }>()
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'workspace-created'])
 
 const items = ref<FileItem[]>([])
 const breadcrumb = ref<Breadcrumb[]>([])
@@ -48,7 +48,31 @@ const showLineNumbers = ref(true)
 const focusedIndex = ref(-1)
 
 // ── 右键菜单 ──
-const contextMenu = ref<{ x: number; y: number; path: string; name: string } | null>(null)
+const contextMenu = ref<{ x: number; y: number; path: string; name: string; type: string } | null>(null)
+const addWsPending = ref(false)
+
+// ── 设为工作空间 ──
+async function setAsWorkspace(fullPath: string, name: string) {
+  addWsPending.value = true
+  contextMenu.value = null
+  try {
+    const resp = await fetch('/api/workspaces/add', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: fullPath, username: _username() }),
+    })
+    const data = await resp.json()
+    if (data.error) {
+      alert(data.error)
+      return
+    }
+    emit('workspace-created', name || fullPath.split('/').pop())
+  } catch {
+    alert('添加工作空间失败')
+  } finally {
+    addWsPending.value = false
+  }
+}
 
 // ── 文件内搜索 ──
 const searchQuery = ref('')
@@ -350,9 +374,8 @@ function onKeydown(e: KeyboardEvent) {
 
 // ── 右键菜单 ──
 function onContextMenu(e: MouseEvent, item: FileItem) {
-  if (item.type !== 'file') return
   e.preventDefault()
-  contextMenu.value = { x: e.clientX, y: e.clientY, path: item.path, name: item.name }
+  contextMenu.value = { x: e.clientX, y: e.clientY, path: item.path, name: item.name, type: item.type }
 }
 
 function closeContextMenu() {
@@ -704,7 +727,9 @@ function startResize(e: MouseEvent) {
   <Teleport to="body">
     <div v-if="contextMenu" class="fb-context-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }" @click.stop>
       <div class="fb-context-item" @click="copyPath">📋 复制路径</div>
-      <div class="fb-context-item" @click="downloadFile">⬇ 下载文件</div>
+      <div class="fb-context-item" @click="downloadFile" v-if="contextMenu.type === 'file'">⬇ 下载文件</div>
+      <div v-if="contextMenu.type === 'dir' && !addWsPending" class="fb-context-item" @click="setAsWorkspace(rootPath + '/' + contextMenu.path, contextMenu.name)">📂 设为工作空间</div>
+      <div v-if="addWsPending" class="fb-context-item fb-context-disabled">⏳ 添加中…</div>
     </div>
   </Teleport>
 </template>
@@ -1190,6 +1215,14 @@ function startResize(e: MouseEvent) {
 
 .fb-context-item:hover {
   background: var(--bg-thinking);
+}
+
+.fb-context-disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.fb-context-disabled:hover {
+  background: transparent;
 }
 
 /* ── Embedded 模式 ── */

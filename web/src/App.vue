@@ -160,6 +160,14 @@ function onUseSkill(name: string) {
   chatViewRef.value?.useSkill(name)
 }
 
+async function onWsCreated(name: string) {
+  activeWorkspace.value = name
+  // 刷新侧栏工作空间和会话列表
+  if (sidebarRef.value) {
+    await sidebarRef.value.loadSessions()
+  }
+}
+
 function submitUsername() {
   const name = usernameInput.value.trim()
   if (!name) return
@@ -285,7 +293,7 @@ function logout() {
             <SkillPanel :username="currentUsername" :workspace="activeWorkspace" embedded @use="onUseSkill" />
           </div>
           <div v-if="rightPanelTab === 'files'" class="rp-content rp-content-fill">
-            <FileBrowserPanel :workspace="activeWorkspace" embedded />
+            <FileBrowserPanel :workspace="activeWorkspace" @workspace-created="onWsCreated" embedded />
           </div>
           <div v-if="rightPanelTab === 'settings'" class="rp-content">
             <SettingsPanel embedded />
