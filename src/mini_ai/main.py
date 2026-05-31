@@ -171,7 +171,7 @@ def _create_workspace_session(
         early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
         max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
         max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
-        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_length=MODEL_CONFIG.get("context_length", 256000),
         context_builder=ctx_builder,
         skill_loader=skill_loader,
         project_path=ws.project_path or str(Path.cwd()),
@@ -320,7 +320,7 @@ def main():
         usage = get_usage()
         disp.status_bar(
             model=MODEL_CONFIG.get("model", "?"),
-            context_length=MODEL_CONFIG.get("context_length", 128000),
+            context_length=MODEL_CONFIG.get("context_length", 256000),
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
             system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -331,7 +331,7 @@ def main():
     # 初始状态栏
     disp.status_bar(
         model=MODEL_CONFIG.get("model", "?"),
-        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_length=MODEL_CONFIG.get("context_length", 256000),
         prompt_tokens=0,
         completion_tokens=0,
         system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -449,7 +449,7 @@ def main():
             usage = get_usage()
             disp.status_bar(
                 model=MODEL_CONFIG.get("model", "?"),
-                context_length=MODEL_CONFIG.get("context_length", 128000),
+                context_length=MODEL_CONFIG.get("context_length", 256000),
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
                 system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -457,8 +457,10 @@ def main():
             )
 
             if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
+                logger.info(f"[CLI] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
                 from .llm import chat
-                messages = compactor.compact(chat, messages, inject_fn=_inject_todos)
+                messages = compactor.compact(chat, messages, ctx=cmd.ctx, inject_fn=_inject_todos)
+                logger.info(f"[CLI] 压缩完成: messages={len(messages)}")
 
         except KeyboardInterrupt:
             disp.info("⚠ 已中断")

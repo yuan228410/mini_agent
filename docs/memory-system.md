@@ -127,6 +127,8 @@ Agent 可随时主动操作长期记忆，不需要等待压缩触发：
 Web 模式下每个会话独立初始化 MemoryStore + HistoryDB + Compactor 实例：
 
 - **MemoryStore** — 三层记忆（情景层/长期层/用户画像），支持 global→user→workspace 三层级合并读取。Web 端 user 层存在 `users/<username>/memory/`，global 层存在 `~/.mini_ai/memory/`，workspace 层存在工作空间目录下
+  - ⚠ **跨实例并发安全**：Web 多会话各自创建独立的 MemoryStore 实例，所有实例共享同一组 `MEMORY.md` / `USER.md` / `YYYY-MM-DD.md` 文件。MemoryStore 使用 **`fcntl.flock` 文件级锁**（`LOCK_SH` 读 / `LOCK_EX` 写）而非实例级 `threading.Lock`，确保跨实例读写安全
+  - Windows 回退：不支持 `fcntl` 的平台回退到进程级 `threading.Lock`，单进程多会话仍安全，多进程场景需注意
 - **HistoryDB** — SQLite 历史存储，支持全文搜索（`/api/chat/search`）
 - **Compactor** — 复用 `config.yaml` 的 `compactor` 配置，上下文超阈值自动压缩。引入增量缓存机制：已摘要轮次复用缓存，`max_cached_summaries`（默认 200）控制缓存上限，超过时自动裁剪最旧轮次的摘要
 - **实时持久化** — 通过 `persist_fn` 回调，每条消息（用户/助手/工具调用/工具结果）生成即写入 DB，工具结果完整保存不截断（仅 LLM 上下文截断）

@@ -89,7 +89,7 @@ def _build_self_overview() -> str:
 
     active = _raw.get("active_model", "?")
     model_name = MODEL_CONFIG.get("model", "?")
-    ctx_len = MODEL_CONFIG.get("context_length", 128000)
+    ctx_len = MODEL_CONFIG.get("context_length", 256000)
     api_mode = MODEL_CONFIG.get("api_mode", "openai")
 
     tools = get_definitions()

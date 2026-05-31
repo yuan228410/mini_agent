@@ -8,7 +8,7 @@ def _now(): return datetime.now(_UTC8).strftime("%Y-%m-%dT%H:%M:%S")
 from .config import RUNNER, STREAMING
 from .logger import logger
 
-_CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.85)
+_CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.88)
 
 
 def _filter_tools(tool_names: list[str]) -> list[dict]:
@@ -162,7 +162,7 @@ def run_tool_loop(
             if context_length is not None:
                 usage = get_usage()
                 if usage["prompt_tokens"] > context_length * context_usage_limit:
-                    logger.warning(f"[runner] 上下文将满 prompt_tokens={usage['prompt_tokens']} > {int(context_length * context_usage_limit)}，提前退出")
+                    logger.warning(f"[runner] 上下文将满 prompt_tokens={usage['prompt_tokens']} > {int(context_length * context_usage_limit)}，messages={len(messages)} 条，提前退出")
                     if display:
                         display.text_end()
                     return None, spawned
@@ -206,9 +206,9 @@ def run_tool_loop(
         return None, spawned
 
 
-def run_agent(messages: list[dict], *, max_turns: int = 10,
+def run_agent(messages: list[dict], *, max_turns: int = 20,
               tool_names: list[str] | None = None,
-              context_length: int = 128000, ctx=None) -> str | None:
+              context_length: int = 256000, ctx=None) -> str | None:
     """轻量 agent 循环（供子代理/队友使用），返回最终文本。超轮次时自动请求总结。"""
     from .tools import get_definitions
 

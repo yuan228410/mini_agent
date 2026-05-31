@@ -6,12 +6,24 @@ from ...config import AVAILABLE_MODELS, MODEL_CONFIG, get_model_config
 router = APIRouter()
 
 @router.get("/models")
-async def list_models():
-    return {
+async def list_models(session_id: str = "", workspace: str = "", username: str = ""):
+    result = {
         "active": MODEL_CONFIG.get("model", "?"),
         "active_name": _get_active_name(),
         "models": [{"name": n, "model": _models_raw().get(n, {}).get("model", "?")} for n in AVAILABLE_MODELS],
     }
+    # 如果传了 session_id，返回该会话的专属模型
+    if session_id and username:
+        from .chat import _SESSION_MODELS, _cache_key, _load_session_model, _resolve_base
+        cache_key = _cache_key(username, workspace or None, session_id)
+        session_model = _SESSION_MODELS.get(cache_key)
+        if not session_model:
+            base = _resolve_base(username, workspace or None)
+            session_model = _load_session_model(base, session_id)
+        if session_model:
+            result["active_name"] = session_model
+            result["active"] = _models_raw().get(session_model, {}).get("model", "?")
+    return result
 
 @router.post("/models/switch")
 async def switch_model_endpoint(body: dict):
@@ -28,8 +40,12 @@ async def switch_model_endpoint(body: dict):
     cfg = get_model_config(name)
     if not cfg:
         return {"error": f"模型配置无效: {name}"}
-    from .chat import _SESSION_MODELS, _cache_key
-    _SESSION_MODELS[_cache_key(username, workspace or None, session_id)] = name
+    from .chat import _SESSION_MODELS, _cache_key, _save_session_model, _resolve_base
+    cache_key = _cache_key(username, workspace or None, session_id)
+    _SESSION_MODELS[cache_key] = name
+    # 持久化到 meta.json（使用与 _build_meta 一致的路径）
+    base = _resolve_base(username, workspace or None)
+    _save_session_model(base, session_id, name)
     return {"status": "ok", "active_name": name, "model": cfg.get("model", "?")}
 
 def _get_active_name():

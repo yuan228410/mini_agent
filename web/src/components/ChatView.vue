@@ -27,6 +27,7 @@ interface SessionState {
   isStreaming: boolean
   _currentContent: string
   _currentThinking: string
+  draftText: string
 }
 
 const SESSION_KEY = 'mini-ai-session-id'
@@ -45,6 +46,7 @@ const messages = ref<Message[]>([])
 const isStreaming = ref(false)
 const planMode = ref(false)
 const todosContent = ref('')
+const draftText = ref('')
 const teammateColorMap: Record<string, string> = {
   researcher: '#4a9eff',
   coder: '#e8922d',
@@ -83,7 +85,7 @@ const STREAMING_TIMEOUT = 120_000  // 2 min — 若 isStreaming 期间无任何 
 function _state(sid: string): SessionState {
   const key = _cacheKey(sid, props.workspace)
   if (!_states.has(key)) {
-    _states.set(key, { messages: [], isStreaming: false, _currentContent: '', _currentThinking: '' })
+    _states.set(key, { messages: [], isStreaming: false, _currentContent: '', _currentThinking: '', draftText: '' })
   }
   return _states.get(key)!
 }
@@ -91,10 +93,13 @@ function _state(sid: string): SessionState {
 function _save() {
   // 先同步 UI 到 state，再 flush pending 流式内容（顺序重要：flush 修改的是 state）
   const key = _cacheKey(activeSessionId.value, props.workspace)
-  const s = _states.get(key)
-  if (!s) return
+  let s = _states.get(key)
+  if (!s) {
+    s = _state(activeSessionId.value)
+  }
   s.messages = [...messages.value]
   s.isStreaming = isStreaming.value
+  s.draftText = draftText.value
   _flushState(activeSessionId.value)
 }
 
@@ -103,6 +108,7 @@ function _load(sid: string) {
   if (sid === activeSessionId.value) {
     messages.value = s.messages.map(m => ({ ...m }))
     isStreaming.value = s.isStreaming
+    draftText.value = s.draftText
   }
 }
 
@@ -555,6 +561,7 @@ async function sendMessage(text: string) {
   }
 
   const sid = activeSessionId.value
+  draftText.value = ''  // 发送后清空草稿，再 save 确保落盘的是空值
   _save()
   const s = _state(sid)
   s._currentContent = ''
@@ -706,7 +713,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
     </div>
   </div>
   <div class="input-area">
-    <InputBar :disabled="isStreaming" :is-streaming="isStreaming" @send="sendMessage" @stop="stopGeneration" />
+    <InputBar v-model="draftText" :disabled="isStreaming" :is-streaming="isStreaming" @send="sendMessage" @stop="stopGeneration" />
   </div>
   </div>
 </template>

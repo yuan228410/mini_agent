@@ -200,7 +200,7 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
         max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
         max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
-        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_length=MODEL_CONFIG.get("context_length", 256000),
         context_builder=ctx_builder,
         skill_loader=skill_loader,
         project_path=project_path,
@@ -287,6 +287,7 @@ def _build_meta(sid: str, messages: list[dict], username: str, workspace: str | 
     return {
         "session_id": sid,
         "name": name,
+        "model": _load_session_model(base, sid) or "",
         "message_count": len(non_system),
         "preview": first_user,
         "created_at": _parse_created_at(sid),
@@ -326,6 +327,36 @@ def _load_session_name(base: Path | None, sid: str) -> str:
         except Exception:
             pass
     return ""
+
+def _save_session_model(base: Path | None, sid: str, model_name: str):
+    if not base:
+        return
+    meta_path = base / sid / "meta.json"
+    meta = {}
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    meta["model"] = model_name
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+def _load_session_model(base: Path | None, sid: str) -> str:
+    if not base:
+        return ""
+    meta_path = base / sid / "meta.json"
+    if meta_path.exists():
+        try:
+            return json.loads(meta_path.read_text(encoding="utf-8")).get("model", "")
+        except Exception:
+            pass
+    return ""
+
+def _restore_session_model(base: Path | None, sid: str, cache_key: str):
+    """从 meta.json 恢复模型选择到内存"""
+    model = _load_session_model(base, sid)
+    if model:
+        _SESSION_MODELS[cache_key] = model
 
 _MAX_HISTORY_LOAD = 2000
 
@@ -387,6 +418,8 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
         if cache_key in _SESSIONS:
             existing = _SESSIONS[cache_key]
             if len(existing) >= 1:
+                # 从 meta.json 恢复模型选择（覆盖内存，因为可能跨进程）
+                _restore_session_model(base, sid, cache_key)
                 return sid, existing
 
         # 尝试从数据库加载
@@ -399,6 +432,7 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             loaded = _rebuild_tool_messages(loaded)
             _SESSIONS[cache_key] = loaded
             _update_meta_cache(username, sid, workspace, loaded)
+            _restore_session_model(base, sid, cache_key)
             return sid, loaded
 
         # 不存在且不允许创建
@@ -592,7 +626,9 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
         usage = get_usage()
         if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
+            logger.info(f"[Web] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
             messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx, inject_fn=_inject_todos)
+            logger.info(f"[Web] 压缩完成: messages={len(messages)}")
             # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
             messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 

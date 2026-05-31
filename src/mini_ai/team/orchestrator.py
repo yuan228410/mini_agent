@@ -11,7 +11,7 @@ from .task_graph import TaskGraph, TaskNode
 
 class Orchestrator:
 
-    def __init__(self, graph: TaskGraph, blackboard: Blackboard, *, context_length: int = 128000, bus=None, manager=None):
+    def __init__(self, graph: TaskGraph, blackboard: Blackboard, *, context_length: int = 256000, bus=None, manager=None):
         self.graph = graph
         self.blackboard = blackboard
         self.context_length = context_length

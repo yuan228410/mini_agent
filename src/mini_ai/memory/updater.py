@@ -43,7 +43,9 @@ class MemoryUpdater:
     def update(self, chat_fn, round_summaries: list[str], ctx=None) -> None:
         """调用 LLM 更新 episode / memory / user。"""
         if not round_summaries:
+            logger.debug("[记忆更新] 无摘要，跳过")
             return
+        logger.info(f"[记忆更新] 开始: {len(round_summaries)} 条摘要")
 
         prompt = COMPACT_PROMPT.format(
             current_memory=self.memory.read_memory() or "(空)",
@@ -54,17 +56,29 @@ class MemoryUpdater:
 
         result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
         if not result:
+            logger.warning("[记忆更新] LLM 返回为空，跳过记忆更新")
             return
 
         text = result.get("content", "")
+        logger.debug(f"[记忆更新] LLM 响应: {len(text)} 字")
         episode = _extract("episode", text)
         new_memory = _extract("updated_memory", text)
         new_user = _extract("updated_user", text)
+        logger.debug(f"[记忆更新] 解析结果: episode={'有' if episode else '无'}, memory={'有' if new_memory else '无'}, user={'有' if new_user else '无'}")
 
         if episode:
+            logger.info(f"[记忆更新] 写入情景: {len(episode)} 字")
             self.memory.append_today(episode)
+        else:
+            logger.debug("[记忆更新] 无情景更新")
         if new_memory and new_memory != "(无需更新)":
+            logger.info(f"[记忆更新] 写入长期记忆: {len(new_memory)} 字")
             self.memory.write_memory(new_memory)
+        else:
+            logger.debug("[记忆更新] 无长期记忆更新")
         if new_user and new_user != "(无需更新)":
+            logger.info(f"[记忆更新] 写入用户画像: {len(new_user)} 字")
             self.memory.write_user(new_user)
-        logger.info("[压缩] 记忆更新完成")
+        else:
+            logger.debug("[记忆更新] 无用户画像更新")
+        logger.info("[记忆更新] 完成")

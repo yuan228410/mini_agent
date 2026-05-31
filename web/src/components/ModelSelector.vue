@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { getModels, switchModel } from '../api'
 
 interface ModelItem {
@@ -20,12 +20,17 @@ onMounted(async () => {
 
 async function refresh() {
   try {
-    const resp = await getModels()
+    const resp = await getModels(props.sessionId, props.workspace)
     models.value = resp.models
     activeName.value = resp.active_name
     activeModel.value = resp.active
   } catch {}
 }
+
+// 切换会话时重新加载模型
+watch(() => props.sessionId, (newSid) => {
+  if (newSid) refresh()
+})
 
 async function select(name: string) {
   open.value = false
@@ -35,7 +40,7 @@ async function select(name: string) {
     if (resp.error) return
     activeName.value = name
     activeModel.value = resp.model || name
-    emit('switched')
+    emit('switched', { activeName: name, activeModel: resp.model || name })
   } catch {}
 }
 

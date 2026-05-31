@@ -15,7 +15,7 @@ active_model: deepseek
 #
 #   可选：
 #     api_mode           协议模式，默认 openai，可选 anthropic
-#     context_length     上下文窗口大小，默认 128000，建议填实际值
+#     context_length     上下文窗口大小，默认 256000，建议填实际值
 #     temperature        采样温度 0~2，默认 API 决定，建议代码任务 0.3、对话 0.7
 #     max_tokens         单次回复最大 token 数，默认 API 决定
 #     top_p              核采样概率阈值 0~1，默认 API 决定，和 temperature 二选一
@@ -44,7 +44,7 @@ models:
     api_url: https://your-api.com/v1/chat/completions
     api_key: your-api-key
     model: deepseek-v4-pro
-    context_length: 128000
+    context_length: 256000
     temperature: 0.3
     # max_tokens: 8192           # 限制单次回复长度，不设则用 API 默认
     # reasoning_effort: high     # OpenAI o 系列：low=快速、medium=平衡、high=深度推理

@@ -1,13 +1,24 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, nextTick } from 'vue'
 import SlashCommands from './SlashCommands.vue'
 import type { CommandInfo } from '../api'
 
-const props = defineProps<{ disabled?: boolean; isStreaming?: boolean }>()
-const emit = defineEmits(['send', 'stop'])
+const props = defineProps<{ disabled?: boolean; isStreaming?: boolean; modelValue?: string }>()
+const emit = defineEmits(['send', 'stop', 'update:modelValue'])
 const textareaEl = ref<HTMLTextAreaElement>()
-const text = ref('')
+const text = ref(props.modelValue || '')
 const slashRef = ref<InstanceType<typeof SlashCommands>>()
+
+watch(text, (val) => {
+  emit('update:modelValue', val)
+})
+
+watch(() => props.modelValue, (val) => {
+  if (val !== text.value) {
+    text.value = val || ''
+    nextTick(() => autoResize())
+  }
+})
 
 const showSlash = computed(() => text.value.startsWith('/') && text.value.length < 30)
 

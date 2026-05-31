@@ -97,7 +97,7 @@ def _run_exec(args: dict) -> str:
 
     orch = Orchestrator(
         graph, _blackboard,
-        context_length=MODEL_CONFIG.get("context_length", 128000),
+        context_length=MODEL_CONFIG.get("context_length", 256000),
         bus=_bus, manager=_manager,
     )
     result = orch.run()

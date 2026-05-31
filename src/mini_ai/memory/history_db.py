@@ -23,6 +23,7 @@ class HistoryDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
         atexit.register(self.close)
+        logger.debug(f"[HistoryDB] 初始化: workspace={workspace}, path={db_path}")
 
     def _init_schema(self):
         with self._conn:
@@ -58,6 +59,8 @@ class HistoryDB:
 
     def append(self, role: str, content: str, session_id: str = "", metadata: str = ""):
         ts = datetime.now(_UTC8).isoformat()
+        content_preview = (content or "")[:80].replace("\n", " ")
+        logger.debug(f"[HistoryDB] append: role={role}, sid={session_id}, len={len(content or '')}, preview={content_preview}")
         with self._lock:
             self._ensure_conn()
             with self._conn:
@@ -186,7 +189,7 @@ class HistoryDB:
                     self._conn.execute("DELETE FROM messages_fts WHERE rowid < ?", (cutoff_id,))
                 except Exception:
                     pass
-        logger.info(f"[HistoryDB] 保留最近 {keep_count} 条，删除 {cur.rowcount} 条旧消息")
+        logger.info(f"[HistoryDB] delete_before: 保留最近 {keep_count} 条，删除 {cur.rowcount} 条旧消息, workspace={self.workspace}")
         return cur.rowcount
 
     def list_for_review(self, limit: int = 100) -> list[dict]:
@@ -206,6 +209,7 @@ class HistoryDB:
     def search(self, keyword: str, date_from: str = "", date_to: str = "",
                workspace: str = "", limit: int = 20) -> list[dict]:
         ws = workspace or self.workspace
+        logger.debug(f"[HistoryDB] search: keyword={keyword[:30]}, workspace={ws}, limit={limit}")
         conditions = ["workspace=?"]
         params = [ws]
 
@@ -232,6 +236,7 @@ class HistoryDB:
         return [{"id": id, "ts": ts, "role": role, "content": content} for id, ts, role, content in rows]
 
     def load_all(self, session_id: str = "", limit: int = 0) -> list[dict]:
+        logger.debug(f"[HistoryDB] load_all: sid={session_id}, limit={limit}, workspace={self.workspace}")
         with self._lock:
             self._ensure_conn()
             if session_id:
@@ -269,6 +274,7 @@ class HistoryDB:
                 except json.JSONDecodeError:
                     pass
             results.append(msg)
+        logger.debug(f"[HistoryDB] load_all 返回: {len(results)} 条消息")
         return results
 
     def count(self) -> int:
@@ -283,5 +289,6 @@ class HistoryDB:
     def close(self):
         try:
             self._conn.close()
+            logger.debug(f"[HistoryDB] 已关闭: {self.db_path}")
         except Exception:
             pass

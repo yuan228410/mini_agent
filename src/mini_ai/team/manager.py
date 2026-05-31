@@ -199,7 +199,7 @@ class TeammateManager:
             logger.info(f"[队友▶] {name} 开始工作，消息数={len(messages)}")
             try:
                 result = run_agent(messages, max_turns=TEAMMATE["max_turns"], tool_names=tool_names,
-                                     context_length=MODEL_CONFIG.get("context_length", 128000), ctx=ctx)
+                                     context_length=MODEL_CONFIG.get("context_length", 256000), ctx=ctx)
             except Exception as exc:
                 logger.error(f"[队友✗] {name} 异常: {exc}")
                 self.bus.send(name, "lead", f"Error: 执行异常 {exc}")

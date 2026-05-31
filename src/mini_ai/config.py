@@ -43,7 +43,7 @@ TEAMMATE: dict = {}
 TOOL: dict = {}
 API_MODE: str = "openai"
 STREAMING: bool = False
-RUNNER: dict = {"context_usage_limit": 0.88, "max_turns": 50}
+RUNNER: dict = {"context_usage_limit": 0.88, "max_turns": 20}
 THINKING: dict = {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
 DISPLAY: dict = {"thinking_mode": "collapsed", "tool_detail": "summary"}
 WEB: dict = {"history_limit": 200}
@@ -99,7 +99,7 @@ def _apply_config(raw: dict) -> None:
     TOOL = raw.get("tool") or {}
     API_MODE = MODEL_CONFIG.get("api_mode", "openai")
     STREAMING = raw.get("streaming", False)
-    RUNNER = raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 50}
+    RUNNER = raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 20}
     _global_thinking = raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
     _model_thinking = MODEL_CONFIG.get("thinking") or {}
     THINKING = {**_global_thinking, **_model_thinking}

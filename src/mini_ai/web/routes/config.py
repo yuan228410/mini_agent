@@ -19,17 +19,22 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
     if not session_id:
         session_id = "default"
     ws = workspace or None
-    from .chat import _cache_key
+    from .chat import _cache_key, _resolve_base
+    base = _resolve_base(username, ws)
     cache_key = _cache_key(username, ws, session_id)
-    _, messages = _get_or_create_session(username, session_id, workspace=ws, create=False)
+    _, messages = _get_or_create_session(username, session_id, base, ws, create=False)
     usage = _LAST_USAGE.get(cache_key, {"prompt_tokens": 0, "completion_tokens": 0})
     model_name = _SESSION_MODELS.get(cache_key)
+    if not model_name:
+        # 从 meta.json 恢复会话专属模型
+        from .chat import _load_session_model
+        model_name = _load_session_model(base, session_id)
     model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
     logger.debug(f"[perf] get_config sid={session_id} ws={workspace} time={time.time()-_t0:.3f}s")
     return {
         "version": __version__,
         "model": model_cfg.get("model", "?"),
-        "context_length": model_cfg.get("context_length", 128000),
+        "context_length": model_cfg.get("context_length", 256000),
         "prompt_tokens": usage["prompt_tokens"],
         "completion_tokens": usage["completion_tokens"],
         "system_prompt_tokens": estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -51,7 +56,7 @@ async def get_settings():
             "api_url": cfg.get("api_url", ""),
             "api_mode": cfg.get("api_mode", "openai"),
             "model": cfg.get("model", ""),
-            "context_length": cfg.get("context_length", 128000),
+            "context_length": cfg.get("context_length", 256000),
             "temperature": cfg.get("temperature"),
             "max_tokens": cfg.get("max_tokens"),
             "top_p": cfg.get("top_p"),
@@ -209,7 +214,7 @@ async def add_model(body: dict):
         "api_url": body.get("api_url", ""),
         "api_mode": api_mode,
         "model": body.get("model", ""),
-        "context_length": body.get("context_length", 128000),
+        "context_length": body.get("context_length", 256000),
     }
     if body.get("temperature") is not None:
         model_cfg["temperature"] = body["temperature"]

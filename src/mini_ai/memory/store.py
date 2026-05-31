@@ -4,7 +4,94 @@ import threading
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+try:
+    import fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False
+    _FALLBACK_LOCK = threading.Lock()
+
 _UTC8 = timezone(timedelta(hours=8))
+
+
+def _file_lock_path(filepath: Path) -> Path:
+    """同一目录下用 .lock 文件做跨进程/跨实例文件锁。"""
+    return filepath.with_suffix(filepath.suffix + ".lock")
+
+
+def _read_locked(filepath: Path) -> str:
+    """加共享锁读取文件，防止读到写入一半的内容。"""
+    if not filepath.exists():
+        return ""
+    if not _HAS_FCNTL:
+        try:
+            return filepath.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
+    lock_path = _file_lock_path(filepath)
+    try:
+        with lock_path.open("w") as lf:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+            try:
+                return filepath.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError) as e:
+                from .logger import logger
+                logger.warning(f"[MemoryStore] 读取 {filepath} 失败: {e}")
+                return ""
+            finally:
+                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+    except OSError:
+        # lock 文件无法创建时回退到无锁读取
+        try:
+            return filepath.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return ""
+
+
+def _write_locked(filepath: Path, content: str) -> None:
+    """加排他锁写入文件，防止跨实例并发写入冲突。"""
+    lock_path = _file_lock_path(filepath)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    if not _HAS_FCNTL:
+        with _FALLBACK_LOCK:
+            filepath.write_text(content, encoding="utf-8")
+        return
+    with lock_path.open("w") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        try:
+            filepath.write_text(content, encoding="utf-8")
+        finally:
+            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+
+
+
+class _exclusive_lock:
+    """文件排他锁上下文管理器，用于 read-modify-write 和 backup+write 的原子操作。
+
+    获取文件级 LOCK_EX，在 with 块内可安全地读写同一文件，跨实例/跨线程均安全。
+    """
+    __slots__ = ("_filepath", "_lf")
+
+    def __init__(self, filepath: Path):
+        self._filepath = filepath
+        self._lf = None
+
+    def __enter__(self):
+        lock_path = _file_lock_path(self._filepath)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        if not _HAS_FCNTL:
+            _FALLBACK_LOCK.acquire()
+            return
+        self._lf = lock_path.open("w")
+        fcntl.flock(self._lf.fileno(), fcntl.LOCK_EX)
+
+    def __exit__(self, *exc):
+        if self._lf is not None:
+            fcntl.flock(self._lf.fileno(), fcntl.LOCK_UN)
+            self._lf.close()
+            self._lf = None
+        else:
+            _FALLBACK_LOCK.release()
 
 
 def _merge_sections(texts: list[str]) -> str:
@@ -54,7 +141,6 @@ class MemoryStore:
         self._episode_dir = Path(episode_dir) if episode_dir else self.memory_dir
         self._global_dir = Path(global_memory_dir) if global_memory_dir else None
         self._workspace_dir = Path(workspace_memory_dir) if workspace_memory_dir else None
-        self._lock = threading.Lock()
         self._ensure()
 
     def _ensure(self):
@@ -65,7 +151,7 @@ class MemoryStore:
             (self.user_file, "# 用户画像\n\n"),
         ]:
             if not f.exists():
-                f.write_text(default, encoding="utf-8")
+                _write_locked(f, default)
         if self._global_dir:
             self._global_dir.mkdir(parents=True, exist_ok=True)
             for f, default in [
@@ -73,7 +159,7 @@ class MemoryStore:
                 (self._global_dir / "USER.md", "# 用户画像\n\n"),
             ]:
                 if not f.exists():
-                    f.write_text(default, encoding="utf-8")
+                    _write_locked(f, default)
         if self._workspace_dir:
             self._workspace_dir.mkdir(parents=True, exist_ok=True)
             for f, default in [
@@ -81,7 +167,7 @@ class MemoryStore:
                 (self._workspace_dir / "USER.md", "# 用户画像\n\n"),
             ]:
                 if not f.exists():
-                    f.write_text(default, encoding="utf-8")
+                    _write_locked(f, default)
 
     def _tier_paths(self) -> list[Path]:
         paths = []
@@ -106,25 +192,19 @@ class MemoryStore:
         return self._episode_dir / f"{datetime.now(_UTC8).strftime('%Y-%m-%d')}.md"
 
     def read_today(self) -> str:
-        p = self._today_path()
-        return p.read_text(encoding="utf-8") if p.exists() else ""
+        return _read_locked(self._today_path())
 
     def append_today(self, content: str) -> None:
-        with self._lock:
-            p = self._today_path()
+        p = self._today_path()
+        with _exclusive_lock(p):
             existing = p.read_text(encoding="utf-8") if p.exists() else f"# {p.stem}\n"
             p.write_text(existing.rstrip() + "\n\n" + content.strip() + "\n", encoding="utf-8")
+        from .logger import logger
+        logger.debug(f"[MemoryStore] append_today: {len(content)} 字 -> {p.name}")
 
     # ── 长期层 ──
     def _read_file(self, path: Path) -> str:
-        if not path.exists():
-            return ""
-        try:
-            return path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as e:
-            from .logger import logger
-            logger.warning(f"[MemoryStore] 读取 {path} 失败: {e}")
-            return ""
+        return _read_locked(path)
 
     def read_memory(self) -> str:
         texts = [self._read_file(p / "MEMORY.md") for p in self._tier_paths()]
@@ -136,7 +216,7 @@ class MemoryStore:
         return bool(content and content != "# 长期记忆")
 
     def write_memory(self, content: str) -> None:
-        with self._lock:
+        with _exclusive_lock(self.memory_file):
             if self.memory_file.exists():
                 try:
                     import shutil
@@ -144,14 +224,18 @@ class MemoryStore:
                 except OSError:
                     pass
             self.memory_file.write_text(content.strip() + "\n", encoding="utf-8")
+        from .logger import logger
+        logger.info(f"[MemoryStore] write_memory: {len(content)} 字 -> {self.memory_file.name}")
 
     def write_memory_at(self, content: str, level: str) -> None:
         d = self.get_tier_dir(level)
         if not d:
+            logger.warning(f"[MemoryStore] write_memory_at: level={level} 无对应目录")
             return
         d.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            (d / "MEMORY.md").write_text(content.strip() + "\n", encoding="utf-8")
+        _write_locked(d / "MEMORY.md", content.strip() + "\n")
+        from .logger import logger
+        logger.info(f"[MemoryStore] write_memory_at: {len(content)} 字, level={level}")
 
     # ── 用户画像 ──
     def read_user(self) -> str:
@@ -164,7 +248,7 @@ class MemoryStore:
         return bool(content and content != "# 用户画像")
 
     def write_user(self, content: str) -> None:
-        with self._lock:
+        with _exclusive_lock(self.user_file):
             if self.user_file.exists():
                 try:
                     import shutil
@@ -172,11 +256,15 @@ class MemoryStore:
                 except OSError:
                     pass
             self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
+        from .logger import logger
+        logger.info(f"[MemoryStore] write_user: {len(content)} 字 -> {self.user_file.name}")
 
     def write_user_at(self, content: str, level: str) -> None:
         d = self.get_tier_dir(level)
         if not d:
+            logger.warning(f"[MemoryStore] write_user_at: level={level} 无对应目录")
             return
         d.mkdir(parents=True, exist_ok=True)
-        with self._lock:
-            (d / "USER.md").write_text(content.strip() + "\n", encoding="utf-8")
+        _write_locked(d / "USER.md", content.strip() + "\n")
+        from .logger import logger
+        logger.info(f"[MemoryStore] write_user_at: {len(content)} 字, level={level}")

@@ -56,11 +56,14 @@ class ContextBuilder:
                 parts.append(soul)
 
         if memory_store:
-            if memory_store.has_memory():
-                parts.append(f"## 长期记忆\n\n{memory_store.read_memory()}")
-
-            if memory_store.has_user():
-                parts.append(f"## 用户画像\n\n{memory_store.read_user()}")
+            mem = memory_store.read_memory()
+            if mem and mem.strip() != "# 长期记忆":
+                parts.append(f"## 长期记忆\n\n{mem}")
+                logger.debug(f"[Context] 注入长期记忆: {len(mem)} 字")
+            usr = memory_store.read_user()
+            if usr and usr.strip() != "# 用户画像":
+                parts.append(f"## 用户画像\n\n{usr}")
+                logger.debug(f"[Context] 注入用户画像: {len(usr)} 字")
 
         if skill_loader:
             skills_text = skill_loader.get_descriptions()
@@ -79,7 +82,9 @@ class ContextBuilder:
             if rules:
                 parts.append(rules)
 
-        return "\n\n---\n\n".join(parts) if parts else ""
+        result = "\n\n---\n\n".join(parts) if parts else ""
+        logger.debug(f"[Context] build 完成: {len(result)} 字, {len(parts)} 个部分")
+        return result
 
     def _read_project_docs(self, project_path: str = "") -> str | None:
         import os

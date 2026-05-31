@@ -27,7 +27,7 @@ def get_api_mode(ctx=None):
 
 
 def get_context_length(ctx=None):
-    return get_config(ctx).get("context_length", 128000)
+    return get_config(ctx).get("context_length", 256000)
 
 def get_temperature(ctx=None):
     return get_config(ctx).get("temperature")

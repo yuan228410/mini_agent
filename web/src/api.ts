@@ -368,8 +368,14 @@ export async function deleteRemovedWorkspace(name: string): Promise<any> {
 
 // ── Other APIs ──
 
-export async function getModels(): Promise<ModelsResponse> {
-  const resp = await _fetch('/api/models')
+export async function getModels(sessionId?: string, workspace?: string): Promise<ModelsResponse> {
+  const params = new URLSearchParams()
+  if (sessionId) params.set('session_id', sessionId)
+  if (workspace) params.set('workspace', workspace)
+  const u = _username()
+  if (u) params.set('username', u)
+  const query = params.toString()
+  const resp = await _fetch(`/api/models${query ? '?' + query : ''}`)
   return resp.json()
 }
 

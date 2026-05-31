@@ -87,6 +87,7 @@ class SummaryWriter:
             return
         self.summary_dir.mkdir(parents=True, exist_ok=True)
         path = self.summary_dir / "compaction_summary.md"
+        logger.debug(f"[压缩摘要] 追加 {len(round_summaries)} 条摘要到 {path}")
         ts = datetime.now(_UTC8).strftime("%Y-%m-%d %H:%M")
         lines = [f"\n## 压缩 {ts}\n"]
         for s in round_summaries:
@@ -102,6 +103,7 @@ class SummaryWriter:
         text = path.read_text(encoding="utf-8")
         sections = text.split("\n## 压缩 ")
         if len(sections) > self.max_sections:
+            logger.info(f"[压缩摘要] 裁剪: {len(sections)} -> {self.max_sections} 条")
             path.write_text(
                 "## 压缩 " + "\n## 压缩 ".join(sections[-self.max_sections:]),
                 encoding="utf-8",
@@ -122,7 +124,7 @@ class Compactor:
     def __init__(self, memory_store: MemoryStore, *,
                  keep_recent: int = 50,
                  context_usage_threshold: float = 0.8,
-                 context_length: int = 128000,
+                 context_length: int = 256000,
                  keep_budget_ratio: float = 0.2,
                  early_compact_ratio: float = 0.85,
                  max_cached_summaries: int = 200,
@@ -181,9 +183,11 @@ class Compactor:
         estimated = self.estimate_tokens(messages)
         threshold = self._hard_threshold()
         if estimated > threshold:
+            logger.info(f"[压缩→] 本地估算 tokens={estimated} > hard阈值={threshold}")
             return True
         soft = self._soft_threshold()
         if estimated > soft and self._has_incremental_rounds():
+            logger.info(f"[压缩→] 本地估算 tokens={estimated} > soft阈值={soft}，触发预压缩")
             return True
         return False
 
@@ -198,11 +202,14 @@ class Compactor:
             logger.info("[压缩] 轮次不足，跳过")
             return messages
 
+        logger.info(f"[压缩→] 开始: {len(messages)} 条消息, {len(rounds)} 轮, 阈值 hard={self._hard_threshold()} soft={self._soft_threshold()}")
+
         keep_rounds = self._determine_keep_rounds(rounds)
         old_rounds = rounds[:len(rounds) - keep_rounds]
         recent_rounds = rounds[len(rounds) - keep_rounds:]
 
         incremental = self._last_round_count > 0
+        logger.info(f"[压缩→] 拆分: 摘要 {len(old_rounds)} 轮, 保留 {keep_rounds} 轮完整, 增量={'是' if incremental else '否'}")
 
         new_messages = [messages[0]]
         round_summaries = []
@@ -213,6 +220,7 @@ class Compactor:
         for i, rnd in enumerate(old_rounds):
             if _is_chitchat_round(rnd):
                 skipped_chitchat += 1
+                logger.debug(f"[压缩] 第{i+1}轮为闲聊，跳过")
                 continue
             new_messages.append(rnd["user_msg"])
             execution = rnd["execution"]
@@ -221,6 +229,7 @@ class Compactor:
 
             if incremental and i in self._cached_summaries:
                 summary = self._cached_summaries[i]
+                logger.debug(f"[压缩] 第{i+1}轮命中缓存摘要")
                 new_messages.append({
                     "role": "user",
                     "content": f"[第{i+1}轮执行摘要]\n{summary}",
@@ -229,6 +238,7 @@ class Compactor:
 
             exec_text = self._messages_to_text(execution)
             if len(exec_text) < 100:
+                logger.debug(f"[压缩] 第{i+1}轮执行过程过短({len(exec_text)}字)，直接保留")
                 new_messages.append({
                     "role": "user",
                     "content": f"[第{i+1}轮执行摘要]\n{exec_text}",
@@ -242,7 +252,9 @@ class Compactor:
             batch_candidates.append((i, rnd, execution, exec_text))
 
         if batch_candidates:
+            logger.info(f"[压缩→] 批量摘要: {len(batch_candidates)} 轮待摘要")
             summaries = self._batch_summarize(chat_fn, batch_candidates, ctx)
+            logger.info(f"[压缩→] 批量摘要完成: {len(summaries)} 条结果")
             for round_idx, summary in summaries:
                 if summary:
                     new_messages.append({
@@ -262,6 +274,7 @@ class Compactor:
             new_messages.extend(rnd["execution"])
 
         # 委托记忆更新
+        logger.info(f"[压缩→] 更新记忆: {len(round_summaries)} 条摘要")
         self._memory_updater.update(chat_fn, round_summaries, ctx)
         # 委托摘要 I/O
         if self._summary_writer:
@@ -275,10 +288,13 @@ class Compactor:
         }
         if len(self._cached_summaries) > self.max_cached_summaries:
             sorted_keys = sorted(self._cached_summaries.keys())
-            for k in sorted_keys[:-self.max_cached_summaries]:
+            evict = sorted_keys[:-self.max_cached_summaries]
+            for k in evict:
                 del self._cached_summaries[k]
+            logger.debug(f"[压缩] 缓存淘汰: 移除 {len(evict)} 条旧摘要, 剩余 {len(self._cached_summaries)}")
 
         if self.context_builder:
+            logger.info("[压缩→] 重建 system prompt")
             new_messages[0]["content"] = self.context_builder.build(
                 memory_store=self.memory,
                 skill_loader=self.skill_loader,
@@ -288,12 +304,15 @@ class Compactor:
         if inject_fn:
             inject_fn(new_messages)
 
-        logger.info(f"[压缩←] {len(old_rounds)} 轮摘要{' (增量)' if incremental else ''}，保留 {len(recent_rounds)} 轮完整")
+        before_tokens = estimate_messages_tokens(messages)
+        after_tokens = estimate_messages_tokens(new_messages)
+        logger.info(f"[压缩←] 完成: {len(messages)} -> {len(new_messages)} 条消息, ~{before_tokens} -> ~{after_tokens} tokens, {len(old_rounds)} 轮摘要{' (增量)' if incremental else ''}, 保留 {len(recent_rounds)} 轮完整")
         return new_messages
 
     # ── 轮次拆分 ──
 
     def _split_rounds(self, non_system: list[dict]) -> list[dict]:
+        logger.debug(f"[压缩] 拆分轮次: {len(non_system)} 条非system消息")
         rounds = []
         current_user = None
         current_execution = []
@@ -310,6 +329,7 @@ class Compactor:
         if current_user is not None:
             rounds.append({"user_msg": current_user, "execution": current_execution})
 
+        logger.debug(f"[压缩] 拆分完成: {len(rounds)} 轮")
         return rounds
 
     def _determine_keep_rounds(self, rounds: list[dict]) -> int:
@@ -329,6 +349,7 @@ class Compactor:
             keep += 1
             if keep >= len(rounds) - 1:
                 break
+        logger.debug(f"[压缩] keep_budget={keep_budget}, 保留 {max(keep, 2)}/{len(rounds)} 轮, total_tokens={total_tokens}")
         return max(keep, 2)
 
     # ── 批量摘要 ──
@@ -357,7 +378,9 @@ class Compactor:
             current_chars += entry_chars
 
         if current_batch:
-            batches.append((current_batch, current_chars))
+           batches.append((current_batch, current_chars))
+
+        logger.info(f"[压缩→] 批量摘要: {len(candidates)} 轮, 分 {len(batches)} 批")
 
         for batch in batches:
             batch_candidates = batch[0]
@@ -375,9 +398,11 @@ class Compactor:
                     if summary:
                         all_summaries[i] = summary
                     else:
+                        logger.debug(f"[压缩] 第{i+1}轮 LLM未提取到<round_{i+1}>标签，降级为原文")
                         all_summaries[i] = self._messages_to_text(execution)[:500]
-                logger.debug(f"[压缩] 批量摘要 {len(batch_candidates)} 轮成功")
+                logger.debug(f"[压缩] 批量摘要 {len(batch_candidates)} 轮成功, 轮次: {[i+1 for i,_,_,_ in batch_candidates]}")
             else:
+                logger.warning(f"[压缩] 批量摘要 LLM 返回为空, {len(batch_candidates)} 轮降级为原文截断")
                 for i, rnd, execution, entry_text in batch_candidates:
                     all_summaries[i] = self._messages_to_text(execution)[:500]
 

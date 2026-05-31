@@ -132,8 +132,10 @@ function renderTodos() {
   }).join('')
 }
 
-function onModelSwitched() {
-  config.value.model = '(switched)'
+function onModelSwitched(data?: { activeName: string; activeModel: string }) {
+  if (data) {
+    config.value.model = data.activeModel
+  }
 }
 
 async function onWorkspaceChange(wsName: string | null) {
