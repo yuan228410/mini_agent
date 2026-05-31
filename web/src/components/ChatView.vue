@@ -283,7 +283,7 @@ function _resetStreaming(sid: string, reason: string) {
   emit('status-change', sid, 'idle')
   const last = s?.messages[s.messages.length - 1]
   if (last && last.streaming) last.streaming = false
-  if (s) messages.value = [...s.messages]
+  if (s && sid === activeSessionId.value) messages.value = [...s.messages]
   if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
 }
 
@@ -306,7 +306,10 @@ function handleWsEvent(event: WsEvent) {
 
   const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error'
 
-  if (isTerminal) s.isStreaming = false
+  if (isTerminal) {
+    s.isStreaming = false
+    if (sid === activeSessionId.value) isStreaming.value = false
+  }
 
   if (sid === activeSessionId.value) {
     if (isTerminal) {
@@ -350,6 +353,12 @@ function _startNewAssistantMsg(s: SessionState) {
   s._currentContent = ''
   s._currentThinking = ''
   s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs() })
+}
+
+function _updateUI(s: SessionState) {
+  const key = _cacheKey(activeSessionId.value, props.workspace)
+  const activeS = _states.get(key)
+  if (s === activeS) messages.value = [...s.messages]
 }
 
 function _processEvent(s: SessionState, event: WsEvent) {
@@ -402,7 +411,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
           if (tmMsg) {
             tmMsg.content = (tmMsg.content || '') + (event.data.content || '')
-            messages.value = [...s.messages]
+            _updateUI(s)
           }
         } else {
           s._currentContent += event.data.content || ''
@@ -420,13 +429,13 @@ function _processEvent(s: SessionState, event: WsEvent) {
           }
           if (!tmMsg.tools) tmMsg.tools = []
           tmMsg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
-          messages.value = [...s.messages]
+          _updateUI(s)
         } else {
           const m = s.messages[s.messages.length - 1]
           if (m && m.role === 'assistant') {
             if (!m.tools) m.tools = []
             m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
-            messages.value = [...s.messages]
+            _updateUI(s)
           }
         }
       }
@@ -449,7 +458,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
             target.result = event.data.result || ''
             target.elapsed = event.data.elapsed || 0
           }
-          messages.value = [...s.messages]
+          _updateUI(s)
           break
         }
         const tcId = event.data.tool_call_id || ''
@@ -461,7 +470,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           if (!target) target = m.tools[m.tools.length - 1]
           target.result = event.data.result || ''
           target.elapsed = event.data.elapsed || 0
-          messages.value = [...s.messages]
+          _updateUI(s)
         }
       }
       break
@@ -487,7 +496,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tmName && m.streaming)
           if (tmMsg) {
             tmMsg.streaming = false
-            messages.value = [...s.messages]
+            _updateUI(s)
           }
         }
       }
@@ -553,7 +562,7 @@ async function sendMessage(text: string) {
       const s = _state(activeSessionId.value)
       const promptContent = '📋 系统提示词（' + resp.length + ' 字符）：\n\n' + resp.system_prompt
       s.messages = [...s.messages, { role: 'assistant', content: promptContent, timestamp: _localTs() }]
-      messages.value = [...s.messages]
+      _updateUI(s)
     } catch (e: any) {
       console.error('getSystemPrompt failed', e)
     }
@@ -571,7 +580,7 @@ async function sendMessage(text: string) {
   _startStreamingWatchdog(sid)
   console.log(`[mini-ai] sendMessage: sid=${sid} isStreaming=true`)
   s.messages = [...s.messages, { role: 'user', content: text, timestamp: _localTs() }, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
-  messages.value = [...s.messages]
+  _updateUI(s)
 
   emit('status-change', sid, 'generating')
 

@@ -82,6 +82,7 @@ def _detect_encoding(resp: requests.Response) -> str:
 
 
 def execute(args: dict) -> str:
+    global _consecutive_failures
     url = args.get("url")
     if not url:
         return "错误：缺少 url 参数"
