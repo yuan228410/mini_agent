@@ -45,6 +45,12 @@ TIMEOUTS: dict = {}
 COMPACTOR: dict = {}
 TEAMMATE: dict = {}
 TOOL: dict = {}
+IMAGE: dict = {
+    "max_size": 10 * 1024 * 1024,           # 10MB
+    "compress_threshold": 500 * 1024,       # 500KB
+    "compress_max_dimension": 800,          # 800px
+    "compress_quality": 85,                 # JPEG quality
+}
 API_MODE: str = "openai"
 STREAMING: bool = False
 RUNNER: dict = {"context_usage_limit": 0.88, "max_turns": 20}
@@ -55,6 +61,7 @@ LOGGING: dict = {}
 PLAN: dict = {"approval": True}
 MCP: dict = {"enabled": False}
 SKILL_PATHS: list[Path] = []
+SUBAGENT_MODELS: dict = {}
 
 # ── 配置热加载 ──
 
@@ -179,8 +186,8 @@ def _load_and_validate(config_path: Path) -> dict:
 
 def _apply_config(raw: dict) -> None:
     """从 raw dict 刷新所有模块级配置变量。"""
-    global MODEL_CONFIG, AVAILABLE_MODELS, TIMEOUTS, COMPACTOR, TEAMMATE, TOOL
-    global API_MODE, STREAMING, RUNNER, THINKING, DISPLAY, WEB, LOGGING, PLAN, MCP, SKILL_PATHS
+    global MODEL_CONFIG, AVAILABLE_MODELS, TIMEOUTS, COMPACTOR, TEAMMATE, TOOL, IMAGE
+    global API_MODE, STREAMING, RUNNER, THINKING, DISPLAY, WEB, LOGGING, PLAN, MCP, SKILL_PATHS, SUBAGENT_MODELS
 
     active_model = raw["active_model"]
     models = raw["models"]
@@ -191,6 +198,16 @@ def _apply_config(raw: dict) -> None:
     COMPACTOR = raw.get("compactor") or {}
     TEAMMATE = raw.get("teammate") or {}
     TOOL = raw.get("tool") or {}
+    
+    # 图片处理配置
+    _image_defaults = {
+        "max_size": 10 * 1024 * 1024,
+        "compress_threshold": 500 * 1024,
+        "compress_max_dimension": 800,
+        "compress_quality": 85,
+    }
+    IMAGE = {**_image_defaults, **(raw.get("image") or {})}
+    
     API_MODE = MODEL_CONFIG.get("api_mode", "openai")
     STREAMING = raw.get("streaming", False)
     RUNNER = raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 20}
@@ -203,6 +220,7 @@ def _apply_config(raw: dict) -> None:
     PLAN = raw.get("plan") or {"approval": True}
     MCP = raw.get("mcp") or {"enabled": False}
     SKILL_PATHS = [Path(p) for p in (raw.get("skill_paths") or [])]
+    SUBAGENT_MODELS = raw.get("subagent_models") or {}
 
 
 # ── 公开 API ──

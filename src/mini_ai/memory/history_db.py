@@ -55,7 +55,26 @@ class HistoryDB:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._init_schema()
 
-    def append(self, role: str, content: str, session_id: str = "", metadata: str = ""):
+    def append(self, role: str, content: str | list, session_id: str = "", metadata: str = ""):
+        # 处理多模态消息（content 可能是 list）
+        if isinstance(content, list):
+            # 提取文本内容用于搜索
+            text_parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text_parts.append(part.get("text", ""))
+            text_content = "\n".join(text_parts)
+            
+            # list 类型都保存完整结构到 metadata
+            try:
+                meta_dict = json.loads(metadata) if metadata else {}
+                meta_dict["_multimodal_content"] = content
+                metadata = json.dumps(meta_dict, ensure_ascii=False)
+            except Exception:
+                pass
+            
+            content = text_content
+        
         ts = datetime.now(_UTC8).isoformat()
         content_preview = (content or "")[:80].replace("\n", " ")
         logger.debug(f"[HistoryDB] append: role={role}, sid={session_id}, len={len(content or '')}, preview={content_preview}")
@@ -114,6 +133,25 @@ class HistoryDB:
                     role = msg.get("role", "")
                     content = msg.get("content", "")
                     metadata = msg.get("metadata", "")
+                    
+                    # 处理多模态消息（content 可能是 list）
+                    if isinstance(content, list):
+                        # 提取文本内容用于搜索
+                        text_parts = []
+                        for part in content:
+                            if isinstance(part, dict) and part.get("type") == "text":
+                                text_parts.append(part.get("text", ""))
+                        text_content = "\n".join(text_parts)
+                        
+                        # list 类型都保存完整结构
+                        try:
+                            meta_dict = json.loads(metadata) if metadata else {}
+                            meta_dict["_multimodal_content"] = content
+                            metadata = json.dumps(meta_dict, ensure_ascii=False)
+                        except Exception:
+                            pass
+                        
+                        content = text_content
                     
                     cur = self._conn.execute(
                         "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
@@ -324,7 +362,11 @@ class HistoryDB:
             if metadata:
                 try:
                     extra = json.loads(metadata)
-                    # 只合并非核心字段，防止 metadata 中的 role/content 覆盖真实值
+                    # 恢复多模态内容（含图片的 list）
+                    if "_multimodal_content" in extra:
+                        msg["content"] = extra["_multimodal_content"]
+                        del extra["_multimodal_content"]
+                    # 合并其他字段，防止覆盖核心字段
                     for k, v in extra.items():
                         if k not in ("role", "content"):
                             msg[k] = v

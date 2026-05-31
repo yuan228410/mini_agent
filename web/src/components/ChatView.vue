@@ -5,15 +5,15 @@ import {
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, getWorkspaces, exportSession,
   getSystemPrompt,
-  type WsEvent, type HistoryMessage,
+  type WsEvent, type HistoryMessage, type ImageData,
 } from '../api'
 import MessageItem from './MessageItem.vue'
-import InputBar from './InputBar.vue'
+import InputBar, { type ImageFile } from './InputBar.vue'
 
 interface Message {
   role: 'user' | 'assistant'
   content: string
-
+  images?: ImageData[]  // 用户消息中的图片
   thinking?: { chars: number; elapsed: number; content: string }
   tools?: { name: string; args: string; result: string; elapsed: number; tool_call_id?: string }[]
   streaming?: boolean
@@ -67,6 +67,7 @@ function _tmColor(name: string): string {
 }
 
 const chatContainer = ref<HTMLElement>()
+const showScrollBottom = ref(false)
 const props = defineProps<{ workspace?: string }>()
 const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change', 'todos-update'])
 
@@ -294,7 +295,9 @@ async function restoreHistory(sid: string, ws?: string) {
         const prev = merged[merged.length - 1]
         if (m.content) prev.content = (prev.content || '') + m.content
       } else {
-        merged.push({ role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' })
+        const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' }
+        if (m.images) msg.images = m.images
+        merged.push(msg)
       }
     }
     const s = _state(sid)
@@ -605,8 +608,8 @@ async function confirmExport() {
   }
 }
 
-async function sendMessage(text: string) {
-  if (!text.trim()) return
+async function sendMessage(text: string, images?: ImageFile[]) {
+  if (!text.trim() && (!images || images.length === 0)) return
   
   const sid = activeSessionId.value
   const s = _state(sid)
@@ -656,7 +659,18 @@ async function sendMessage(text: string) {
   isStreaming.value = true
   _startStreamingWatchdog(sid)
   console.log(`[mini-ai] sendMessage: sid=${sid} isStreaming=true`)
-  s.messages = [...s.messages, { role: 'user', content: text, timestamp: _localTs() }, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
+  
+  // 构造用户消息（包含图片）
+  const userMsg: Message = { role: 'user', content: text, timestamp: _localTs() }
+  if (images && images.length > 0) {
+    userMsg.images = images.map(img => ({
+      dataUrl: img.dataUrl,
+      name: img.name,
+      size: img.size
+    }))
+  }
+  
+  s.messages = [...s.messages, userMsg, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
   _updateUI(s)
 
   emit('status-change', sid, 'generating')
@@ -674,7 +688,7 @@ async function sendMessage(text: string) {
   let wsOk = false
   try { wsOk = await ensureWs() } catch { wsOk = false }
   if (wsOk) {
-    wsChat(text, sid, props.workspace, planMode.value)
+    wsChat(text, sid, props.workspace, planMode.value, userMsg.images)
   } else {
     const s2 = _state(sid)
     const msg2 = s2.messages[s2.messages.length - 1]
@@ -710,6 +724,7 @@ function scrollToBottom() {
   if (chatContainer.value) {
     chatContainer.value.scrollTop = chatContainer.value.scrollHeight
     _isNearBottom = true
+    showScrollBottom.value = false
   }
 }
 
@@ -717,6 +732,7 @@ function _onChatScroll() {
   const el = chatContainer.value
   if (!el) return
   _isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < BOTTOM_THRESHOLD
+  showScrollBottom.value = !_isNearBottom
 }
 
 async function switchToSession(sid: string, ws?: string) {
@@ -797,6 +813,11 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
       />
 
     </div>
+    <button v-if="showScrollBottom" class="scroll-bottom-btn" @click="scrollToBottom" title="滚动到底部">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="6 9 12 15 18 9"></polyline>
+      </svg>
+    </button>
   </div>
   <div class="input-area">
     <InputBar v-model="draftText" :disabled="isStreaming" :is-streaming="isStreaming" @send="sendMessage" @stop="stopGeneration" />
@@ -856,6 +877,7 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   flex: 1;
   overflow-y: auto;
   padding: 0.5rem 0;
+  position: relative;
 }
 
 .msg-anim {
@@ -908,6 +930,36 @@ defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
   font-size: 0.95rem;
   margin-bottom: 2.5rem;
   font-style: italic;
+}
+
+.scroll-bottom-btn {
+  position: fixed;
+  bottom: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--accent);
+  color: white;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 4px 12px rgba(232, 145, 45, 0.4);
+  transition: all 0.2s ease;
+  z-index: 1000;
+}
+
+.scroll-bottom-btn:hover {
+  background: var(--accent-hover);
+  transform: translateX(-50%) scale(1.1);
+}
+
+.scroll-bottom-btn svg {
+  width: 22px;
+  height: 22px;
 }
 
 .empty-hints {

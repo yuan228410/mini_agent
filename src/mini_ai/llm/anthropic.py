@@ -1,5 +1,6 @@
 """Anthropic Claude 适配层 — 对外暴露 chat() / chat_stream()，签名对齐 llm.py"""
 import json
+import re
 import time
 
 import requests
@@ -34,7 +35,43 @@ def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
             continue
 
         if role == "user":
-            result.append({"role": "user", "content": content or ""})
+            # 处理图片消息（content 可能是列表）
+            if isinstance(content, list):
+                blocks = []
+                for item in content:
+                    if isinstance(item, dict):
+                        if item.get("type") == "text":
+                            blocks.append({"type": "text", "text": item.get("text", "")})
+                        elif item.get("type") == "image_url":
+                            # OpenAI 格式转 Anthropic 格式
+                            image_url = item.get("image_url", {})
+                            url = image_url.get("url", "")
+                            if url.startswith("data:"):
+                                # data:image/jpeg;base64,xxx -> 提取信息
+                                match = re.match(r"data:([^;]+);base64,(.+)", url)
+                                if match:
+                                    media_type = match.group(1)  # image/jpeg
+                                    data = match.group(2)  # base64 数据
+                                    # Anthropic 原生格式
+                                    blocks.append({
+                                        "type": "image",
+                                        "source": {
+                                            "type": "base64",
+                                            "media_type": media_type,
+                                            "data": data
+                                        }
+                                    })
+                            else:
+                                # URL 图片，Anthropic 也支持直接传 URL
+                                blocks.append({
+                                    "type": "image",
+                                    "source": {"type": "url", "url": url}
+                                })
+                    elif isinstance(item, str):
+                        blocks.append({"type": "text", "text": item})
+                result.append({"role": "user", "content": blocks})
+            else:
+                result.append({"role": "user", "content": content or ""})
 
         elif role == "assistant":
             tc = m.get("tool_calls")

@@ -472,7 +472,14 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 comp["history_db"].append("user", last_user.get("content", ""), session_id=comp_key, metadata=json.dumps(user_meta) if user_meta else "")
 
             if len(user_msgs) == 1 and messages[0].get("name", "") in ("", "新会话"):
-                auto_name = user_msgs[0].get("content", "")[:50]
+                # 处理多模态消息（content 可能是 list）
+                first_content = user_msgs[0].get("content", "")
+                if isinstance(first_content, list):
+                    text_parts = [p.get("text", "") for p in first_content if isinstance(p, dict) and p.get("type") == "text"]
+                    auto_name = " ".join(text_parts)[:50]
+                else:
+                    auto_name = first_content[:50]
+                
                 if auto_name:
                     messages[0]["name"] = auto_name
                     _save_session_name(base, comp_key, auto_name)
@@ -784,13 +791,28 @@ async def chat_ws_endpoint(ws: WebSocket):
             except Exception as e:
                 logger.warning(f'[Web] _send failed: {e}, event={data.get("event")}')
 
-    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None):
-        logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name}")
+    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list | None = None):
+        logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0}")
         session_key = _cache_key(username, ws_name, sid)
         base = _resolve_base(username, ws_name)
         messages = _get_or_create_session(username, sid, base, ws_name)[1]
         ts = now_ts()
-        messages.append({"role": "user", "content": user_message, "timestamp": ts})
+        
+        # 构造用户消息（可能包含图片）
+        user_msg: dict = {"role": "user", "content": user_message, "timestamp": ts}
+        if images and len(images) > 0:
+            # 转换为 OpenAI 格式：content 是列表
+            content_blocks = [{"type": "text", "text": user_message}]
+            for img in images:
+                data_url = img.get("dataUrl", "")
+                if data_url.startswith("data:"):
+                    content_blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url}
+                    })
+            user_msg["content"] = content_blocks
+        
+        messages.append(user_msg)
         _get_or_create_components(username, sid, base, ws_name)
 
         queue: asyncio.Queue = asyncio.Queue()
@@ -898,7 +920,8 @@ async def chat_ws_endpoint(ws: WebSocket):
                     user_message = data.get("message", "").strip()
                     username = _ws_username
                     session_id = data.get("session_id")
-                    if not user_message:
+                    images = data.get("images")  # 获取图片数据
+                    if not user_message and not images:
                         await _send({"event": "error", "data": {"error": "消息不能为空"}})
                         continue
 
@@ -917,7 +940,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         await _send({"event": "error", "data": {"error": "该会话正在生成中", "session_id": sid}})
                         continue
 
-                    task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name))
+                    task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, images))
                     _active_tasks[task_key] = task
 
                 except asyncio.TimeoutError:
@@ -985,8 +1008,28 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
     history = []
     for m in non_system:
         entry: dict = {"role": m["role"]}
-        if m.get("content"):
-            entry["content"] = m["content"]
+        content = m.get("content")
+        
+        # 处理多模态消息（content 可能是 list）
+        if isinstance(content, list):
+            # 提取文本和图片
+            text_parts = []
+            images = []
+            for part in content:
+                if isinstance(part, dict):
+                    if part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif part.get("type") == "image_url":
+                        img_url = part.get("image_url", {}).get("url", "")
+                        if img_url:
+                            images.append({"dataUrl": img_url, "name": "", "size": 0})
+            entry["content"] = "\n".join(text_parts)
+            if images:
+                entry["images"] = images
+        else:
+            if content:
+                entry["content"] = content
+        
         if m.get("timestamp"):
             entry["timestamp"] = m["timestamp"]
         if m.get("thinking"):

@@ -71,6 +71,7 @@ export interface HistoryMessage {
   tool_calls?: any[]
   role: string
   content?: string
+  images?: ImageData[]
   thinking?: any
   timestamp?: string
 }
@@ -256,11 +257,18 @@ export function wsSend(data: object) {
   }
 }
 
-export function wsChat(message: string, sessionId?: string, workspace?: string, planMode?: boolean) {
+export interface ImageData {
+  dataUrl: string
+  name: string
+  size: number
+}
+
+export function wsChat(message: string, sessionId?: string, workspace?: string, planMode?: boolean, images?: ImageData[]) {
   const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
   if (sessionId) chatMsg.session_id = sessionId
   if (workspace) chatMsg.workspace = workspace
   if (planMode) chatMsg.plan_mode = true
+  if (images && images.length > 0) chatMsg.images = images
   wsSend(chatMsg)
 }
 

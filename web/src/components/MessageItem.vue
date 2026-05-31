@@ -4,6 +4,7 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
+import type { ImageData } from '../api'
 
 marked.use({
   breaks: true,
@@ -14,6 +15,7 @@ const props = defineProps<{
   message: {
     role: string
     content: string
+    images?: ImageData[]
     thinking?: { chars: number; elapsed: number; content: string }
     tools?: { name: string; args: string; result: string; elapsed: number }[]
     streaming?: boolean
@@ -56,6 +58,15 @@ const timeLabel = computed(() => {
   if (!ts) return ''
   return ts.length > 2 ? ts.slice(2).replace('T', ' ') : ts
 })
+
+function openImage(dataUrl: string) {
+  // 在新窗口打开图片
+  const win = window.open()
+  if (win) {
+    win.document.write(`<html><head><title>图片预览</title></head><body style="margin:0;display:flex;justify-content:center;align-items:center;min-height:100vh;background:#1a1a1a;"><img src="${dataUrl}" style="max-width:100%;max-height:100vh;object-fit:contain;"></body></html>`)
+    win.document.close()
+  }
+}
 </script>
 
 <template>
@@ -72,6 +83,14 @@ const timeLabel = computed(() => {
     </div>
     <ThinkingBlock v-if="message.thinking" :thinking="message.thinking" />
     <ToolCallBlock v-for="(tool, i) in message.tools" :key="i" :tool="tool" />
+    
+    <!-- 图片显示 -->
+    <div v-if="message.images && message.images.length > 0" class="message-images">
+      <div v-for="(img, i) in message.images" :key="i" class="message-image">
+        <img :src="img.dataUrl" :alt="img.name" @click="openImage(img.dataUrl)" />
+      </div>
+    </div>
+    
     <div v-if="message.content" class="message-body" v-html="renderedContent"></div>
     <span v-if="message.streaming" class="streaming-cursor"></span>
   </div>
@@ -260,5 +279,33 @@ const timeLabel = computed(() => {
 .message--user .message-body {
   color: var(--fg);
   text-align: left;
+}
+
+.message-images {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.message-image {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.message-image:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.message-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 </style>

@@ -21,6 +21,8 @@
 | `edit_file(path, old_string, new_string)` | search-and-replace 模式编辑，只替换第一个匹配 |
 | `search_files(pattern, path?, include?, max_results?)` | 文件内容搜索（grep），支持正则和 glob 过滤 |
 | `list_dir(path?, recursive?, max_depth?)` | 目录列表，支持递归展示 |
+| `read_image(path)` | 读取本地图片文件并转换为 base64 格式，支持 PNG/JPEG/GIF/WebP，大图自动压缩 |
+
 
 ### 命令执行
 
@@ -81,9 +83,24 @@ config(action="reload")
 ### 子代理
 
 | 工具 | 说明 |
-|------|------|
-| `dispatch_subagent(type, task, inputs?)` | 派遣子代理执行独立任务。可用类型：coder / researcher / reviewer / tester / planner。`inputs` 参数支持按 `{key}` 占位符链式传递前置结果 |
+|---|---|
+| `dispatch_subagent(type, task, inputs?)` | 派遣子代理执行独立任务。可用类型：coder / researcher / reviewer / tester / planner / **vision**。`inputs` 参数支持按 `{key}` 占位符链式传递前置结果 |
 | `register_subagent(name, description, prompt, tools?, max_turns?)` | 对话中动态创建并注册新的子代理类型，立即可用 |
+
+**vision 子代理自动处理图片 URL：**
+
+```python
+# 无需手动下载图片
+dispatch_subagent(type="vision", task="分析这张图片 https://example.com/image.png")
+
+# 自动完成：
+# 1. 检测 task 中的图片 URL
+# 2. 下载到临时目录
+# 3. 压缩大图（5.7MB → 62KB）
+# 4. 转换为 base64
+# 5. 派遣 vision 分析
+# 6. 清理临时文件
+```
 
 ### 多 Agent 协作
 

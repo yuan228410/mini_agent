@@ -172,6 +172,21 @@ logging:
 |------|--------|------|
 | `max_result_chars` | `8000` | 工具返回值截断长度 |
 
+### image
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `max_size` | `10485760` | 最大图片文件大小（10MB） |
+| `compress_threshold` | `512000` | 压缩阈值（500KB），超过则自动压缩 |
+| `compress_max_dimension` | `800` | 压缩后最大边长（像素） |
+| `compress_quality` | `85` | JPEG 压缩质量（1-100） |
+
+**图片自动压缩：**
+- 超过 `compress_threshold` 的图片自动压缩
+- 压缩后最长边不超过 `compress_max_dimension`
+- 压缩为 JPEG 格式，质量为 `compress_quality`
+- 支持 PNG、JPEG、GIF、WebP、BMP 格式
+
 ### thinking
 
 | 参数 | 默认值 | 说明 |
@@ -232,6 +247,30 @@ logging:
 ### skill_paths
 
 额外技能搜索路径（只读），安装的技能始终存入主目录 `~/.mini_ai/skills/`。
+
+### image
+
+图片处理配置，用于 `read_image` 工具和 vision 子代理。
+
+|| 参数 | 默认值 | 说明 |
+||------|--------|------|
+|| `max_size` | `10485760` | 最大图片文件大小（字节），默认 10MB |
+|| `compress_threshold` | `512000` | 压缩阈值（字节），超过则自动压缩，默认 500KB |
+|| `compress_max_dimension` | `800` | 压缩后最大边长（像素），默认 800 |
+|| `compress_quality` | `85` | JPEG 压缩质量（1-100），默认 85 |
+
+### subagent_models
+
+子代理模型映射，为特定子代理类型指定使用的模型。
+
+```yaml
+subagent_models:
+  vision: claude          # vision 子代理使用 claude 模型处理图片分析
+  # researcher: deepseek  # researcher 子代理使用 deepseek 模型
+  # planner: claude       # planner 子代理使用 claude 模型
+```
+
+映射的模型名称必须是 `models` 中定义的模型名。
 
 ### logging
 

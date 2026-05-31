@@ -119,6 +119,22 @@ tool:
   max_result_chars: 8000  # 工具输出最大字符数，超出截断，默认 8000
                           # 上下文大的模型可适当调大，如 16000
 
+# ── 图片处理配置 ───────────────────────────────────────────────
+image:
+  max_size: 10485760          # 最大图片文件大小（字节），默认 10MB
+  compress_threshold: 512000  # 压缩阈值（字节），超过则压缩，默认 500KB
+  compress_max_dimension: 800 # 压缩后最大边长（像素），默认 800
+  compress_quality: 85        # JPEG 压缩质量（1-100），默认 85
+
+# ── 子代理模型映射 ─────────────────────────────────────────────
+# 为特定子代理类型指定使用的模型（必须是 models 中定义的名称）
+# 例如：vision 子代理使用 claude 模型处理图片分析任务
+subagent_models:
+  vision: claude          # vision 子代理使用 claude 模型
+  # 可添加更多子代理模型映射
+  # researcher: deepseek
+  # planner: claude
+
 # ── 运行器配置 ────────────────────────────────────────────────
 runner:
   context_usage_limit: 0.88  # 上下文使用率警戒线，超则提前退出，默认 0.88

@@ -7,7 +7,7 @@ from ..config import TOOL
 from datetime import datetime, timezone, timedelta
 from ..logger import logger
 
-from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
+from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 from .cache import get_tool_cache
 from ..utils import now_ts
 
@@ -287,7 +287,7 @@ class ToolRegistry:
 # ── 模块级默认实例 ──
 
 _registry = ToolRegistry()
-_registry.add_tools(read_file, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
+_registry.add_tools(read_file, read_image, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
 
 # ── 向后兼容的模块级函数 ──
 
