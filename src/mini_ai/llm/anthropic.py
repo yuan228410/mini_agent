@@ -12,6 +12,7 @@ from .base import (
     estimate_tokens, estimate_messages_tokens,
 )
 from ..logger import logger
+from ..exceptions import LLMError
 
 
 def _get_thinking(ctx=None):
@@ -192,12 +193,12 @@ def chat(messages, tools=True, ctx=None):
 
     try:
         data = response.json()
-    except ValueError:
+    except ValueError as e:
         logger.error(f"[Anth✗] 响应解析失败: {response.text[:500]}")
-        return None
+        raise LLMError(f"响应解析失败: {e}", status_code=getattr(response, "status_code", 0))
     if not isinstance(data, dict):
         logger.error(f"[Anth✗] 响应格式异常: {type(data)}")
-        return None
+        raise LLMError(f"响应格式异常: {type(data).__name__}", status_code=getattr(response, "status_code", 0))
     usage = data.get("usage", {})
     us = get_usage()
     inp = usage.get("input_tokens", 0)

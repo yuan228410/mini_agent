@@ -5,16 +5,17 @@ import json
 import re
 import threading
 import time
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from ..config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
 from ..logger import logger
 from .prompts import build_team_prompt
+from ..utils import now_ts
 
 _BASE_TOOL_NAMES = tuple(TEAMMATE["base_tools"])
 _MAX_TEAMMATES = TEAMMATE["max_teammates"]
 _IDLE_TIMEOUT = TEAMMATE.get("idle_timeout", 300)
-
 
 class TeammateManager:
     """队友持久化管理，配置持久到 team_config.json"""
@@ -129,6 +130,7 @@ class TeammateManager:
         from ..tools.team_tools import set_caller
 
         set_caller(name)
+        
 
         tm_display = None
         ctx = None
@@ -161,16 +163,20 @@ class TeammateManager:
         )
         system_prompt = team_rules + "\n\n---\n\n" + base_prompt if base_prompt else team_rules
 
-
+        _ts = now_ts()
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": prompt, "timestamp": _ts},
         ]
         has_work = True
         ev = self._wake_events.get(name)
         if not ev:
             logger.error(f"[队友✗] {name} wake event 缺失，线程退出")
             self._set_status(name, "offline")
+            # 手动清理资源（因为还没进入 try-except-finally）
+            with self.lock:
+                self.threads.pop(name, None)
+                self._wake_events.pop(name, None)
             return
 
         try:
@@ -188,6 +194,7 @@ class TeammateManager:
                 messages.append({
                     "role": "user",
                     "content": "<inbox>\n" + json.dumps(msg, ensure_ascii=False, indent=2) + "\n</inbox>",
+                    "timestamp": now_ts(),
                 })
                 has_work = True
 
@@ -201,8 +208,9 @@ class TeammateManager:
                 result = run_agent(messages, max_turns=TEAMMATE["max_turns"], tool_names=tool_names,
                                      context_length=MODEL_CONFIG.get("context_length", 256000), ctx=ctx)
             except Exception as exc:
-                logger.error(f"[队友✗] {name} 异常: {exc}")
-                self.bus.send(name, "lead", f"Error: 执行异常 {exc}")
+                logger.error(f"[队友✗] {name} 异常: {exc}", exc_info=True)
+                # 异常信息通过 bus 发送给 lead，不会吞掉
+                self.bus.send(name, "lead", f"⚠ 队友 {name} 执行异常: {type(exc).__name__}: {exc}")
                 result = None
 
             if not result:
@@ -211,7 +219,7 @@ class TeammateManager:
 
             max_history = TEAMMATE.get('max_history', 20)
             if len(messages) > max_history:
-                messages = [messages[0]] + messages[-(max_history - 1):]
+                messages[:] = [messages[0]] + messages[-(max_history - 1):]
             logger.info(f"[队友■] {name} 空闲，等待 inbox")
             self._set_status(name, "idle")
             has_work = False
@@ -231,6 +239,7 @@ class TeammateManager:
                         messages.append({
                             "role": "user",
                             "content": "<inbox>\n" + json.dumps(msg, ensure_ascii=False, indent=2) + "\n</inbox>",
+                            "timestamp": now_ts(),
                         })
                         has_work = True
                     if has_work:
@@ -242,6 +251,12 @@ class TeammateManager:
         except Exception as exc:
             logger.error(f"[队友✗] {name} 未预期异常，线程退出: {exc}", exc_info=True)
             self._set_status(name, "offline")
+        finally:
+            # 清理线程资源
+            with self.lock:
+                self.threads.pop(name, None)
+                self._wake_events.pop(name, None)
+            logger.info(f"[队友 cleanup] {name} 线程资源已清理")
 
     def list_all(self) -> str:
         with self.lock:

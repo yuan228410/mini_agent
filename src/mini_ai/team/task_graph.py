@@ -20,6 +20,7 @@ class TaskNode:
     retry_count: int = 0
     max_retry: int = 1
     timeout: int = 0  # 单任务超时秒数，0 表示使用默认 600s
+    fail_on_dep_failure: bool = True  # 依赖失败时是否标记为失败（True=失败，False=仍可执行）
 
 
 class TaskGraph:
@@ -37,17 +38,40 @@ class TaskGraph:
         for node in self.nodes.values():
             if node.status != "pending":
                 continue
-            deps_met = all(
-                self.nodes[dep].status in ("done", "failed")
+            
+            # 检查依赖状态
+            deps_done = all(
+                self.nodes[dep].status == "done"
                 for dep in node.depends_on
                 if dep in self.nodes
             )
-            if not deps_met:
+            deps_failed = any(
+                self.nodes[dep].status == "failed"
+                for dep in node.depends_on
+                if dep in self.nodes
+            )
+            
+            # 依赖有失败的情况
+            if deps_failed:
+                if node.fail_on_dep_failure:
+                    # 标记为失败（传播失败）
+                    node.status = "failed"
+                    failed_deps = [dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == "failed"]
+                    node.error = f"依赖任务失败: {', '.join(failed_deps)}"
+                    logger.warning(f"[DAG] {node.id} 因依赖失败而标记失败: {node.error}")
+                    continue
+                # 否则继续检查是否可以执行
+            
+            # 依赖未全部完成
+            if not deps_done and not deps_failed:
                 continue
+            
+            # 检查条件
             if node.condition and not self._evaluate_condition(node):
                 node.status = "skipped"
                 logger.info(f"[DAG] {node.id} 条件不满足，跳过")
                 continue
+            
             ready.append(node)
         return ready
 

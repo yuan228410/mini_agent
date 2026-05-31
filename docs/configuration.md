@@ -239,3 +239,50 @@ logging:
 |------|--------|------|
 | `level` | `WARNING` | 终端日志级别 |
 | `file_level` | `DEBUG` | 文件日志级别（写入 `logs/YYYYMMDD.log`） |
+| `format` | `text` | 日志格式：`text`（人类可读）或 `json`（结构化，便于 ELK 分析） |
+
+**结构化日志示例（format=json）：**
+
+```json
+{"timestamp": "2026-05-31T12:00:00Z", "level": "INFO", "logger": "mini_ai", "message": "工具执行完成", "event": "tool_call", "tool_name": "read_file"}
+```
+
+**使用方式：**
+
+```python
+from mini_ai.logger_structured import setup_logging
+
+# JSON 模式
+logger = setup_logging({"format": "json", "level": "INFO"})
+
+# 结构化日志
+logger.info("message", extra={"extra_data": {"event": "tool_call", "tool_name": "read_file"}})
+```
+
+---
+
+## 配置热加载
+
+CLI/Web 启动时自动开启配置文件监听，修改 `~/.mini_ai/config.yaml` 后自动重新加载，无需重启进程。
+
+**实现机制：**
+
+- `ConfigWatcher`（位于 `src/mini_ai/config.py`）基于文件 mtime 轮询检测变更
+- 检测到变更后调用 `init_config()` 重新加载配置
+- 配置错误时保留旧配置并输出警告
+
+**手动触发热加载：**
+
+```python
+# 通过 config 工具
+config(action="reload")
+
+# 或直接调用
+from mini_ai.config import init_config
+init_config()
+```
+
+**注意事项：**
+
+- 修改 `active_model` 后可通过 `/model` 命令或 `config reload` 即时切换
+- 修改 `models`、`mcp`、`plan` 等配置后需重启生效（已在工具返回中提示）

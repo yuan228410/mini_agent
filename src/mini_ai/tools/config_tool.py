@@ -8,14 +8,14 @@ definition = {
     "type": "function",
     "function": {
         "name": "config",
-        "description": "读取或修改 mini-ai 配置。action=read 读取指定路径的配置值；action=write 修改配置并持久化到 config.yaml；action=list 返回配置结构概览。修改后需重启生效的项会标注。",
+        "description": "读取或修改 mini-ai 配置。action=read 读取指定路径的配置值；action=write 修改配置并持久化到 config.yaml；action=list 返回配置结构概览；action=reload 热加载配置（无需重启）。修改后需重启生效的项会标注。",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["read", "write", "list"],
-                    "description": "read=读取配置值, write=修改配置值, list=列出配置结构"
+                    "enum": ["read", "write", "list", "reload"],
+                    "description": "read=读取配置值, write=修改配置值, list=列出配置结构, reload=热加载配置"
                 },
                 "path": {
                     "type": "string",
@@ -127,6 +127,16 @@ def execute(args: dict) -> str:
 
     if action == "list":
         return _build_self_overview() + "\n\n" + _CONFIG_STRUCTURE
+    
+    if action == "reload":
+        from ..config import init_config, MODEL_CONFIG
+        try:
+            init_config()
+            active_model = _raw.get("active_model", "?")
+            model_name = MODEL_CONFIG.get("model", "?")
+            return f"✓ 配置已重新加载\n当前模型: {active_model} ({model_name})"
+        except Exception as e:
+            return f"Error: 配置重载失败 - {e}"
 
     if action == "read":
         if not path:

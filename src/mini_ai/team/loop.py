@@ -3,9 +3,9 @@ import time
 
 from ..config import TIMEOUTS
 from ..logger import logger
+from ..utils import now_ts
 
 REPLY_INSTRUCTION = "队友回禀已收到。先 blackboard_read 读黑板结果，再回复。"
-
 
 def format_inbox_messages(inbox: list[dict]) -> str | None:
     """将 inbox 消息列表格式化为回禀文本，过滤 shutdown_response。"""
@@ -18,7 +18,6 @@ def format_inbox_messages(inbox: list[dict]) -> str | None:
         parts.append(f"[{sender} 回禀]\n{content}")
     return "\n\n".join(parts) if parts else None
 
-
 def poll_inbox(bus, name="lead"):
     msgs = bus.read_inbox(name)
     if not msgs:
@@ -28,13 +27,13 @@ def poll_inbox(bus, name="lead"):
         logger.info(f"[回禀←] {name} 收到回禀")
     return result
 
-
 def has_active_teammates(team_mgr):
     with team_mgr.lock:
         return any(m["status"] == "working" for m in team_mgr.config.get("members", []))
 
-
 def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, history_db=None, ctx=None):
+    from datetime import datetime, timezone, timedelta
+    
     # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只等队友完成 + 处理 loop 退出后到达的消息
     if not has_active_teammates(team_mgr):
         return None
@@ -56,8 +55,9 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
         inbox_text = poll_inbox(bus)
         if inbox_text:
             disp.info("📬 收到队友回禀")
-            messages.append({"role": "user", "content": inbox_text})
-            messages.append({"role": "user", "content": REPLY_INSTRUCTION})
+            _ts = now_ts()
+            messages.append({"role": "user", "content": inbox_text, "timestamp": _ts})
+            messages.append({"role": "user", "content": REPLY_INSTRUCTION, "timestamp": _ts})
             if history_db:
                 history_db.append("user", inbox_text)
             last_msg = run_loop_fn(messages, tools, inject_fn, disp, ctx=ctx)
@@ -67,8 +67,9 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
     final = poll_inbox(bus)
     if final:
         disp.info("📬 收到队友回禀")
-        messages.append({"role": "user", "content": final})
-        messages.append({"role": "user", "content": REPLY_INSTRUCTION})
+        _ts = now_ts()
+        messages.append({"role": "user", "content": final, "timestamp": _ts})
+        messages.append({"role": "user", "content": REPLY_INSTRUCTION, "timestamp": _ts})
         if history_db:
             history_db.append("user", final)
         last_msg = run_loop_fn(messages, tools, inject_fn, disp, ctx=ctx)
@@ -80,7 +81,6 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
 
     return last_msg
 
-
 def shutdown_teammates(bus, team_mgr):
     targets = []
     with team_mgr.lock:
@@ -91,7 +91,6 @@ def shutdown_teammates(bus, team_mgr):
         logger.info(f"[自动shutdown] {len(targets)} 位队友: {', '.join(targets)}")
         for name in targets:
             bus.send("lead", name, "任务结束，请退出。", "shutdown_request")
-
 
 def cleanup_inbox(bus, delay=0.5):
     """清理 lead inbox 残留消息（shutdown_response 等）。

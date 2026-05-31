@@ -13,6 +13,7 @@ from .base import (
 )
 from ..logger import logger
 from ..tools import get_definitions
+from ..exceptions import LLMError
 
 _get_usage = get_usage
 
@@ -114,23 +115,24 @@ def chat(messages, tools=True, ctx=None):
 
     try:
         result = response.json()
-    except ValueError:
+    except ValueError as e:
         logger.error(f"[LLM✗] 响应解析失败: {response.text}")
-        return None
+        raise LLMError(f"响应解析失败: {e}", status_code=getattr(response, "status_code", 0))
 
     if "choices" not in result:
+        err_msg = result.get("error", {}).get("message", str(result))
         logger.error(f"[LLM✗] API Error: {result}")
-        return None
+        raise LLMError(f"API 错误: {err_msg}", status_code=getattr(response, "status_code", 0))
 
     elapsed = time.monotonic() - t0
     choices = result.get("choices", [])
     if not choices:
         logger.error(f"[LLM✗] API 返回空 choices: {result}")
-        return None
+        raise LLMError("API 返回空 choices", status_code=getattr(response, "status_code", 0))
     msg = choices[0].get("message", {})
     if not msg:
         logger.error(f"[LLM✗] API 返回空 message: {result}")
-        return None
+        raise LLMError("API 返回空 message", status_code=getattr(response, "status_code", 0))
     reasoning = msg.pop("reasoning_content", None)
     if reasoning:
         msg["thinking"] = reasoning

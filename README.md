@@ -36,18 +36,20 @@ uv run mini-ai --web
 | 📁 **工作空间** | 按项目隔离记忆/会话/历史，CLI 自动绑定 CWD | [CLI 命令](docs/cli-commands.md#工作空间) |
 | 🎭 **自定义人设** | 编辑 `SOUL.md` / `RULES.md` 改变 Agent 角色 | [架构设计](docs/architecture.md) |
 
+| 🧪 **测试覆盖** | 115 个测试用例，覆盖 cache/utils/runner/workspace/web/concurrency | [测试报告](tests/) |
 ## 项目结构
 
 ```
 src/mini_ai/
 ├── main.py              # 主循环编排
-├── config.py            # 配置加载
+├── config.py            # 配置加载，支持热加载
+├── utils.py             # 公共工具函数（时间戳生成等）
 ├── llm/                 # LLM 通信层（OpenAI / Anthropic 双协议）
 ├── cli/                 # CLI 交互层（终端渲染 + 斜杠命令）
-├── runner.py            # 统一 Agent 执行循环
+├── runner/              # Agent 执行循环（state + executor + error_handler + loop）
 ├── context.py           # 系统提示词组装
 ├── memory/              # 记忆系统（存储 + 压缩 + 历史 DB + 会话管理）
-├── tools/               # 工具系统（ToolRegistry 注册/分发）
+├── tools/               # 工具系统（ToolRegistry 注册/分发 + 缓存）
 ├── team/                # 多 Agent 编排（队友 + 黑板 + DAG）
 ├── subagents/           # 子代理定义
 ├── web/                 # Web 界面（FastAPI + Vue 3）

@@ -1,6 +1,7 @@
 """文件浏览与预览 API"""
 import os
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from ...utils import _UTC8
 from pathlib import Path
 
 from fastapi import APIRouter, Query
@@ -10,8 +11,6 @@ from ...config import DATA_DIR, user_data_dir
 from ...workspace import WorkspaceManager
 
 router = APIRouter()
-
-_UTC8 = timezone(timedelta(hours=8))
 
 def _get_ws_mgr(username: str) -> WorkspaceManager:
     from .workspaces import _get_mgr
@@ -66,7 +65,6 @@ _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", "dist", 
 
 _WEB_CWD = Path.cwd()
 
-
 def _get_project_root(workspace: str, username: str) -> Path | None:
     ws = _get_ws_mgr(username).get(workspace)
     if not ws:
@@ -79,7 +77,6 @@ def _get_project_root(workspace: str, username: str) -> Path | None:
         return _WEB_CWD
     return None
 
-
 def _safe_resolve(root: Path, rel_path: str) -> Path | None:
     if ".." in rel_path.split("/"):
         return None
@@ -88,7 +85,6 @@ def _safe_resolve(root: Path, rel_path: str) -> Path | None:
     if not str(resolved).startswith(str(root_resolved)):
         return None
     return resolved
-
 
 def _is_binary_file(filepath: Path, ext: str) -> bool:
     """检测文件是否为二进制。先查扩展名黑名单，再采样内容。"""
@@ -106,10 +102,8 @@ def _is_binary_file(filepath: Path, ext: str) -> bool:
     except Exception:
         return False
 
-
 def _format_time(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=_UTC8).isoformat()
-
 
 @router.get("/files/list")
 async def list_files(
@@ -166,7 +160,6 @@ async def list_files(
         "breadcrumb": breadcrumb,
         "items": items,
     }
-
 
 @router.get("/files/read")
 async def read_file(
@@ -234,7 +227,6 @@ async def read_file(
         "is_image": False,
     }
 
-
 @router.get("/files/raw")
 async def raw_file(
     path: str = Query(...),
@@ -255,7 +247,6 @@ async def raw_file(
     ext = target.suffix.lower()
     media_type = _IMAGE_MIME.get(ext, "application/octet-stream")
     return FileResponse(target, media_type=media_type)
-
 
 @router.get("/files/search")
 async def search_files(
@@ -303,7 +294,6 @@ async def search_files(
 
     results.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
     return {"results": results[:100], "query": query}
-
 
 @router.get("/files/browse")
 async def browse_dirs(path: str = Query(default=""), username: str = Query(...)):

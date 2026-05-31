@@ -26,7 +26,12 @@ def execute(args: dict) -> str:
     if not command or not isinstance(command, str):
         return "Error: 缺少 command 参数"
     timeout = args.get("timeout", 30)
-    cwd = args.get("cwd") or None
+    
+    # 优先使用传入的 cwd，否则从 ContextVar 获取项目路径
+    cwd = args.get("cwd")
+    if not cwd:
+        from .dispatch_subagent import get_project_path
+        cwd = get_project_path() or None
     try:
         timeout = int(timeout)
     except (TypeError, ValueError):
@@ -35,7 +40,7 @@ def execute(args: dict) -> str:
     logger.info(f"[执行→] {command} (timeout={timeout}s, cwd={cwd})")
     try:
         result = subprocess.run(
-            command, shell=True, capture_output=True, text=True,
+            command, shell=True, capture_output=True, text=True, errors="replace",
             timeout=timeout, cwd=cwd,
         )
         parts = []

@@ -260,6 +260,13 @@ def main():
     parser.add_argument("--port", type=int, default=8765, help="Web 端口 (默认 8765)")
     args = parser.parse_args()
 
+    # 启动配置热加载
+    from .config import start_config_watcher
+    start_config_watcher()
+    import atexit
+    from .config import stop_config_watcher
+    atexit.register(stop_config_watcher)
+
     # ── Web 模式 ──
     if args.web:
         from .web.app import create_app

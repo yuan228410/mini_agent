@@ -1,4 +1,5 @@
 """DAG 驱动的多 agent 编排器"""
+import contextvars
 import threading
 import time
 
@@ -7,7 +8,7 @@ from ..config import TEAMMATE
 from ..logger import logger
 from .prompts import build_team_prompt
 from .task_graph import TaskGraph, TaskNode
-
+from ..utils import now_ts
 
 class Orchestrator:
 
@@ -38,9 +39,11 @@ class Orchestrator:
             for task in ready:
                 self.graph.mark_running(task.id)
                 prompt = self.graph.resolve_prompt(task)
+                # 捕获当前上下文（包含 ContextVar）
+                ctx = contextvars.copy_context()
                 thread = threading.Thread(
-                    target=self._execute_task,
-                    args=(task, prompt),
+                    target=ctx.run,
+                    args=(self._execute_task, task, prompt),
                     daemon=True,
                 )
                 thread.start()
@@ -68,19 +71,32 @@ class Orchestrator:
 
     def _execute_task(self, task: TaskNode, prompt: str):
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+        import threading
 
         logger.info(f"[Orchestrator] 派遣 [{task.id}] → {task.agent}: {prompt[:80]}...")
 
         task_timeout = task.timeout or TEAMMATE.get('task_timeout', 600)
+        
+        # 创建取消事件
+        abort_event = threading.Event()
+        
+        # 注意：此方法已在 copy_context().run() 中执行，当前上下文正确
+        # 需要再次捕获上下文传递给 ThreadPoolExecutor 的新线程
+        ctx = contextvars.copy_context()
+        
+        def _run_with_abort():
+            # 在 ThreadPoolExecutor 的线程中恢复上下文
+            return ctx.run(self._run_task_internal, task, prompt, abort_event)
 
         executor = ThreadPoolExecutor(max_workers=1)
         try:
-            future = executor.submit(self._run_task, task, prompt)
+            future = executor.submit(_run_with_abort)
             try:
                 result = future.result(timeout=task_timeout)
                 error = None
             except FutureTimeoutError:
                 logger.warning(f"[Orchestrator] 任务 [{task.id}] 超时 ({task_timeout}s)")
+                abort_event.set()  # 通知任务停止
                 result = None
                 error = f"任务超时 ({task_timeout}s)"
             except Exception as exc:
@@ -100,19 +116,19 @@ class Orchestrator:
                 self._pending_results[task.id] = (None, "执行返回空结果")
             self._condition.notify()
 
-    def _run_task(self, task: TaskNode, prompt: str) -> str | None:
-        """执行单个任务：子代理或队友。"""
+    def _run_task_internal(self, task: TaskNode, prompt: str, abort_event: threading.Event) -> str | None:
+        """执行单个任务：子代理或队友，支持中断。"""
         if task.agent.startswith("subagent:"):
-            return self._run_subagent(task.agent[9:], prompt)
+            return self._run_subagent(task.agent[9:], prompt, abort_event)
         else:
-            return self._run_teammate(task.agent, prompt)
+            return self._run_teammate(task.agent, prompt, abort_event)
 
-    def _run_subagent(self, agent_type: str, prompt: str) -> str | None:
+    def _run_subagent(self, agent_type: str, prompt: str, abort_event: threading.Event = None) -> str | None:
         from ..tools.dispatch_subagent import execute as dispatch_exec
-        result = dispatch_exec({"type": agent_type, "task": prompt})
+        result = dispatch_exec({"type": agent_type, "task": prompt}, abort_event=abort_event)
         return result
 
-    def _run_teammate(self, agent_name: str, prompt: str) -> str | None:
+    def _run_teammate(self, agent_name: str, prompt: str, abort_event: threading.Event = None) -> str | None:
         if self.bus and self.manager:
             member = self.manager._find(agent_name)
             thread = self.manager.threads.get(agent_name)
@@ -130,28 +146,37 @@ class Orchestrator:
     def _wait_teammate_result(self, agent_name: str, timeout: int = 300) -> str | None:
         start = time.monotonic()
         _MISS = object()
+        result_key = f"{agent_name}_result"
+        
         while time.monotonic() - start < timeout:
-            remaining = timeout - (time.monotonic() - start)
-            self.blackboard.wait_for_change(timeout=min(remaining, 5.0))
-            result = self.blackboard.get(f"{agent_name}_result", default=_MISS)
+            # 先检查黑板和 inbox，避免错过在 wait 前已写入的结果
+            result = self.blackboard.get(result_key, default=_MISS)
             if result is not _MISS and result:
-                self.blackboard.put(f"{agent_name}_result", "", author="orchestrator")
+                self.blackboard.put(result_key, "", author="orchestrator")
                 return result
+            
             inbox = self.bus.read_inbox("workflow")
             if inbox:
                 for im in inbox:
                     if im.get("from") == agent_name:
                         return im.get("content", "")
+            
+            # 再等待变更
+            remaining = timeout - (time.monotonic() - start)
+            self.blackboard.wait_for_change(timeout=min(remaining, 5.0))
+        
         logger.warning(f"[Orchestrator] 等待队友 {agent_name} 超时")
         if self.bus:
             self.bus.send("workflow", agent_name, "任务超时，请停止当前工作。", "shutdown_request")
         return None
+        return self._run_oneoff_agent(agent_name, prompt, abort_event)
 
-    def _run_oneoff_agent(self, agent_name: str, prompt: str) -> str | None:
+    def _run_oneoff_agent(self, agent_name: str, prompt: str, abort_event: threading.Event = None) -> str | None:
         from ..runner import run_agent
         from ..config import TEAMMATE, DATA_DIR, SKILL_PATHS as _SP
         from ..context import ContextBuilder
         from ..skills import SkillLoader
+        from datetime import datetime, timezone, timedelta
 
         tool_names = list(TEAMMATE.get("base_tools", ["run_command", "web_fetch", "load_skill"])) + [
             "send_message", "list_teammates",
@@ -176,9 +201,10 @@ class Orchestrator:
         base_prompt = ctx_builder.build(skill_loader=_sl, exclude_character=True)
         system_prompt = team_rules + "\n\n---\n\n" + base_prompt if base_prompt else team_rules
 
+        _ts = now_ts()
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": prompt},
+            {"role": "user", "content": prompt, "timestamp": _ts},
         ]
 
         sub_display = None
@@ -198,14 +224,19 @@ class Orchestrator:
             from ..config import MODEL_CONFIG as _MC, RequestContext
             ctx = RequestContext(model_config=_MC, display=sub_display)
 
-        result = run_agent(
-            messages,
-            max_turns=TEAMMATE.get("max_turns", 20),
-            tool_names=tool_names,
-            context_length=self.context_length,
-            ctx=ctx,
-        )
-        return result
+        try:
+            result = run_agent(
+                messages,
+                max_turns=TEAMMATE.get("max_turns", 20),
+                tool_names=tool_names,
+                context_length=self.context_length,
+                ctx=ctx,
+                abort_event=abort_event,
+            )
+            return result
+        except Exception as e:
+            logger.error(f"[Orchestrator] oneoff agent {agent_name} 异常: {e}", exc_info=True)
+            return f"⚠ Agent 执行失败: {type(e).__name__}: {e}"
 
     def _summarize(self) -> str:
         lines = [self.graph.render_status(), "", "## 结果汇总", ""]

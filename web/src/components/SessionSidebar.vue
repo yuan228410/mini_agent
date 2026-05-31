@@ -121,8 +121,15 @@ async function newSessionFor(wsName: string | null) {
     const resp = await createSession(wsName || undefined)
     if (resp.session_id) {
       await loadSessionsFor(wsName)
+      
+      // 初始化会话状态（调用 ChatView 的初始化）
+      // 通过 switch-session 事件触发 ChatView 初始化
       activeSessionId.value = resp.session_id
       activeWorkspace.value = wsName
+      
+      // 保存工作空间到 localStorage
+      localStorage.setItem(WORKSPACE_KEY, wsName || '')
+      
       emit('switch-session', resp.session_id, wsName)
     }
   } catch {}
@@ -190,13 +197,21 @@ async function batchDelete() {
 async function doDelete(sid: string) {
   const ws = contextMenu.value?.ws || activeWorkspace.value
   contextMenu.value = null
+  
+  // 通知 ChatView 清理本地状态
+  // 通过自定义事件传递删除信号
+  window.dispatchEvent(new CustomEvent('session-delete', { detail: { sid, ws } }))
+  
   await deleteSession(sid, ws || undefined)
   await loadAllSessions()
+  
   if (activeSessionId.value === sid) {
     const all = getAllSessions()
     if (all.length > 0) {
       activeSessionId.value = all[0].session_id
       emit('switch-session', all[0].session_id, null)
+    } else {
+      activeSessionId.value = ''
     }
   }
 }
@@ -352,13 +367,20 @@ function getAllSessions(): SessionInfo[] {
   return all
 }
 
-function updateSessionStatus(sid: string, status: 'idle' | 'generating') {
+function updateSessionStatus(sid: string, status: 'idle' | 'generating' | 'connected' | 'disconnected') {
   for (const ws of workspaces.value) {
     const s = (wsSessions[ws.name] || []).find(s => s.session_id === sid)
-    if (s) { s.status = status; return }
+    if (s) { 
+      // 只更新 idle/generating 状态
+      if (status === 'idle' || status === 'generating') {
+        s.status = status
+      }
+      return
+    }
   }
   return null
 }
+
 
 function setActiveSession(sid: string) {
   activeSessionId.value = sid

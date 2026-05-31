@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
-  ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct,
+  ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct, isWsConnected,
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, getWorkspaces, exportSession,
   getSystemPrompt,
@@ -37,7 +37,7 @@ function _localTs(): string {
   const pad = (n: number) => String(n).padStart(2, '0')
   return [d.getFullYear(), pad(d.getMonth()+1), pad(d.getDate())].join('-') + 'T' + [pad(d.getHours()), pad(d.getMinutes()), pad(d.getSeconds())].join(':')
 }
-function _cacheKey(sid: string, ws?: string): string {
+function _cacheKey(sid: string, ws?: string | null): string {
   return `${ws || 'default'}:${sid}`
 }
 const _states = new Map<string, SessionState>()
@@ -77,6 +77,7 @@ let _scrollTimer: number | null = null
 let _isNearBottom = true
 let _streamingWatchdog: number | null = null
 let _lastWsEventTime = 0
+let _sessionDeleteHandler: ((e: Event) => void) | null = null  // 保存监听器引用
 const FLUSH_INTERVAL = 50
 const SCROLL_INTERVAL = 100
 const BOTTOM_THRESHOLD = 80
@@ -107,7 +108,20 @@ function _load(sid: string) {
   const s = _state(sid)
   if (sid === activeSessionId.value) {
     messages.value = s.messages.map(m => ({ ...m }))
-    isStreaming.value = s.isStreaming
+    
+    // 检查是否真的在生成（验证 WebSocket 状态和超时）
+    const isActiveGenerating = s.isStreaming && isWsConnected() && 
+      _lastWsEventTime > 0 && (Date.now() - _lastWsEventTime < STREAMING_TIMEOUT)
+    isStreaming.value = isActiveGenerating
+    
+    // 如果状态过期，清理流式标记
+    if (s.isStreaming && !isActiveGenerating) {
+      const last = s.messages[s.messages.length - 1]
+      if (last && last.streaming) last.streaming = false
+      s.isStreaming = false
+      console.log(`[mini-ai] 会话 ${sid} 流式状态已过期，自动清理`)
+    }
+    
     draftText.value = s.draftText
   }
 }
@@ -144,7 +158,11 @@ function _doFlush(sid?: string) {
     const s = _states.get(key)
     if (!s) return
     messages.value = [...s.messages]
-    isStreaming.value = s.isStreaming
+    
+    // 验证生成状态（与 _load 保持一致）
+    const isActiveGenerating = s.isStreaming && isWsConnected() && 
+      _lastWsEventTime > 0 && (Date.now() - _lastWsEventTime < STREAMING_TIMEOUT)
+    isStreaming.value = isActiveGenerating
   }
 }
 
@@ -162,6 +180,26 @@ let _initialized = false
 onMounted(async () => {
   _unsubWs = onWsEvent(handleWsEvent)
   ensureWs().catch(() => {})
+  
+  // 监听会话删除事件，清理本地状态
+  _sessionDeleteHandler = (e: Event) => {
+    const customEvent = e as CustomEvent<{ sid: string; ws: string | null }>
+    const { sid, ws } = customEvent.detail
+    const key = _cacheKey(sid, ws)
+    
+    if (_states.has(key)) {
+      _states.delete(key)
+      console.log(`[mini-ai] 已清理会话 ${sid} 的本地状态`)
+    }
+    
+    // 如果删除的是当前会话，清空 UI
+    if (sid === activeSessionId.value) {
+      messages.value = []
+      isStreaming.value = false
+      draftText.value = ''
+    }
+  }
+  window.addEventListener('session-delete', _sessionDeleteHandler as EventListener)
 })
 
 watch(() => props.workspace, async (ws) => {
@@ -181,6 +219,12 @@ onUnmounted(() => {
   if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
   if (_scrollTimer !== null) { clearTimeout(_scrollTimer); _scrollTimer = null }
   if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
+  
+  // 移除事件监听（使用保存的引用）
+  if (_sessionDeleteHandler) {
+    window.removeEventListener('session-delete', _sessionDeleteHandler as EventListener)
+    _sessionDeleteHandler = null
+  }
 })
 
 async function initSession(ws?: string) {
@@ -297,7 +341,35 @@ function _startStreamingWatchdog(sid: string) {
   }, STREAMING_TIMEOUT)
 }
 
-function handleWsEvent(event: WsEvent) {
+async function handleWsEvent(event: WsEvent) {
+  // 处理连接状态事件
+  if (event.event === 'connected') {
+    console.log('[mini-ai] WebSocket 已连接')
+    emit('status-change', activeSessionId.value, 'connected')
+    return
+  }
+  
+  if (event.event === 'disconnected') {
+    console.warn('[mini-ai] WebSocket 已断开', event.data)
+    emit('status-change', activeSessionId.value, 'disconnected')
+    return
+  }
+  
+  // 处理重连事件，重置所有会话的生成状态
+  if (event.event === 'reconnected') {
+    console.log('[mini-ai] WebSocket 已重连，重置所有会话状态')
+    _states.forEach((s, key) => {
+      s.isStreaming = false
+      if (s.messages.length > 0) {
+        const last = s.messages[s.messages.length - 1]
+        if (last && last.streaming) last.streaming = false
+      }
+    })
+    isStreaming.value = false
+    emit('status-change', activeSessionId.value, 'idle')
+    return
+  }
+  
   const sid = event.data?.session_id || activeSessionId.value
   const s = _state(sid)
 
@@ -534,8 +606,17 @@ async function confirmExport() {
 }
 
 async function sendMessage(text: string) {
-  if (!text.trim() || isStreaming.value) return
-
+  if (!text.trim()) return
+  
+  const sid = activeSessionId.value
+  const s = _state(sid)
+  
+  // 检查该会话是否正在生成（避免多会话并行冲突）
+  if (s.isStreaming) {
+    console.warn(`[mini-ai] 会话 ${sid} 正在生成中，拒绝发送`)
+    return
+  }
+  
   if (text === '/plan') {
     planMode.value = true
     sendPlan(activeSessionId.value)
@@ -549,8 +630,7 @@ async function sendMessage(text: string) {
     return
   }
   if (text.startsWith('/clear')) {
-    await resetChat(activeSessionId.value, props.workspace)
-    const s = _state(activeSessionId.value)
+    await resetChat(activeSessionId.value, props.workspace || undefined)
     s.messages = []
     messages.value = []
     await fetchConfig()
@@ -559,7 +639,6 @@ async function sendMessage(text: string) {
   if (text === '/prompt') {
     try {
       const resp = await getSystemPrompt(props.workspace || undefined)
-      const s = _state(activeSessionId.value)
       const promptContent = '📋 系统提示词（' + resp.length + ' 字符）：\n\n' + resp.system_prompt
       s.messages = [...s.messages, { role: 'assistant', content: promptContent, timestamp: _localTs() }]
       _updateUI(s)
@@ -569,10 +648,8 @@ async function sendMessage(text: string) {
     return
   }
 
-  const sid = activeSessionId.value
   draftText.value = ''  // 发送后清空草稿，再 save 确保落盘的是空值
   _save()
-  const s = _state(sid)
   s._currentContent = ''
   s._currentThinking = ''
   s.isStreaming = true

@@ -1,12 +1,10 @@
 """会话管理：命名保存、恢复、列表"""
 import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from ..utils import _UTC8
 from pathlib import Path
 
 from ..logger import logger
-
-_UTC8 = timezone(timedelta(hours=8))
-
 
 class SessionManager:
     def __init__(self, sessions_dir: Path):

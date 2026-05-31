@@ -87,7 +87,7 @@ export interface SessionInfo {
   preview: string
   created_at: string
   updated_at: string
-  status: 'idle' | 'generating'
+  status: 'idle' | 'generating' | 'connected' | 'disconnected'
 }
 
 export interface SessionsResponse {
@@ -119,6 +119,18 @@ let _ws: WebSocket | null = null
 let _wsConnected = false
 const _eventHandlers: ((event: WsEvent) => void)[] = []
 
+// 导出连接状态查询函数
+export function isWsConnected(): boolean {
+  return _wsConnected && _ws !== null && _ws.readyState === WebSocket.OPEN
+}
+
+// 重连配置
+const _WS_RECONNECT_DELAY = 1000
+const _WS_MAX_RECONNECT_DELAY = 30000
+let _wsReconnectAttempts = 0
+let _wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
+let _wsManuallyClosed = false
+
 function _wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${location.host}/api/chat/ws`
@@ -135,6 +147,7 @@ export async function ensureWs(): Promise<boolean> {
   }
 
   const gen = ++_wsGeneration
+  _wsManuallyClosed = false
 
   return new Promise<boolean>((resolve) => {
     const ws = new WebSocket(_wsUrl())
@@ -151,8 +164,25 @@ export async function ensureWs(): Promise<boolean> {
     ws.onopen = () => {
       clearTimeout(timer)
       _wsConnected = true
+      
+      // 判断是重连还是首次连接（在重置计数之前判断）
+      const isReconnect = _wsReconnectAttempts > 0
+      
+      // 重置重连计数
+      _wsReconnectAttempts = 0
+      
       const u = getUsername()
       if (u) ws.send(JSON.stringify({ type: 'login', username: u }))
+      
+      // 通知前端连接已恢复
+      for (const handler of _eventHandlers) {
+        if (isReconnect) {
+          handler({ event: 'reconnected', data: {} })
+        } else {
+          handler({ event: 'connected', data: {} })
+        }
+      }
+      
       resolve(true)
     }
 
@@ -172,12 +202,44 @@ export async function ensureWs(): Promise<boolean> {
       resolve(false)
     }
 
-    ws.onclose = () => {
+    ws.onclose = (event) => {
       clearTimeout(timer)
       _wsConnected = false
       if (gen === _wsGeneration) _ws = null
+      
+      // 通知前端连接已断开
+      for (const handler of _eventHandlers) {
+        handler({ event: 'disconnected', data: { code: event.code, reason: event.reason } })
+      }
+      
+      // 自动重连（非手动关闭时）
+      if (!_wsManuallyClosed && gen === _wsGeneration) {
+        _scheduleReconnect()
+      }
     }
   })
+}
+
+function _scheduleReconnect() {
+  if (_wsReconnectTimer) return
+  
+  _wsReconnectAttempts++
+  const delay = Math.min(
+    _WS_RECONNECT_DELAY * Math.pow(2, _wsReconnectAttempts - 1),
+    _WS_MAX_RECONNECT_DELAY
+  )
+  
+  console.log(`[WS] ${delay}ms 后尝试第 ${_wsReconnectAttempts} 次重连`)
+  
+  _wsReconnectTimer = setTimeout(async () => {
+    _wsReconnectTimer = null
+    const success = await ensureWs()
+    if (!success) {
+      console.warn(`[WS] 第 ${_wsReconnectAttempts} 次重连失败`)
+    } else {
+      console.log(`[WS] 第 ${_wsReconnectAttempts} 次重连成功`)
+    }
+  }, delay)
 }
 
 export function onWsEvent(handler: (event: WsEvent) => void): () => void {
@@ -222,11 +284,20 @@ export function sendAct(sessionId?: string) {
 }
 
 export function closeWs() {
+  _wsManuallyClosed = true
+  
+  // 取消重连定时器
+  if (_wsReconnectTimer) {
+    clearTimeout(_wsReconnectTimer)
+    _wsReconnectTimer = null
+  }
+  
   if (_ws) {
     const ws = _ws
     _ws = null
     _wsConnected = false
     _eventHandlers.length = 0
+    _wsReconnectAttempts = 0
     try { ws.close(1000, 'page refresh') } catch {}
   }
 }

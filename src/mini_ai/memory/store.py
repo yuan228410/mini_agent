@@ -1,7 +1,8 @@
 """三层记忆存储：情景层 / 长期层 / 用户画像，支持 global→user→workspace 三层级合并"""
 import json
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from ..utils import _UTC8
 from pathlib import Path
 
 try:
@@ -11,13 +12,9 @@ except ImportError:
     _HAS_FCNTL = False
     _FALLBACK_LOCK = threading.Lock()
 
-_UTC8 = timezone(timedelta(hours=8))
-
-
 def _file_lock_path(filepath: Path) -> Path:
     """同一目录下用 .lock 文件做跨进程/跨实例文件锁。"""
     return filepath.with_suffix(filepath.suffix + ".lock")
-
 
 def _read_locked(filepath: Path) -> str:
     """加共享锁读取文件，防止读到写入一半的内容。"""
@@ -47,7 +44,6 @@ def _read_locked(filepath: Path) -> str:
         except (OSError, UnicodeDecodeError):
             return ""
 
-
 def _write_locked(filepath: Path, content: str) -> None:
     """加排他锁写入文件，防止跨实例并发写入冲突。"""
     lock_path = _file_lock_path(filepath)
@@ -62,8 +58,6 @@ def _write_locked(filepath: Path, content: str) -> None:
             filepath.write_text(content, encoding="utf-8")
         finally:
             fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
-
-
 
 class _exclusive_lock:
     """文件排他锁上下文管理器，用于 read-modify-write 和 backup+write 的原子操作。
@@ -93,7 +87,6 @@ class _exclusive_lock:
         else:
             _FALLBACK_LOCK.release()
 
-
 def _merge_sections(texts: list[str]) -> str:
     """按 ## 标题拆分，同名 section last-wins，整体叠加。"""
     all_sections: dict[str, str] = {}
@@ -121,7 +114,6 @@ def _merge_sections(texts: list[str]) -> str:
     for _, body in all_sections.items():
         parts.append(body)
     return "\n\n".join(parts)
-
 
 class MemoryStore:
     """记忆存储（情景层 + 长期层 + 用户画像）。

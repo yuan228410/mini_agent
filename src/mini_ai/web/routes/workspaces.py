@@ -87,6 +87,11 @@ async def switch_workspace(body: dict):
     # 清理目标工作空间的缓存，不波及其他工作空间
     import threading
     from .chat import _sessions_lock, _SESSIONS, _SESSION_LOCKS, _SESSION_MODELS, _SESSION_STATUS, _SESSION_PLAN_MODE, _META_CACHE
+    from ...tools.cache import clear_tool_cache
+    
+    # 清除工具缓存，避免跨工作空间缓存污染
+    clear_tool_cache()
+    
     with _sessions_lock:
         prefix = f"{username}:{name}:"
         for d in (_SESSION_COMPONENTS, _SESSION_LOCKS, _SESSION_MODELS, _SESSION_STATUS, _SESSION_PLAN_MODE, _META_CACHE, _SESSIONS):

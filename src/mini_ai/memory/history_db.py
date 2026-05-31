@@ -3,13 +3,11 @@ import atexit
 import json
 import sqlite3
 import threading
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from ..utils import _UTC8
 from pathlib import Path
 
 from ..logger import logger
-
-_UTC8 = timezone(timedelta(hours=8))
-
 
 class HistoryDB:
 
@@ -79,7 +77,67 @@ class HistoryDB:
                         logger.warning("[HistoryDB] FTS5 写入失败，后续搜索将退化为模糊匹配")
                     pass
 
+    def begin_transaction(self):
+        """开启事务"""
+        self._ensure_conn()
+        self._conn.execute("BEGIN")
 
+    def commit(self):
+        """提交事务"""
+        self._conn.commit()
+
+    def rollback(self):
+        """回滚事务"""
+        self._conn.rollback()
+
+    def append_batch(self, messages: list[dict], session_id: str = "") -> int:
+        """批量插入消息（事务保护）
+        
+        Args:
+            messages: 消息列表，每条消息包含 role, content, metadata
+            session_id: 会话 ID
+        
+        Returns:
+            插入的消息数量
+        """
+        if not messages:
+            return 0
+        
+        ts = datetime.now(_UTC8).isoformat()
+        count = 0
+        
+        with self._lock:
+            self._ensure_conn()
+            try:
+                self._conn.execute("BEGIN")
+                for msg in messages:
+                    role = msg.get("role", "")
+                    content = msg.get("content", "")
+                    metadata = msg.get("metadata", "")
+                    
+                    cur = self._conn.execute(
+                        "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
+                        (self.workspace, session_id, ts, role, content, metadata),
+                    )
+                    try:
+                        self._conn.execute(
+                            "INSERT INTO messages_fts(rowid, content) VALUES (?, ?)",
+                            (cur.lastrowid, content),
+                        )
+                    except sqlite3.OperationalError:
+                        if self._fts_available:
+                            self._fts_available = False
+                        pass
+                    count += 1
+                
+                self._conn.commit()
+                logger.debug(f"[HistoryDB] append_batch: 插入 {count} 条消息, sid={session_id}")
+            except Exception as e:
+                self._conn.rollback()
+                logger.error(f"[HistoryDB] append_batch 失败: {e}")
+                raise
+        
+        return count
 
     def purge(self):
         """彻底删除所有历史消息（不可恢复）"""
@@ -91,7 +149,6 @@ class HistoryDB:
                     (self.workspace,),
                 )
         logger.info(f"[HistoryDB] 已清除 workspace={self.workspace}")
-
 
     def delete_by_ids(self, ids: list[int]):
         """按 ID 列表删除消息"""

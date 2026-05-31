@@ -9,15 +9,14 @@
 6. 摘要文件 I/O 委托给 SummaryWriter
 """
 from pathlib import Path
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
+from ..utils import _UTC8
 
 from ..logger import logger
 from .store import MemoryStore
 from ._utils import extract_tag as _extract
 from .updater import MemoryUpdater
 from ..llm.base import estimate_messages_tokens
-
-_UTC8 = timezone(timedelta(hours=8))
 
 BATCH_SUMMARY_PROMPT = """对以下各轮 Agent 执行过程分别进行简洁总结（每轮150字内）。
 
@@ -35,13 +34,11 @@ BATCH_SUMMARY_PROMPT = """对以下各轮 Agent 执行过程分别进行简洁�
 各轮执行过程：
 {all_rounds_text}"""
 
-
 _CHITCHAT_KEYWORDS = frozenset([
     "你好", "谢谢", "嗯", "哈哈", "ok", "好的", "再见", "hello", "hi", "thanks",
     "thank you", "bye", "嗯嗯", "哦", "啊", "呢", "吧", "了解", "明白",
     "good", "nice", "cool", "great", "👍", "🙏",
 ])
-
 
 def _is_chitchat_round(rnd: dict) -> bool:
     user_content = (rnd["user_msg"].get("content") or "").strip()
@@ -68,7 +65,6 @@ def _is_chitchat_round(rnd: dict) -> bool:
         return True
 
     return False
-
 
 # ═══════════════════════════════════════════
 # SummaryWriter — 摘要文件 I/O
@@ -108,7 +104,6 @@ class SummaryWriter:
                 "## 压缩 " + "\n## 压缩 ".join(sections[-self.max_sections:]),
                 encoding="utf-8",
             )
-
 
 # ═══════════════════════════════════════════
 # Compactor

@@ -1,12 +1,13 @@
 """子代理调度工具 — 支持 inputs 参数链式传递结果"""
 import copy
+import threading
 
 from ..logger import logger
+from ..utils import now_ts
 
 _loader = None
 _definition = None
 _project_path_ctx = __import__("contextvars").ContextVar("dispatch_project_path", default=None)
-
 
 def configure(loader=None, definition=None, project_path=None):
     global _loader, _definition
@@ -17,11 +18,9 @@ def configure(loader=None, definition=None, project_path=None):
     if project_path is not None:
         _project_path_ctx.set(project_path)
 
-
 def get_project_path():
     val = _project_path_ctx.get()
     return val or ""
-
 
 _BASE_DEFINITION = {
     "type": "function",
@@ -51,7 +50,6 @@ _BASE_DEFINITION = {
 
 definition = copy.deepcopy(_BASE_DEFINITION)
 
-
 def build_definition(subagent_list: str) -> dict:
     global definition
     d = copy.deepcopy(_BASE_DEFINITION)
@@ -61,10 +59,10 @@ def build_definition(subagent_list: str) -> dict:
     definition = d
     return d
 
-
-def execute(args: dict) -> str:
+def execute(args: dict, abort_event: threading.Event | None = None) -> str:
     from ..runner import run_agent
     from ..config import MODEL_CONFIG, RequestContext
+    from datetime import datetime, timezone, timedelta
 
     spec = _loader.get(args.get("type", ""))
     if not spec:
@@ -89,9 +87,10 @@ def execute(args: dict) -> str:
     if _project_path:
         system_prompt += f"\n\n## 当前工作空间\n\n项目路径: {_project_path}\n\n重要：执行命令时必须传 cwd=\"{_project_path}\" 参数；搜索文件时使用绝对路径基于此目录。读写文件使用绝对路径。"
 
+    _ts = now_ts()
     messages = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": task},
+        {"role": "user", "content": task, "timestamp": _ts},
     ]
 
     sub_display = None
@@ -109,6 +108,10 @@ def execute(args: dict) -> str:
     if sub_display:
         ctx = RequestContext(model_config=MODEL_CONFIG, display=sub_display)
 
-    result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx)
-    logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
-    return result or f"[{spec['name']}] 超出轮次限制或执行失败"
+    try:
+        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event)
+        logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
+        return result or f"[{spec['name']}] 超出轮次限制或执行失败"
+    except Exception as e:
+        logger.error(f"[派遣✗] {spec['name']} 异常: {e}", exc_info=True)
+        return f"⚠ 子代理 [{spec['name']}] 执行失败: {type(e).__name__}: {e}"

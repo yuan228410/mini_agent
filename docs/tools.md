@@ -48,7 +48,18 @@
 
 | 工具 | 说明 |
 |------|------|
-| `config(action, path?, value?)` | 读取/修改 mini-ai 配置。action=list 返回概览和结构，action=read 读取指定路径，action=write 写入并持久化 |
+| `config(action, path?, value?)` | 读取/修改 mini-ai 配置。action=list 返回概览和结构，action=read 读取指定路径，action=write 写入并持久化，action=reload 热加载配置（无需重启） |
+
+**热加载配置：**
+
+```python
+# 修改配置文件后，无需重启即可生效
+config(action="reload")
+# 返回：✓ 配置已重新加载
+# 当前模型: claude (Claude Opus 4.7)
+```
+
+配置热加载通过 `ConfigWatcher` 实现（位于 `src/mini_ai/config.py`），基于文件 mtime 轮询检测变更。CLI/Web 启动时自动开启监听线程。
 
 ### 任务规划
 
@@ -102,6 +113,69 @@
 | `load_workflow(name)` | 加载预定义 YAML 工作流模板 |
 
 ## 关键机制
+
+### 工具结果缓存
+
+工具执行结果自动缓存，减少同一对话中重复调用相同工具的开销。
+
+**特性：**
+
+- **LRU 淘汰**：默认缓存 100 条，超过时淘汰最旧的
+- **TTL 过期**：默认 300 秒后过期
+- **黑名单过滤**：有副作用的工具不缓存（如 `write_file`、`run_command`、`send_message` 等）
+- **大结果跳过**：超过 1MB 的结果不缓存
+
+**使用方式：**
+
+```python
+from mini_ai.tools.cache import get_tool_cache
+
+# 查看缓存统计
+cache = get_tool_cache()
+stats = cache.stats()
+# {'size': 10, 'hits': 25, 'misses': 15, 'hit_rate': '62.5%'}
+
+# 清空缓存（新对话时自动调用）
+cache.clear()
+```
+
+**黑名单工具（不缓存）：**
+
+- 文件写入：`write_file`、`edit_file`、`delete_file`、`rename_file`
+- 命令执行：`run_command`
+- 消息发送：`send_message`、`broadcast`
+- 黑板写入：`blackboard_write`
+- 记忆管理：`remember`、`forget`
+- 技能管理：`install_skill`、`delete_skill`
+- 配置修改：`config`（write 操作清除缓存，read/list/reload 可缓存）
+- 历史管理：`manage_history`
+- 队友管理：`spawn_teammate`、`dismiss_team`
+- 工作流：`run_workflow`、`workflow_status`
+- 子代理注册：`register_subagent`
+
+**并发安全机制：**
+
+并行执行相同工具时，使用 `get_or_wait()` + `mark_done()` 避免重复执行：
+
+```python
+# 首个线程执行，其他线程等待结果
+cached_result, hit = cache.get_or_wait(tool_name, args)
+if hit:
+    return cached_result  # 等待首个线程完成后获取缓存
+
+# 执行工具
+result = execute_tool(tool_name, args)
+
+# 写入缓存并通知等待线程
+cache.mark_done(tool_name, args, result)
+```
+
+**config 工具缓存智能化：**
+
+`config` 工具根据 `action` 动态判断是否缓存：
+
+- `read`/`list`/`reload`：无副作用，可缓存
+- `write`：有副作用，不缓存，且清除所有 config 相关缓存
 
 ### 结果截断
 

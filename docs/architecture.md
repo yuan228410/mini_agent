@@ -61,7 +61,7 @@ models:
 
 ---
 
-## Agent 执行器 (runner.py)
+## Agent 执行器 (runner/)
 
 `run_tool_loop()` 是统一的 Agent 执行循环，被主循环、子代理、队友、Web 端复用。
 
@@ -71,6 +71,15 @@ def run_tool_loop(messages, tools, *, streaming=False, display=None,
                   max_turns=20, context_length=None, ctx=None) -> tuple:
 ```
 
+**架构（已重构）：**
+
+Runner 模块拆分为四个职责清晰的子模块：
+
+- **state.py** — 循环状态管理（`LoopState`）：轮次计数、错误计数、spawn 标记
+- **executor.py** — LLM 调用和工具执行（`ToolExecutor`）：流式/非流式统一、工具分发
+- **error_handler.py** — 错误处理策略（`ErrorHandler`）：异常分类、用户提示、恢复建议
+- **loop.py** — 精简版主循环（`run_tool_loop`、`run_agent`）：协调上述组件
+
 **关键机制：**
 
 - **流式/非流式统一** — 同一路径处理两种模式
@@ -79,6 +88,7 @@ def run_tool_loop(messages, tools, *, streaming=False, display=None,
 - **错误熔断** — 连续 3 次工具 Error → 提前退出，避免空循环
 - **轮次上限** — `max_turns`（默认 20）强制退出
 - **实时持久化** — `persist_fn(msg)` 回调，每条消息生成即写入
+- **工具结果缓存** — 相同参数工具调用走 LRU 缓存，减少重复执行（见 [工具系统](tools.md#工具结果缓存)）
 
 `run_agent()` 作为轻量包装（供子代理/队友内部调用），返回最终文本。超轮次时自动兜底：先尝试取最后一条 assistant 消息，再尝试请求 LLM 总结，异常安全。
 
@@ -133,6 +143,46 @@ RULES.md (行为规范)
 
 ---
 
+## 统一异常体系
+
+位于 `src/mini_ai/exceptions.py`，建立分层异常类，统一错误处理模式：
+
+```
+MiniAIError (基类)
+├── ConfigError          — 配置加载/校验失败
+├── LLMError             — LLM 调用异常（支持 status_code、provider）
+└── ToolError            — 工具执行异常
+    ├── ResourceNotFoundError    — 资源不存在
+    ├── PermissionDeniedError    — 权限不足
+    └── ValidationError          — 参数校验失败
+```
+
+**核心特性：**
+
+- `recoverable` 标记：区分可恢复错误（工具失败可重试）和不可恢复错误（配置错误需重启）
+- `to_user_message()` 方法：返回用户友好的错误提示，隐藏技术细节
+- 错误上下文：支持附加 `**context` 参数，便于日志分析和调试
+
+**使用示例：**
+
+```python
+from mini_ai.exceptions import ToolError, ResourceNotFoundError
+
+# 抛出异常
+raise ResourceNotFoundError("read_file", "/path/to/file.txt")
+
+# 捕获并处理
+try:
+    result = tool.execute(args)
+except ToolError as e:
+    if e.recoverable:
+        logger.warning(f"工具 {e.tool_name} 失败: {e.to_user_message()}")
+    else:
+        raise
+```
+
+---
+
 ## 关键设计原则
 
 1. **模块化** — 一个文件一个职责，接口简单（`definition` + `execute`）
@@ -152,15 +202,18 @@ RULES.md (行为规范)
 ```
 src/mini_ai/
 ├── main.py              # 主循环编排
-├── config.py            # 配置加载（DATA_DIR / PACKAGE_DIR 分离）
-├── runner.py            # 统一 Agent 执行循环
+├── config.py            # 配置加载（DATA_DIR / PACKAGE_DIR 分离），支持热加载
+├── exceptions.py        # 统一异常体系（MiniAIError / ToolError / LLMError 等）
 ├── context.py           # 系统提示词组装
+├── utils.py             # 公共工具函数（now_ts 时间戳生成）
 ├── workspace.py         # 工作空间管理
 ├── logger.py            # 日志模块（终端 WARNING+ / 文件 DEBUG）
+├── logger_structured.py # 结构化日志（text/json 双模式）
 ├── llm/                 # LLM 通信层（base + openai + anthropic）
 ├── cli/                 # CLI 交互层（display + commands）
 ├── memory/              # 记忆系统（store + compactor + history_db + session）
-├── tools/               # 工具系统（ToolRegistry + 25+ 工具模块）
+├── runner/              # Agent 执行循环（state + executor + error_handler + loop）
+├── tools/               # 工具系统（ToolRegistry + 25+ 工具模块 + cache）
 ├── team/                # 多 Agent 编排（bus + manager + blackboard + task_graph + orchestrator）
 ├── subagents/           # 子代理定义（coder/researcher/reviewer/tester/planner）
 ├── web/                 # Web 界面（FastAPI + 路由）

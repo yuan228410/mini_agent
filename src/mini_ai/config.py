@@ -2,11 +2,15 @@
 
 模块导入时自动尝试加载配置，失败不退出进程。
 提供 init_config() 供显式重新加载。
+支持配置热加载（通过 ConfigWatcher）。
 """
 import copy
 import os
 import sys
+import time
+import threading
 from pathlib import Path
+from typing import Callable, TypedDict, Literal, Any
 
 import yaml
 
@@ -51,6 +55,96 @@ LOGGING: dict = {}
 PLAN: dict = {"approval": True}
 MCP: dict = {"enabled": False}
 SKILL_PATHS: list[Path] = []
+
+# ── 配置热加载 ──
+
+class ConfigWatcher:
+    """配置文件变更监听器（基于轮询）
+    
+    使用方式：
+        watcher = ConfigWatcher(config_path, on_change_callback)
+        watcher.start()
+        # ... 程序运行 ...
+        watcher.stop()
+    """
+    
+    def __init__(self, config_path: Path, callback: Callable[[], None], interval: float = 1.0):
+        """
+        Args:
+            config_path: 配置文件路径
+            callback: 配置变更时的回调函数
+            interval: 轮询间隔（秒）
+        """
+        self.config_path = config_path
+        self.callback = callback
+        self.interval = interval
+        self._last_mtime: float = 0
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+    
+    def start(self) -> None:
+        """启动监听线程"""
+        if self._thread and self._thread.is_alive():
+            return
+        
+        try:
+            self._last_mtime = self.config_path.stat().st_mtime
+        except FileNotFoundError:
+            self._last_mtime = 0
+        
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._watch_loop, daemon=True, name="ConfigWatcher")
+        self._thread.start()
+    
+    def stop(self) -> None:
+        """停止监听"""
+        self._stop_event.set()
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+    
+    def _watch_loop(self) -> None:
+        """监听循环"""
+        while not self._stop_event.wait(self.interval):
+            try:
+                current_mtime = self.config_path.stat().st_mtime
+                if current_mtime != self._last_mtime:
+                    self._last_mtime = current_mtime
+                    # 在主线程中执行回调可能有风险，这里用 try 保护
+                    try:
+                        self.callback()
+                    except Exception as e:
+                        print(f"[ConfigWatcher] 回调执行失败: {e}", file=sys.stderr)
+            except FileNotFoundError:
+                # 配置文件被删除，忽略
+                pass
+            except OSError:
+                # 其他 IO 错误，忽略
+                pass
+
+
+# 模块级监听器实例
+_config_watcher: ConfigWatcher | None = None
+
+
+def start_config_watcher() -> None:
+    """启动配置热加载监听（main.py 启动时调用）"""
+    global _config_watcher
+    if _config_watcher:
+        return
+    
+    from .logger import logger
+    _config_watcher = ConfigWatcher(_config_path, init_config)
+    _config_watcher.start()
+    logger.info("[Config] 热加载监听已启动")
+
+
+def stop_config_watcher() -> None:
+    """停止配置热加载监听"""
+    global _config_watcher
+    if _config_watcher:
+        _config_watcher.stop()
+        _config_watcher = None
 
 # ── 内部：加载 & 校验 ──
 
