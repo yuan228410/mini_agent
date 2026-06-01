@@ -54,7 +54,15 @@ class SessionManager:
                 continue
             try:
                 row = json.loads(line)
-                messages.append({"role": row["role"], "content": row.get("content")})
+                msg = {"role": row["role"], "content": row.get("content")}
+                # 恢复保存时存储的额外字段
+                if row.get("tool_calls"):
+                    msg["tool_calls"] = row["tool_calls"]
+                if row.get("thinking"):
+                    msg["thinking"] = row["thinking"]
+                if row.get("timestamp"):
+                    msg["timestamp"] = row["timestamp"]
+                messages.append(msg)
             except (json.JSONDecodeError, KeyError):
                 continue
 

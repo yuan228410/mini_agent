@@ -9,6 +9,38 @@ from pathlib import Path
 
 from ..logger import logger
 
+
+def _process_multimodal_content(content: str | list, metadata: str = "") -> tuple[str, str]:
+    """处理多模态消息内容，提取文本并保存完整结构到 metadata。
+    
+    Args:
+        content: 消息内容，可能是字符串或列表（多模态）
+        metadata: 原有 metadata JSON 字符串
+    
+    Returns:
+        (text_content, updated_metadata): 处理后的文本内容和更新后的 metadata
+    """
+    if not isinstance(content, list):
+        return content or "", metadata
+    
+    # 提取文本内容用于搜索
+    text_parts = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text_parts.append(part.get("text", ""))
+    text_content = "\n".join(text_parts)
+    
+    # 保存完整结构到 metadata
+    try:
+        meta_dict = json.loads(metadata) if metadata else {}
+        meta_dict["_multimodal_content"] = content
+        metadata = json.dumps(meta_dict, ensure_ascii=False)
+    except Exception:
+        pass
+    
+    return text_content, metadata
+
+
 class HistoryDB:
 
     def __init__(self, db_path: Path, workspace: str = "default"):
@@ -47,6 +79,10 @@ class HistoryDB:
                 logger.warning("[HistoryDB] FTS5 不可用，全文搜索将退化为模糊匹配")
                 pass
 
+    def is_fts_available(self) -> bool:
+        """返回 FTS5 是否可用，供上层判断搜索模式"""
+        return self._fts_available
+
     def _ensure_conn(self):
         try:
             self._conn.execute("SELECT 1")
@@ -57,23 +93,7 @@ class HistoryDB:
 
     def append(self, role: str, content: str | list, session_id: str = "", metadata: str = ""):
         # 处理多模态消息（content 可能是 list）
-        if isinstance(content, list):
-            # 提取文本内容用于搜索
-            text_parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
-            text_content = "\n".join(text_parts)
-            
-            # list 类型都保存完整结构到 metadata
-            try:
-                meta_dict = json.loads(metadata) if metadata else {}
-                meta_dict["_multimodal_content"] = content
-                metadata = json.dumps(meta_dict, ensure_ascii=False)
-            except Exception:
-                pass
-            
-            content = text_content
+        content, metadata = _process_multimodal_content(content, metadata)
         
         ts = datetime.now(_UTC8).isoformat()
         content_preview = (content or "")[:80].replace("\n", " ")
@@ -135,23 +155,7 @@ class HistoryDB:
                     metadata = msg.get("metadata", "")
                     
                     # 处理多模态消息（content 可能是 list）
-                    if isinstance(content, list):
-                        # 提取文本内容用于搜索
-                        text_parts = []
-                        for part in content:
-                            if isinstance(part, dict) and part.get("type") == "text":
-                                text_parts.append(part.get("text", ""))
-                        text_content = "\n".join(text_parts)
-                        
-                        # list 类型都保存完整结构
-                        try:
-                            meta_dict = json.loads(metadata) if metadata else {}
-                            meta_dict["_multimodal_content"] = content
-                            metadata = json.dumps(meta_dict, ensure_ascii=False)
-                        except Exception:
-                            pass
-                        
-                        content = text_content
+                    content, metadata = _process_multimodal_content(content, metadata)
                     
                     cur = self._conn.execute(
                         "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
@@ -301,10 +305,10 @@ class HistoryDB:
             results.append(msg)
         return results
 
-    def search(self, keyword: str, date_from: str = "", date_to: str = "",
+    def search(self, keyword: str = "", date_from: str = "", date_to: str = "",
                workspace: str = "", limit: int = 20) -> list[dict]:
         ws = workspace or self.workspace
-        logger.debug(f"[HistoryDB] search: keyword={keyword[:30]}, workspace={ws}, limit={limit}")
+        logger.debug(f"[HistoryDB] search: keyword={keyword[:30] if keyword else '(空)'}, workspace={ws}, limit={limit}")
         conditions = ["workspace=?"]
         params = [ws]
 
@@ -329,6 +333,31 @@ class HistoryDB:
             ).fetchall()
 
         return [{"id": id, "ts": ts, "role": role, "content": content} for id, ts, role, content in rows]
+
+    def count(self, keyword: str = "", date_from: str = "", date_to: str = "",
+              workspace: str = "") -> int:
+        """统计符合条件的消息总数"""
+        ws = workspace or self.workspace
+        conditions = ["workspace=?"]
+        params = [ws]
+
+        if date_from:
+            conditions.append("ts >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("ts <= ?")
+            params.append(date_to)
+        if keyword:
+            conditions.append("content LIKE ?")
+            params.append(f"%{keyword}%")
+
+        with self._lock:
+            self._ensure_conn()
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM messages WHERE {' AND '.join(conditions)}",
+                params
+            ).fetchone()
+        return row[0] if row else 0
 
     def load_all(self, session_id: str = "", limit: int = 0) -> list[dict]:
         logger.debug(f"[HistoryDB] load_all: sid={session_id}, limit={limit}, workspace={self.workspace}")
@@ -375,15 +404,6 @@ class HistoryDB:
             results.append(msg)
         logger.debug(f"[HistoryDB] load_all 返回: {len(results)} 条消息")
         return results
-
-    def count(self) -> int:
-        with self._lock:
-            self._ensure_conn()
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM messages WHERE workspace=?",
-                (self.workspace,),
-            ).fetchone()
-        return row[0] if row else 0
 
     def close(self):
         try:

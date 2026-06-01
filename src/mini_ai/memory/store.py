@@ -64,28 +64,51 @@ class _exclusive_lock:
 
     获取文件级 LOCK_EX，在 with 块内可安全地读写同一文件，跨实例/跨线程均安全。
     """
-    __slots__ = ("_filepath", "_lf")
+    __slots__ = ("_filepath", "_lf", "_acquired")
 
     def __init__(self, filepath: Path):
         self._filepath = filepath
         self._lf = None
+        self._acquired = False
 
     def __enter__(self):
         lock_path = _file_lock_path(self._filepath)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         if not _HAS_FCNTL:
             _FALLBACK_LOCK.acquire()
+            self._acquired = True
             return
         self._lf = lock_path.open("w")
-        fcntl.flock(self._lf.fileno(), fcntl.LOCK_EX)
+        try:
+            fcntl.flock(self._lf.fileno(), fcntl.LOCK_EX)
+            self._acquired = True
+        except Exception:
+            # flock 失败时确保关闭文件句柄
+            if self._lf is not None:
+                try:
+                    self._lf.close()
+                except Exception:
+                    pass
+                self._lf = None
+            raise
 
     def __exit__(self, *exc):
-        if self._lf is not None:
-            fcntl.flock(self._lf.fileno(), fcntl.LOCK_UN)
-            self._lf.close()
-            self._lf = None
-        else:
-            _FALLBACK_LOCK.release()
+        try:
+            if self._lf is not None:
+                try:
+                    fcntl.flock(self._lf.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        self._lf.close()
+                    except Exception:
+                        pass
+                    self._lf = None
+            elif self._acquired and not _HAS_FCNTL:
+                _FALLBACK_LOCK.release()
+        finally:
+            self._acquired = False
 
 def _merge_sections(texts: list[str]) -> str:
     """按 ## 标题拆分，同名 section last-wins，整体叠加。"""

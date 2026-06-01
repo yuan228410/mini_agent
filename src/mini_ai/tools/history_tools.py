@@ -1,5 +1,7 @@
 """历史搜索工具 — 跨会话全文检索"""
 import contextvars
+import json
+import re
 
 from ..logger import logger
 
@@ -15,23 +17,115 @@ def _get_db():
     return _history_db.get()
 
 
+def _compact_message(msg: dict) -> dict:
+    """压缩单条消息，保留关键信息，过滤冗余
+    
+    处理内容：
+    - tool 消息：截断长结果
+    - tool_calls：简化参数，只保留关键参数
+    - thinking：过滤掉
+    - 图片：保留摘要信息
+    """
+    role = msg.get("role", "")
+    content = msg.get("content", "")
+    ts = msg.get("ts", "")
+    
+    # 1. tool 消息：截断长结果
+    if role == "tool":
+        if isinstance(content, str) and len(content) > 300:
+            return {
+                "role": role,
+                "content": content[:300] + f"\n... [共 {len(content)} 字已截断]",
+                "ts": ts
+            }
+        return {"role": role, "content": content, "ts": ts}
+    
+    # 2. assistant 消息含 tool_calls
+    if msg.get("tool_calls"):
+        calls_summary = []
+        for tc in msg["tool_calls"]:
+            name = tc["function"]["name"]
+            raw_args = tc["function"].get("arguments", "{}")
+            try:
+                args = json.loads(raw_args) if raw_args else {}
+                # 保留关键参数
+                key_params = {
+                    k: v for k, v in args.items()
+                    if k in ("path", "keyword", "url", "command", "query", 
+                            "pattern", "name", "content", "cwd", "action") 
+                    and v is not None and v != ""
+                }
+                if key_params:
+                    args_str = json.dumps(key_params, ensure_ascii=False)
+                    if len(args_str) > 80:
+                        args_str = args_str[:77] + "..."
+                    calls_summary.append(f"{name}({args_str})")
+                else:
+                    calls_summary.append(name)
+            except (json.JSONDecodeError, TypeError):
+                calls_summary.append(name)
+        return {
+            "role": role,
+            "content": f"[调用工具] {', '.join(calls_summary)}",
+            "ts": ts
+        }
+    
+    # 3. 过滤 thinking 标签
+    if isinstance(content, str):
+        # 移除 <thinking>...</thinking>
+        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+        # 移除 "思考：..." 段落
+        content = re.sub(r'\n*思考[：:].{0,200}\n', '\n', content)
+        content = content.strip()
+    
+    # 4. 图片信息摘要
+    if isinstance(content, list):
+        parts = []
+        img_count = 0
+        for item in content:
+            if isinstance(item, dict):
+                if item.get("type") == "text":
+                    text = item.get("text", "")
+                    if text:
+                        parts.append(text)
+                elif item.get("type") == "image_url":
+                    img_count += 1
+                    url = item.get("image_url", {}).get("url", "")
+                    if url.startswith(("http://", "https://")):
+                        url_preview = url if len(url) <= 60 else url[:57] + "..."
+                        parts.append(f"[图片: {url_preview}]")
+                    else:
+                        parts.append(f"[图片{img_count}]")
+        return {"role": role, "content": "\n".join(parts), "ts": ts}
+    
+    return {"role": role, "content": content, "ts": ts}
+
+
 _search_def = {
     "type": "function",
     "function": {
         "name": "search_history",
         "description": (
-            "搜索历史对话记录。当需要回顾之前的讨论、查找过去的决策或补充上下文信息时使用。"
-            "支持关键词全文搜索和日期范围过滤。"
+            "搜索历史对话记录。支持关键词全文搜索和日期范围过滤。\n\n"
+            "使用建议：\n"
+            "- 查找特定内容（bug/决策）: limit=20-50, compact=true\n"
+            "- 回顾某天工作: limit=100-500, compact=true\n"
+            "- 需要完整工具结果: compact=false\n\n"
+            "返回结果会提示总数，若有遗漏会提示加大 limit。"
         ),
         "parameters": {
             "type": "object",
             "properties": {
-                "keyword": {"type": "string", "description": "搜索关键词"},
+                "keyword": {"type": "string", "description": "搜索关键词（可选）"},
                 "date_from": {"type": "string", "description": "起始日期，格式 YYYY-MM-DD"},
                 "date_to": {"type": "string", "description": "结束日期，格式 YYYY-MM-DD"},
                 "limit": {"type": "integer", "description": "最大返回条数，默认 20"},
+                "compact": {
+                    "type": "boolean",
+                    "description": "是否压缩返回（过滤工具细节，保留关键信息）。默认 true"
+                },
             },
-            "required": ["keyword"],
+            "required": [],
         },
     },
 }
@@ -46,22 +140,42 @@ def _search_exec(args: dict) -> str:
     date_from = args.get("date_from", "")
     date_to = args.get("date_to", "")
     limit = args.get("limit", 20)
+    compact = args.get("compact", True)  # 默认压缩
+    
     try:
         limit = int(limit)
     except (TypeError, ValueError):
         limit = 20
 
+    # 查询总数
+    total = db.count(keyword, date_from=date_from, date_to=date_to)
+    
+    if total == 0:
+        return f"未找到符合条件的历史记录"
+
+    # 查询结果
     results = db.search(keyword, date_from=date_from, date_to=date_to, limit=limit)
+    
+    # 压缩处理
+    if compact:
+        results = [_compact_message(r) for r in results]
 
-    if not results:
-        return f"未找到包含 '{keyword}' 的历史记录"
-
-    lines = [f"找到 {len(results)} 条历史记录:"]
+    # 格式化输出
+    lines = [f"找到 {total} 条记录，返回前 {len(results)} 条:"]
+    
+    # 提示搜索模式
+    if keyword and not db.is_fts_available():
+        lines.append("⚠️ FTS5 不可用，使用模糊匹配（LIKE）模式")
+    
     for r in results:
-        ts = r["ts"][:16]
-        role = r["role"]
-        content = r["content"][:200]
+        ts = (r.get("ts") or "")[:16]
+        role = r.get("role", "?")
+        content = (r.get("content") or "")[:200].replace("\n", " ")
         lines.append(f"  [{ts}] {role}: {content}")
+    
+    # 提示遗漏
+    if total > limit:
+        lines.append(f"\n⚠️ 还有 {total - limit} 条未显示，可加大 limit 查看")
 
     return "\n".join(lines)
 

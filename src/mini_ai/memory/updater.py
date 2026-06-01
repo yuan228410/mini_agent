@@ -1,4 +1,5 @@
 """记忆更新器：根据压缩摘要更新三层记忆（episode / memory / user）。"""
+import time
 from ..logger import logger
 from ._utils import extract_tag as _extract
 from .store import MemoryStore
@@ -37,8 +38,9 @@ class MemoryUpdater:
     职责单一：接收轮次摘要，调用 chat_fn 获取 LLM 输出，解析并写入 MemoryStore。
     """
 
-    def __init__(self, memory_store: MemoryStore):
+    def __init__(self, memory_store: MemoryStore, max_retries: int = 3):
         self.memory = memory_store
+        self.max_retries = max_retries
 
     def update(self, chat_fn, round_summaries: list[str], ctx=None) -> None:
         """调用 LLM 更新 episode / memory / user。"""
@@ -54,9 +56,26 @@ class MemoryUpdater:
             round_summaries="\n\n".join(round_summaries),
         )
 
-        result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
+        # 带重试的 LLM 调用
+        result = None
+        last_error = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                result = chat_fn([{"role": "user", "content": prompt}], tools=None, ctx=ctx)
+                if result:
+                    break
+                logger.warning(f"[记忆更新] LLM 返回为空，尝试 {attempt}/{self.max_retries}")
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[记忆更新] LLM 调用失败: {e}，尝试 {attempt}/{self.max_retries}")
+            
+            if attempt < self.max_retries:
+                time.sleep(1 * attempt)  # 递增等待：1s, 2s, 3s
+
         if not result:
-            logger.warning("[记忆更新] LLM 返回为空，跳过记忆更新")
+            logger.error(f"[记忆更新] 重试 {self.max_retries} 次后仍失败，跳过记忆更新")
+            if last_error:
+                logger.error(f"[记忆更新] 最后错误: {last_error}")
             return
 
         text = result.get("content", "")
