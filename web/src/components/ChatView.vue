@@ -417,7 +417,13 @@ async function handleWsEvent(event: WsEvent) {
 
   if (isTerminal) {
     s.isStreaming = false
-    if (sid === activeSessionId.value) isStreaming.value = false
+    // 🔧 修复：无论当前会话是否活跃，都检查并重置 isStreaming（避免状态残留）
+    const currentActiveKey = _cacheKey(activeSessionId.value, props.workspace)
+    const eventKey = _cacheKey(sid, props.workspace)
+    if (eventKey === currentActiveKey) {
+      isStreaming.value = false
+      console.log(`[mini-ai] terminal event reset isStreaming: sid=${sid} event=${event.event}`)
+    }
   }
 
   if (sid === activeSessionId.value) {

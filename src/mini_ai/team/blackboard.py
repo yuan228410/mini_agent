@@ -84,14 +84,20 @@ class Blackboard:
             return "\n".join(lines)
 
     def _persist(self):
+        """原子写入文件：先写临时文件，再替换，避免写入过程中崩溃导致文件损坏"""
         if not self._persist_path:
             return
         try:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
-            self._persist_path.write_text(
+            # 写入临时文件
+            temp_path = self._persist_path.with_suffix('.tmp')
+            temp_path.write_text(
                 json.dumps(self._data, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            # 原子替换（跨平台）
+            import os
+            os.replace(str(temp_path), str(self._persist_path))
         except OSError as e:
             logger.warning(f"[Blackboard] 持久化失败: {e}")
 

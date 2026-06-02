@@ -204,6 +204,7 @@ def chat(messages, tools=True, ctx=None):
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
     t0 = time.monotonic()
     response = None
+    last_error = None
     for attempt in range(max_retries + 1):
         try:
             ensure_session_anthropic(ctx)
@@ -213,25 +214,27 @@ def chat(messages, tools=True, ctx=None):
             response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
             if response.status_code >= 400:
                 err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                last_error = LLMError(err_msg, status_code=response.status_code)
                 if attempt < max_retries:
                     delay = retry_delay * (attempt + 1)
                     logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay}s 后重试")
                     time.sleep(delay)
                     continue
                 logger.error(f"[Anth✗] 请求失败(已重试{max_retries}次): {err_msg}")
-                return None
+                raise last_error
             break
         except requests.RequestException as e:
             error_msg = str(e)
             if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
                 error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
+            last_error = LLMError(error_msg)
             if attempt < max_retries:
                 delay = retry_delay * (attempt + 1)
                 logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")
                 time.sleep(delay)
             else:
                 logger.error(f"[Anth✗] 请求异常(已重试{max_retries}次): {error_msg}")
-                return None
+                raise last_error
 
     try:
         data = response.json()
@@ -304,6 +307,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     max_retries = TIMEOUTS.get("llm_retries", 3)
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
     response = None
+    last_error = None
     for attempt in range(max_retries + 1):
         try:
             ensure_session_anthropic(ctx)
@@ -318,6 +322,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
             error_msg = str(e)
             if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
                 error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
+            last_error = LLMError(error_msg)
             if attempt < max_retries:
                 delay = retry_delay * (attempt + 1)
                 logger.warning(f"[Anth↻] 流式重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")

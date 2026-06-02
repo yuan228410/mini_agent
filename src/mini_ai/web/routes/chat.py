@@ -59,22 +59,23 @@ def _cleanup_session_components(comp: dict):
             logger.warning(f"[Web] 关闭 {name} 失败: {e}")
 
 def _touch_session(cache_key: str):
-    """记录会话访问时间，超限时淘汰最久未活跃的"""
-    _SESSION_ACCESS[cache_key] = time.monotonic()
-    if len(_SESSION_ACCESS) > _MAX_CACHED_SESSIONS:
-        # 淘汰最久未活跃的 5 个会话
-        oldest = sorted(_SESSION_ACCESS, key=_SESSION_ACCESS.get)[:len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5]
-        for k in oldest:
-            comp = _SESSION_COMPONENTS.pop(k, None)
-            if comp:
-                _cleanup_session_components(comp)
-            _SESSIONS.pop(k, None)
-            _META_CACHE.pop(k, None)
-            _SESSION_STATUS.pop(k, None)
-            _SESSION_MODELS.pop(k, None)
-            _SESSION_LOCKS.pop(k, None)
-            _SESSION_ACCESS.pop(k, None)
-        logger.info(f"[Web] 淘汰 {len(oldest)} 个非活跃会话缓存，当前缓存数: {len(_SESSION_ACCESS)}")
+    """更新会话访问时间，必要时淘汰最老的会话"""
+    with _sessions_lock:  # 整个淘汰操作加锁，避免并发修改
+        _SESSION_ACCESS[cache_key] = time.monotonic()
+        if len(_SESSION_ACCESS) > _MAX_CACHED_SESSIONS:
+            # 淘汰最老的 5 个会话
+            oldest = sorted(_SESSION_ACCESS, key=_SESSION_ACCESS.get)[:len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5]
+            for k in oldest:
+                comp = _SESSION_COMPONENTS.pop(k, None)
+                if comp:
+                    _cleanup_session_components(comp)
+                _SESSIONS.pop(k, None)
+                _META_CACHE.pop(k, None)
+                _SESSION_STATUS.pop(k, None)
+                _SESSION_MODELS.pop(k, None)
+                _SESSION_LOCKS.pop(k, None)
+                _SESSION_ACCESS.pop(k, None)
+            logger.info(f"[Web] 淘汰 {len(oldest)} 个非活跃会话缓存，当前缓存数: {len(_SESSION_ACCESS)}")
 
 def _ws_key(username: str, workspace: str | None) -> str:
     return f"{username}:{workspace or 'default'}"
@@ -147,6 +148,8 @@ def _invalidate_lead_tools():
 
 def _get_or_create_components(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> dict:
     cache_key = _cache_key(username, workspace, sid)
+    
+    # 双重检查锁定：第一次检查（快速路径）
     with _sessions_lock:
         if cache_key in _SESSION_COMPONENTS:
             comp = _SESSION_COMPONENTS[cache_key]
@@ -157,7 +160,14 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
                 comp["team_mgr"] = team_comp.get("team_mgr")
                 comp["blackboard"] = team_comp.get("blackboard")
             return comp
+        
+        # 锁内创建组件，避免竞态条件
+        components = _create_components_locked(username, sid, base, workspace, cache_key)
+        _SESSION_COMPONENTS[cache_key] = components
+        return components
 
+def _create_components_locked(username: str, sid: str, base: Path | None, workspace: str | None, cache_key: str) -> dict:
+    """在锁内创建会话组件，避免竞态条件"""
     from ...memory import MemoryStore, Compactor, HistoryDBPool
     from ...context import ContextBuilder
     from ...skills import SkillLoader
@@ -221,23 +231,22 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
         "project_path": project_path,
         "skill_loader": skill_loader,
     }
+    
+    # 创建团队组件（也在锁内）
     wk = _ws_key(username, workspace)
-    with _sessions_lock:
-        if wk not in _TEAM_COMPONENTS and ws_dir:
-            from ...team import MessageBus, TeammateManager, Blackboard
-            team_dir = ws_dir / ".team"
-            bus = MessageBus(team_dir / "inbox")
-            team_mgr = TeammateManager(team_dir=team_dir, bus=bus, project_dir=ws_dir)
-            bb = Blackboard(persist_path=team_dir / "blackboard.json")
-            _TEAM_COMPONENTS[wk] = {"bus": bus, "team_mgr": team_mgr, "blackboard": bb}
+    if wk not in _TEAM_COMPONENTS and ws_dir:
+        from ...team import MessageBus, TeammateManager, Blackboard
+        team_dir = ws_dir / ".team"
+        bus = MessageBus(team_dir / "inbox")
+        team_mgr = TeammateManager(team_dir=team_dir, bus=bus, project_dir=ws_dir)
+        bb = Blackboard(persist_path=team_dir / "blackboard.json")
+        _TEAM_COMPONENTS[wk] = {"bus": bus, "team_mgr": team_mgr, "blackboard": bb}
+    
     team_comp = _TEAM_COMPONENTS.get(wk, {})
     components["bus"] = team_comp.get("bus")
     components["team_mgr"] = team_comp.get("team_mgr")
     components["blackboard"] = team_comp.get("blackboard")
-    with _sessions_lock:
-        if cache_key in _SESSION_COMPONENTS:
-            return _SESSION_COMPONENTS[cache_key]
-        _SESSION_COMPONENTS[cache_key] = components
+    
     return components
 
 def _build_system_prompt(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> str:
@@ -600,7 +609,10 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
                 messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
                 comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
+                # 🔧 关键修复：发送 error 事件后继续流程，确保前端收到 done 事件
                 loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "error", "data": {"error": err_text, "session_id": session_key}}))
+                logger.error(f"[Web] {err_text} sid={comp_key}")
+                # 继续执行，确保 complete 事件被发送
             if msg and msg.get("content") and not any(
                 m.get("role") == "assistant" and m.get("content") == msg["content"]
                 for m in messages[-3:]

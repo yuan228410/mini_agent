@@ -71,6 +71,18 @@ PLAN: dict = {"approval": True}
 MCP: dict = {"enabled": False}
 SKILL_PATHS: list[Path] = []
 SUBAGENT_MODELS: dict = {}
+DATABASE: dict = {
+    "history": {
+        "async_write": None,  # None 表示自动选择（Web 端 true，CLI 端 false）
+        "batch_size": 50,
+        "batch_timeout": 0.1,
+        "queue_size": 10000,
+        "retry_count": 3,
+    },
+    "memory": {
+        "cache_size": 10000,
+    }
+}
 
 # ── 配置热加载 ──
 
@@ -241,6 +253,21 @@ def _apply_config(raw: dict) -> None:
     MCP = raw.get("mcp") or {"enabled": False}
     SKILL_PATHS = [Path(p) for p in (raw.get("skill_paths") or [])]
     SUBAGENT_MODELS = raw.get("subagent_models") or {}
+    
+    # 数据库配置
+    _database_defaults = {
+        "history": {
+            "async_write": None,
+            "batch_size": 50,
+            "batch_timeout": 0.1,
+            "queue_size": 10000,
+            "retry_count": 3,
+        },
+        "memory": {
+            "cache_size": 10000,
+        }
+    }
+    DATABASE = {**_database_defaults, **(raw.get("database") or {})}
 
 
 # ── 公开 API ──

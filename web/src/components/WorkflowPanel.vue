@@ -272,6 +272,13 @@ function handleWorkflowEvent(event: CustomEvent) {
       localState.value.elapsed = detail.data?.elapsed
       localState.value.completed = detail.data?.completed
       localState.value.failed = detail.data?.failed
+      // 确保所有未完成的任务都标记为最终状态
+      Object.keys(localState.value.tasks).forEach(taskId => {
+        const task = localState.value.tasks[taskId]
+        if (task.status === 'pending' || task.status === 'running') {
+          task.status = 'done'
+        }
+      })
       historyList.value.unshift({
         time: new Date().toLocaleString(),
         state: { ...localState.value }
