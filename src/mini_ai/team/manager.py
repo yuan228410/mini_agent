@@ -13,8 +13,8 @@ from ..logger import logger
 from .prompts import build_team_prompt
 from ..utils import now_ts
 
-_BASE_TOOL_NAMES = tuple(TEAMMATE["base_tools"])
-_MAX_TEAMMATES = TEAMMATE["max_teammates"]
+_BASE_TOOL_NAMES = tuple(TEAMMATE.get("base_tools", []))
+_MAX_TEAMMATES = TEAMMATE.get("max_teammates", 5)
 _IDLE_TIMEOUT = TEAMMATE.get("idle_timeout", 300)
 
 class TeammateManager:

@@ -57,7 +57,11 @@ def init_mini_ai(force: bool = False, username: Optional[str] = None) -> bool:
     _init_gitignore(data_dir)
     
     logger.info(f"[Init] ✅ 初始化完成！配置文件位置: {data_dir}")
-    logger.info("[Init] 请编辑 config.yaml 填写 API Key")
+    logger.info("[Init] ⚠️  必须配置以下项：")
+    logger.info("[Init]    1. active_model: 指定使用的模型名称")
+    logger.info("[Init]    2. models: 配置模型的 api_url 和 api_key")
+    logger.info("[Init] 💡 建议：设置环境变量 OPENAI_API_KEY 和 OPENAI_API_URL")
+    logger.info("[Init] 📖 完整配置示例见：src/mini_ai/config.example.yaml")
     
     return True
 

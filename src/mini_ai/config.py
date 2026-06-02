@@ -61,7 +61,7 @@ IMAGE: dict = {
     "compress_quality": 85,                 # JPEG quality
 }
 API_MODE: str = "openai"
-STREAMING: bool = False
+STREAMING: bool = True
 RUNNER: dict = {"context_usage_limit": 0.88, "max_turns": 20}
 THINKING: dict = {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
 DISPLAY: dict = {"thinking_mode": "collapsed", "tool_detail": "summary"}
@@ -227,9 +227,43 @@ def _apply_config(raw: dict) -> None:
     }
     TIMEOUTS = {**_timeout_defaults, **(raw.get("timeouts") or {})}
     
-    COMPACTOR = raw.get("compactor") or {}
-    TEAMMATE = raw.get("teammate") or {}
-    TOOL = raw.get("tool") or {}
+    # 压缩配置
+    _compactor_defaults = {
+        "context_usage_threshold": 0.8,
+        "keep_recent": 50,
+        "keep_budget_ratio": 0.2,
+        "early_compact_ratio": 0.85,
+        "max_cached_summaries": 200,
+        "max_summary_sections": 50,
+        "context_limit": 50,
+    }
+    COMPACTOR = {**_compactor_defaults, **(raw.get("compactor") or {})}
+    
+    # 队友配置
+    _teammate_defaults = {
+        "max_teammates": 10,
+        "max_turns": 20,
+        "idle_timeout": 300,
+        "max_history": 20,
+        "task_timeout": 600,
+        "base_tools": [
+            "run_command",
+            "web_fetch",
+            "load_skill",
+            "read_file",
+            "write_file",
+            "edit_file",
+            "search_files",
+            "list_dir",
+        ],
+    }
+    TEAMMATE = {**_teammate_defaults, **(raw.get("teammate") or {})}
+    
+    # 工具配置
+    _tool_defaults = {
+        "max_result_chars": 8000,
+    }
+    TOOL = {**_tool_defaults, **(raw.get("tool") or {})}
     
     # 图片处理配置
     _image_defaults = {
@@ -241,7 +275,7 @@ def _apply_config(raw: dict) -> None:
     IMAGE = {**_image_defaults, **(raw.get("image") or {})}
     
     API_MODE = MODEL_CONFIG.get("api_mode", "openai")
-    STREAMING = raw.get("streaming", False)
+    STREAMING = raw.get("streaming", True)
     RUNNER = raw.get("runner") or {"context_usage_limit": 0.88, "max_turns": 20}
     _global_thinking = raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
     _model_thinking = MODEL_CONFIG.get("thinking") or {}
