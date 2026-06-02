@@ -16,6 +16,7 @@ class WebDisplay:
         self._streaming = False
         self.thinking_mode = "collapsed"
         self.tool_detail = "summary"
+        self._llm_round_start_time = 0.0
 
     def set_teammate(self, name: str):
         self._teammate = name
@@ -30,6 +31,27 @@ class WebDisplay:
         self.loop.call_soon_threadsafe(
             lambda: self.queue.put_nowait({"event": event, "data": data})
         )
+
+    def llm_round_start(self, model: str = ""):
+        """LLM 调用开始"""
+        self._llm_round_start_time = time.monotonic()
+        data = {"model": model}
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("llm_round_start", data)
+
+    def llm_round_end(self, prompt_tokens: int = 0, completion_tokens: int = 0, model: str = ""):
+        """LLM 调用结束"""
+        elapsed = time.monotonic() - self._llm_round_start_time
+        data = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "elapsed": round(elapsed, 2),
+            "model": model,
+        }
+        if self._teammate:
+            data["teammate"] = self._teammate
+        self._push("llm_round_end", data)
 
     def thinking_start(self):
         self._thinking_buf = ""

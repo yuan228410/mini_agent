@@ -100,8 +100,9 @@ def execute(args: dict) -> str:
     try:
         resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUTS.get("web_fetch", 20))
         resp.raise_for_status()
-        encoding = _detect_encoding(resp)
-        resp.encoding = encoding
+        # 正确处理编码：优先使用 apparent_encoding，避免乱码
+        if resp.apparent_encoding:
+            resp.encoding = resp.apparent_encoding
         raw = resp.text
     except Exception as e:
         logger.debug(f"[抓取✗] {url}: {e}")

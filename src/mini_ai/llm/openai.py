@@ -264,6 +264,8 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
                 usage_store["prompt_tokens"] = p
                 usage_store["_api_prompt"] = True
             if c: usage_store["completion_tokens"] += c
+            # 推送 usage 事件
+            yield {"type": "usage", "prompt_tokens": p, "completion_tokens": c}
 
     elapsed = time.monotonic() - t0
     tool_calls = [{"id": buf.get("id", ""), "type": "function", "function": buf["function"]}

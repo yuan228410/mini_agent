@@ -65,6 +65,17 @@ async function loadWorkspaces() {
   } catch {}
 }
 
+function _preserveGenerating(oldList: SessionInfo[], newList: SessionInfo[]): SessionInfo[] {
+  const map = new Map<string, string>()
+  for (const s of oldList) {
+    if (s.status === 'generating') map.set(s.session_id, 'generating')
+  }
+  for (const s of newList) {
+    if (map.has(s.session_id)) s.status = map.get(s.session_id)! as SessionInfo["status"]
+  }
+  return newList
+}
+
 async function loadAllSessions() {
   const promises: Promise<void>[] = []
   promises.push((async () => {
@@ -72,7 +83,7 @@ async function loadAllSessions() {
   })())
   for (const ws of workspaces.value) {
     promises.push((async () => {
-      try { const resp = await getSessions(ws.name); wsSessions[ws.name] = resp.sessions || [] } catch { wsSessions[ws.name] = [] }
+      try { const resp = await getSessions(ws.name); wsSessions[ws.name] = _preserveGenerating(wsSessions[ws.name] || [], resp.sessions || []) } catch { wsSessions[ws.name] = [] }
     })())
   }
   await Promise.all(promises)
@@ -82,7 +93,7 @@ async function loadSessionsFor(wsName: string | null) {
   try {
     const resp = await getSessions(wsName || undefined)
     if (wsName) {
-      wsSessions[wsName] = resp.sessions || []
+      wsSessions[wsName] = _preserveGenerating(wsSessions[wsName] || [], resp.sessions || [])
     } else {
 
     }

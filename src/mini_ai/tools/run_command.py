@@ -39,9 +39,15 @@ def execute(args: dict) -> str:
 
     logger.info(f"[执行→] {command} (timeout={timeout}s, cwd={cwd})")
     try:
+        # 强制使用 UTF-8 编码，避免乱码
+        import os
+        env = os.environ.copy()
+        env["LANG"] = "en_US.UTF-8"
+        env["LC_ALL"] = "en_US.UTF-8"
+        
         result = subprocess.run(
             command, shell=True, capture_output=True, text=True, errors="replace",
-            timeout=timeout, cwd=cwd,
+            timeout=timeout, cwd=cwd, env=env, encoding="utf-8",
         )
         parts = []
         if result.stdout:

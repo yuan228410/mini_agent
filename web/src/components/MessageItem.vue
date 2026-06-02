@@ -81,6 +81,7 @@ function openImage(dataUrl: string) {
       <span class="message-label" :style="isTeammate ? { color: message.teammateColor || '#888' } : {}">{{ label }}</span>
       <span v-if="timeLabel" class="message-time">{{ timeLabel }}</span>
     </div>
+    
     <ThinkingBlock v-if="message.thinking" :thinking="message.thinking" />
     <ToolCallBlock v-for="(tool, i) in message.tools" :key="i" :tool="tool" />
     
@@ -103,6 +104,7 @@ function openImage(dataUrl: string) {
   border-bottom: none;
   animation: fadeInUp 0.35s ease forwards;
   border-radius: 10px;
+  position: relative;
 }
 
 

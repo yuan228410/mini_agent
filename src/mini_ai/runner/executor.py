@@ -67,9 +67,24 @@ class ToolExecutor:
         ctx: Any,
     ) -> dict | None:
         """同步调用 LLM"""
-        from ..llm import chat as llm_chat
+        from ..llm import chat as llm_chat, get_model
+        
+        # 调用开始
+        model = get_model(ctx)
+        if self.display and hasattr(self.display, 'llm_round_start'):
+            self.display.llm_round_start(model)
         
         msg = llm_chat(messages, tools=tools, ctx=ctx)
+        
+        # 调用结束
+        if self.display and hasattr(self.display, 'llm_round_end'):
+            from ..llm import get_usage
+            usage = get_usage()
+            self.display.llm_round_end(
+                prompt_tokens=usage.get("prompt_tokens", 0),
+                completion_tokens=usage.get("completion_tokens", 0),
+                model=model
+            )
         
         # 处理 thinking
         if msg and msg.get("thinking") and self.display:
@@ -87,10 +102,16 @@ class ToolExecutor:
         abort_event: threading.Event | None,
     ) -> dict | None:
         """流式调用 LLM"""
-        from ..llm import chat_stream as llm_chat_stream
+        from ..llm import chat_stream as llm_chat_stream, get_model, get_usage
+        
+        # 调用开始
+        model = get_model(ctx)
+        if self.display and hasattr(self.display, 'llm_round_start'):
+            self.display.llm_round_start(model)
         
         msg = None
         thinking_seen = False
+        last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
         
         for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
             if abort_event and abort_event.is_set():
@@ -114,6 +135,10 @@ class ToolExecutor:
             elif chunk_type == "text":
                 if self.display:
                     self.display.text_chunk(chunk.get("content", ""))
+            elif chunk_type == "usage":
+                # 捕获 usage 信息
+                last_usage["prompt_tokens"] = chunk.get("prompt_tokens", 0)
+                last_usage["completion_tokens"] = chunk.get("completion_tokens", 0)
             elif chunk_type == "error":
                 logger.error(f"[LLM✗] 流式错误: {chunk.get('error')}")
                 if self.display:
@@ -125,6 +150,15 @@ class ToolExecutor:
         
         if thinking_seen and self.display:
             self.display.thinking_end()
+        
+        # 调用结束
+        if self.display and hasattr(self.display, 'llm_round_end'):
+            usage = get_usage()
+            self.display.llm_round_end(
+                prompt_tokens=usage.get("prompt_tokens", last_usage["prompt_tokens"]),
+                completion_tokens=usage.get("completion_tokens", last_usage["completion_tokens"]),
+                model=model
+            )
         
         return msg
     

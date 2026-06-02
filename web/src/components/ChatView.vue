@@ -28,6 +28,8 @@ interface SessionState {
   _currentContent: string
   _currentThinking: string
   draftText: string
+  // 多 Agent 并行：每个队友独立的缓冲区
+  _teammateBuffers: Map<string, { content: string; thinking: string }>
 }
 
 const SESSION_KEY = 'mini-ai-session-id'
@@ -87,7 +89,14 @@ const STREAMING_TIMEOUT = 120_000  // 2 min — 若 isStreaming 期间无任何 
 function _state(sid: string): SessionState {
   const key = _cacheKey(sid, props.workspace)
   if (!_states.has(key)) {
-    _states.set(key, { messages: [], isStreaming: false, _currentContent: '', _currentThinking: '', draftText: '' })
+    _states.set(key, { 
+      messages: [], 
+      isStreaming: false, 
+      _currentContent: '', 
+      _currentThinking: '', 
+      draftText: '',
+      _teammateBuffers: new Map()
+    })
   }
   return _states.get(key)!
 }
@@ -379,7 +388,7 @@ async function handleWsEvent(event: WsEvent) {
   _processEvent(s, event)
   _lastWsEventTime = Date.now()
 
-  const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error'
+  const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error' || event.event === 'complete'
 
   if (isTerminal) {
     s.isStreaming = false
@@ -453,11 +462,30 @@ function _processEvent(s: SessionState, event: WsEvent) {
       _startNewAssistantMsg(s)
       break
     case 'thinking':
-      s._currentThinking += event.data.content || ''
       {
-        const m = s.messages[s.messages.length - 1]
-        if (m && m.role === 'assistant') {
-          m.thinking = { chars: s._currentThinking.length, elapsed: 0, content: s._currentThinking }
+        const tm = event.data.teammate || ''
+        if (tm) {
+          // 使用队友独立缓冲区
+          if (!s._teammateBuffers.has(tm)) {
+            s._teammateBuffers.set(tm, { content: '', thinking: '' })
+          }
+          const buf = s._teammateBuffers.get(tm)!
+          buf.thinking += event.data.content || ''
+          
+          // 查找或创建队友消息
+          let tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (!tmMsg) {
+            tmMsg = { role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), teammate: tm, teammateColor: _tmColor(tm) }
+            s.messages.push(tmMsg)
+          }
+          tmMsg.thinking = { chars: buf.thinking.length, elapsed: 0, content: buf.thinking }
+          _updateUI(s)
+        } else {
+          s._currentThinking += event.data.content || ''
+          const m = s.messages[s.messages.length - 1]
+          if (m && m.role === 'assistant') {
+            m.thinking = { chars: s._currentThinking.length, elapsed: 0, content: s._currentThinking }
+          }
         }
       }
       break
@@ -483,11 +511,21 @@ function _processEvent(s: SessionState, event: WsEvent) {
       {
         const tm = event.data.teammate || ''
         if (tm) {
-          const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
-          if (tmMsg) {
-            tmMsg.content = (tmMsg.content || '') + (event.data.content || '')
-            _updateUI(s)
+          // 使用队友独立缓冲区
+          if (!s._teammateBuffers.has(tm)) {
+            s._teammateBuffers.set(tm, { content: '', thinking: '' })
           }
+          const buf = s._teammateBuffers.get(tm)!
+          buf.content += event.data.content || ''
+          
+          // 查找或创建队友消息
+          let tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
+          if (!tmMsg) {
+            tmMsg = { role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), teammate: tm, teammateColor: _tmColor(tm) }
+            s.messages.push(tmMsg)
+          }
+          tmMsg.content = buf.content
+          _updateUI(s)
         } else {
           s._currentContent += event.data.content || ''
         }
@@ -522,30 +560,56 @@ function _processEvent(s: SessionState, event: WsEvent) {
     case 'tool_result':
       {
         const tm = event.data.teammate || ''
+        const tcId = event.data.tool_call_id || ''
+        
         if (tm) {
           const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
           if (tmMsg && tmMsg.tools) {
-            const tcId = event.data.tool_call_id || ''
             let target: any = null
+            // 优先按 tool_call_id 精确匹配
             if (tcId) target = tmMsg.tools.find((t: any) => t.tool_call_id === tcId)
+            // 否则按 name + 占位符匹配（同名工具可能在同一轮调用多次）
+            if (!target) {
+              const name = event.data.name || ''
+              target = tmMsg.tools.find((t: any) => t.name === name && t.result === '...')
+            }
+            // 最后兜底：找最后一个占位符
             if (!target) target = tmMsg.tools.find((t: any) => t.result === '...')
             if (!target) target = tmMsg.tools[tmMsg.tools.length - 1]
-            target.result = event.data.result || ''
-            target.elapsed = event.data.elapsed || 0
+            
+            if (target) {
+              target.result = event.data.result || ''
+              target.elapsed = event.data.elapsed || 0
+              _updateUI(s)
+            } else {
+              console.warn('[tool_result] 未找到匹配的工具调用', { tm, tcId, name: event.data.name })
+            }
           }
-          _updateUI(s)
           break
         }
-        const tcId = event.data.tool_call_id || ''
+        
+        // 主 Agent 的工具
         const m = s.messages[s.messages.length - 1]
         if (m && m.role === 'assistant' && m.tools && m.tools.length > 0) {
           let target: any = null
+          // 优先按 tool_call_id 精确匹配
           if (tcId) target = m.tools.find((t: any) => t.tool_call_id === tcId)
+          // 否则按 name + 占位符匹配
+          if (!target) {
+            const name = event.data.name || ''
+            target = m.tools.find((t: any) => t.name === name && t.result === '...')
+          }
+          // 最后兜底：找最后一个占位符
           if (!target) target = m.tools.find((t: any) => t.result === '...')
           if (!target) target = m.tools[m.tools.length - 1]
-          target.result = event.data.result || ''
-          target.elapsed = event.data.elapsed || 0
-          _updateUI(s)
+          
+          if (target) {
+            target.result = event.data.result || ''
+            target.elapsed = event.data.elapsed || 0
+            _updateUI(s)
+          } else {
+            console.warn('[tool_result] 未找到匹配的工具调用', { tcId, name: event.data.name })
+          }
         }
       }
       break
@@ -573,12 +637,39 @@ function _processEvent(s: SessionState, event: WsEvent) {
             tmMsg.streaming = false
             _updateUI(s)
           }
+          // 清除队友缓冲区
+          s._teammateBuffers.delete(tmName)
         }
       }
       window.dispatchEvent(new CustomEvent('ws-message', { detail: event }))
       break
     case 'blackboard_update':
       window.dispatchEvent(new CustomEvent('ws-message', { detail: event }))
+      break
+    case 'inbox_message':
+      // 处理队友间的消息通知
+      {
+        const to = event.data?.to || 'lead'
+        const from = event.data?.from || ''
+        const count = event.data?.count || 0
+        if (from && count > 0) {
+          // 在消息列表中添加一条通知消息
+          const lastMsg = s.messages[s.messages.length - 1]
+          // 避免连续重复通知
+          const lastInboxNotice = s.messages.slice(-3).find(m => 
+            m.role === 'assistant' && m.content?.includes(`📧 ${from} → ${to}`)
+          )
+          if (!lastInboxNotice) {
+            s.messages.push({
+              role: 'assistant',
+              content: `📧 **${from} → ${to}**: ${count} 条新消息`,
+              timestamp: _localTs(),
+              streaming: false
+            })
+            _updateUI(s)
+          }
+        }
+      }
       break
     case 'error':
       s._currentContent += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`

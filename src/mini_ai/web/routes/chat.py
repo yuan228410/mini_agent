@@ -574,7 +574,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     tc_copy = {k: v for k, v in tc.items()}
                     tc_id = tc.get("id", "")
                     if tc_id and tc_id in tool_results_map:
-                        tc_copy["_result"] = tool_results_map[tc_id][:2000]
+                        tc_copy["_result"] = tool_results_map[tc_id]  # 存储完整结果，不再截断
                     enriched_tcs.append(tc_copy)
                 am_meta = {}
                 if am.get("thinking"):

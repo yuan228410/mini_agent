@@ -213,6 +213,9 @@ class ToolRegistry:
                 cached_result, hit = cache.get_or_wait(name, args)
                 if hit:
                     logger.info(f"[并行缓存命中] {name}")
+                    # 缓存命中也需要推送 tool_result
+                    if display and cached_result is not None:
+                        display.tool_result(name, cached_result, 0, tc["id"])
                     return tc["id"], cached_result
                 
                 logger.info(f"[并行→] {name}({json.dumps(args, ensure_ascii=False)})")
@@ -242,6 +245,12 @@ class ToolRegistry:
                     error_msg = f"⚠ 工具执行异常\n\n工具: {name if 'name' in locals() else 'unknown'}\n错误: {type(e).__name__}: {e}\n参数: {args_summary}\n\n堆栈:\n{traceback.format_exc()}"
                 
                 logger.error(f"[并行工具✗] {name if 'name' in locals() else 'unknown'} 异常: {e}", exc_info=True)
+                
+                # 异常时也要推送 tool_result，避免前端占位符不更新
+                if display:
+                    elapsed = time.monotonic() - t0 if 't0' in locals() else 0
+                    display.tool_result(name if 'name' in locals() else 'unknown', error_msg, elapsed, tc["id"])
+                
                 return tc["id"], error_msg
 
         with ThreadPoolExecutor(max_workers=len(calls)) as pool:
