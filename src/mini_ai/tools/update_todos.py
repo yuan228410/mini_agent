@@ -104,6 +104,16 @@ def set_session(session_id: str):
     _current_session.set(session_id)
 
 
+def get_todos(session_id: str | None = None) -> list[dict]:
+    """获取指定会话的 todos，未指定则使用当前会话"""
+    if session_id:
+        with _stores_lock:
+            store = _stores.get(session_id)
+            return list(store.items) if store else []
+    else:
+        return list(_get_store().items)
+
+
 def execute(args: dict) -> str:
     todos = args.get("todos", [])
     if not todos:

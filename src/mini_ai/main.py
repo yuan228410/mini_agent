@@ -7,8 +7,7 @@ from datetime import datetime
 
 from . import __version__
 from .cli import CommandHandler, Display
-from .memory import MemoryStore, Compactor, SessionManager
-from .memory import MemoryStore, Compactor, SessionManager, HistoryDB, HistoryDBPool
+from .memory import MemoryStore, Compactor, HistoryDB, HistoryDBPool
 from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
                      DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw, user_data_dir)
 from .context import ContextBuilder
@@ -107,7 +106,6 @@ class SessionContext:
     skill_loader: SkillLoader
     store: MemoryStore
     history_db: HistoryDB
-    sessions: SessionManager
     compactor: Compactor
     context_builder: ContextBuilder
     team_mgr: TeammateManager
@@ -199,7 +197,6 @@ def _create_workspace_session(
         global_memory_dir=global_memory_dir,
         workspace_memory_dir=ws_memory_dir,
     )
-    sessions = SessionManager(ws_dir / "memory_data" / "sessions")
     register_memory_tools(store)
     register_history_tools(history_db, ws_name)
 
@@ -237,7 +234,7 @@ def _create_workspace_session(
         return msg
 
     cmd = CommandHandler(
-        disp=disp, store=store, sessions=sessions, compactor=compactor,
+        disp=disp, store=store, compactor=compactor,
         inject_fn=_inject_todos, run_tool_fn=_run_loop,
         lead_tools=_lead_tool_defs(app_ctx), ctx=req_ctx, workspace_mgr=ws_mgr,
         history_db=history_db, context_builder=ctx_builder, skill_loader=skill_loader,
@@ -263,7 +260,6 @@ def _create_workspace_session(
         skill_loader=skill_loader,
         store=store,
         history_db=history_db,
-        sessions=sessions,
         compactor=compactor,
         context_builder=ctx_builder,
         team_mgr=team_mgr,

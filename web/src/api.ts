@@ -770,3 +770,12 @@ export async function clearBlackboard(username: string, workspace: string): Prom
   if (!resp.ok) throw new Error('清空黑板失败')
   return resp.json()
 }
+
+export async function getTodos(sessionId: string, workspace?: string): Promise<{ todos: any[] }> {
+  const params = new URLSearchParams()
+  params.set('username', _username())
+  params.set('session_id', sessionId)
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _fetch(`/api/todos?${params.toString()}`)
+  return resp.json()
+}

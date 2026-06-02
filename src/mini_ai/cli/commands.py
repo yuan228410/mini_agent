@@ -6,10 +6,9 @@ from ..utils import now_ts
 
 
 class CommandHandler:
-    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path="", username="default", session_id=None):
+    def __init__(self, *, disp, store, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path="", username="default", session_id=None):
         self.disp = disp
         self.store = store
-        self.sessions = sessions
         self.compactor = compactor
         self.inject_fn = inject_fn
         self.run_tool_fn = run_tool_fn
@@ -30,28 +29,6 @@ class CommandHandler:
             self._purge_pending = False
         if user_input.lower() in ("exit", "quit", "q", "/exit", "/quit", "/q"):
             return "break"
-
-        if user_input == "/save":
-            self.disp.error("用法: /save <会话名称>")
-            return "continue"
-
-        if user_input.startswith("/save "):
-            self.disp.info(self.sessions.save(user_input[6:], messages))
-            return "continue"
-
-        if user_input == "/load":
-            self.disp.error("用法: /load <会话名称>")
-            return "continue"
-
-        if user_input.startswith("/load "):
-            loaded = self.sessions.load(user_input[6:])
-            if loaded:
-                messages[:] = [messages[0]] + loaded
-                self.inject_fn(messages)
-                self.disp.info(f"会话 '{user_input[6:]}' 已加载（{len(loaded)} 条消息）")
-            else:
-                self.disp.error(f"会话 '{user_input[6:]}' 不存在")
-            return "continue"
 
         if user_input == "/sessions":
             # 列出数据库中的所有会话
@@ -301,28 +278,260 @@ class CommandHandler:
                 self.history_db.append("assistant", msg["content"])
             return "continue"
 
-        if user_input == "/skill":
-            from ..tools import dispatch
-            self.disp.info(dispatch("list_skills", {}))
-            return "continue"
-
-        if user_input.startswith("/skill ") and user_input[7:].strip() == "":
-            self.disp.error("用法: /skill <技能名称>")
-            return "continue"
-
-        if user_input.startswith("/skill "):
-            skill_name = user_input[7:].strip()
-            if not skill_name:
-                self.disp.error("用法: /skill <技能名称>")
+        # ── 技能管理命令 ──
+        
+        if user_input == "/skills":
+            # 列出所有技能
+            if not self.skill_loader or not self.skill_loader.skills:
+                self.disp.info("暂无已安装的技能")
+                self.disp.info("\n使用以下命令安装:")
+                self.disp.info("  /skill install <url|path>")
                 return "continue"
-            prompt = f"请加载并使用技能 '{skill_name}' 来完成用户后续的任务。先调用 load_skill 了解该技能的详细内容和使用方式，然后严格按照技能指引执行。"
-            messages.append({"role": "user", "content": prompt, "timestamp": now_ts()})
-            self.history_db.append("user", prompt)
-            msg = self.run_tool_fn(messages, self.lead_tools, self.inject_fn, self.disp, ctx=self.ctx)
-            if msg and msg.get("content"):
-                messages.append({"role": "assistant", "content": msg["content"]})
-                self.history_db.append("assistant", msg["content"])
+            
+            from rich.table import Table
+            
+            table = Table(title="📚 可用技能", show_header=True, header_style="bold cyan")
+            table.add_column("名称", style="cyan")
+            table.add_column("描述", style="white")
+            table.add_column("层级", style="magenta")
+            
+            for name, skill in self.skill_loader.skills.items():
+                desc = skill["meta"].get("description", "无描述")
+                tier = skill.get("tier", "global")
+                
+                table.add_row(
+                    name,
+                    desc[:50] + ("..." if len(desc) > 50 else ""),
+                    tier,
+                )
+            
+            self.disp.console.print(table)
+            self.disp.info("\n使用 /skill load <name> 加载技能")
             return "continue"
+        
+        if user_input == "/skill":
+            # 显示技能帮助
+            from rich.panel import Panel
+            self.disp.console.print(Panel(
+                """
+[bold]技能管理命令:[/bold]
+
+  [cyan]/skills[/cyan]                     列出所有技能
+  [cyan]/skill install <url|path>[/cyan]    安装技能
+  [cyan]/skill uninstall <name>[/cyan]      卸载技能
+  [cyan]/skill load <name>[/cyan]           加载技能
+  [cyan]/skill info <name>[/cyan]           查看技能详情
+  [cyan]/skill create <name>[/cyan]         创建技能模板
+
+[bold]安装选项:[/bold]
+
+  --global     安装到全局（默认）
+  --user       安装到用户级
+  --workspace  安装到工作空间
+
+[bold]使用示例:[/bold]
+
+  [yellow]安装技能[/yellow]
+  /skill install https://.../skill.md
+  /skill install /path/to/skill-dir --workspace
+
+  [yellow]查看技能[/yellow]
+  /skill info enterprise-search
+
+  [yellow]加载技能[/yellow]
+  /skill load python-expert
+  或让模型自动调用: load_skill("python-expert")
+
+  [yellow]创建技能[/yellow]
+  /skill create my-workflow --workspace
+        """,
+                title="📖 技能帮助",
+                border_style="blue",
+            ))
+            return "continue"
+        
+        if user_input.startswith("/skill "):
+            # 解析技能子命令
+            parts = user_input[7:].strip().split(maxsplit=1)
+            if not parts:
+                self.disp.error("用法: /skill <install|uninstall|load|info|create> ...")
+                return "continue"
+            
+            action = parts[0]
+            params = parts[1] if len(parts) > 1 else ""
+            
+            if action == "install":
+                # /skill install <url|path> [--global|--user|--workspace]
+                if not params:
+                    self.disp.error("用法: /skill install <url|path> [--global|--user|--workspace]")
+                    return "continue"
+                
+                # 解析层级
+                level = "global"
+                if "--user" in params:
+                    level = "user"
+                    params = params.replace("--user", "").strip()
+                elif "--workspace" in params:
+                    level = "workspace"
+                    params = params.replace("--workspace", "").strip()
+                
+                params = params.replace("--global", "").strip()
+                
+                if not params:
+                    self.disp.error("请指定技能 URL 或路径")
+                    return "continue"
+                
+                # 调用 install_skill 工具
+                from ..tools import dispatch
+                if params.startswith("http"):
+                    result = dispatch("install_skill", {"source": params, "level": level})
+                else:
+                    result = dispatch("install_skill", {"source": params, "level": level})
+                
+                self.disp.info(result)
+                return "continue"
+            
+            elif action == "uninstall":
+                # /skill uninstall <name>
+                if not params:
+                    self.disp.error("用法: /skill uninstall <name>")
+                    return "continue"
+                
+                name = params.split()[0]
+                level = params.split()[1] if len(params.split()) > 1 else None
+                
+                from ..tools import dispatch
+                if level:
+                    result = dispatch("delete_skill", {"name": name, "level": level})
+                else:
+                    result = dispatch("delete_skill", {"name": name})
+                
+                if result.startswith("Error:"):
+                    self.disp.error(result)
+                else:
+                    self.disp.info(result)
+                return "continue"
+            
+            elif action == "load":
+                # /skill load <name>
+                if not params:
+                    self.disp.error("用法: /skill load <name>")
+                    return "continue"
+                
+                skill_name = params.split()[0]
+                from ..tools import dispatch
+                result = dispatch("load_skill", {"name": skill_name})
+                
+                if result.startswith("Error:"):
+                    self.disp.error(result)
+                else:
+                    self.disp.info(f"✓ 已加载技能: {skill_name}")
+                return "continue"
+            
+            elif action == "info":
+                # /skill info <name>
+                if not params:
+                    self.disp.error("用法: /skill info <name>")
+                    return "continue"
+                
+                skill_name = params.split()[0]
+                
+                if not self.skill_loader or skill_name not in self.skill_loader.skills:
+                    self.disp.error(f"未找到技能: {skill_name}")
+                    return "continue"
+                
+                skill = self.skill_loader.skills[skill_name]
+                meta = skill["meta"]
+                
+                from rich.panel import Panel
+                info = f"**{skill_name}**\n\n"
+                if meta.get("description"):
+                    info += f"{meta['description']}\n\n"
+                if meta.get("tags"):
+                    info += f"标签: {meta['tags']}\n"
+                info += f"层级: {skill.get('tier', 'global')}\n"
+                info += f"路径: {skill['path']}\n"
+                
+                self.disp.console.print(Panel(info, title=f"📖 {skill_name}", border_style="blue"))
+                return "continue"
+            
+            elif action == "create":
+                # /skill create <name> [--global|--user|--workspace]
+                if not params:
+                    self.disp.error("用法: /skill create <name> [--global|--user|--workspace]")
+                    return "continue"
+                
+                # 解析层级
+                level = "global"
+                if "--user" in params:
+                    level = "user"
+                    params = params.replace("--user", "").strip()
+                elif "--workspace" in params:
+                    level = "workspace"
+                    params = params.replace("--workspace", "").strip()
+                
+                params = params.replace("--global", "").strip()
+                
+                if not params:
+                    self.disp.error("请指定技能名称")
+                    return "continue"
+                
+                skill_name = params.split()[0]
+                
+                # 创建技能模板
+                if not self.skill_loader:
+                    self.disp.error("技能加载器不可用")
+                    return "continue"
+                
+                target_dir = self.skill_loader.get_tier_dir(level)
+                if not target_dir:
+                    self.disp.error(f"层级 '{level}' 未配置")
+                    return "continue"
+                
+                skill_dir = target_dir / skill_name
+                if skill_dir.exists():
+                    self.disp.error(f"技能 '{skill_name}' 已存在于 {level} 层级")
+                    return "continue"
+                
+                # 创建目录结构
+                skill_dir.mkdir(parents=True, exist_ok=True)
+                skill_file = skill_dir / "SKILL.md"
+                
+                # 写入模板内容
+                template = f"""---
+name: {skill_name}
+description: 技能描述（请修改）
+tags: 标签1,标签2
+---
+
+# {skill_name}
+
+技能内容（请修改）
+
+## 使用场景
+
+- 场景1
+- 场景2
+
+## 步骤
+
+1. 步骤1
+2. 步骤2
+"""
+                skill_file.write_text(template, encoding="utf-8")
+                
+                # 刷新技能列表
+                self.skill_loader._load_all()
+                
+                self.disp.info(f"✓ 已创建技能模板: {skill_name}")
+                self.disp.info(f"  目录: {skill_dir}")
+                self.disp.info(f"  请编辑 SKILL.md 添加技能内容")
+                return "continue"
+            
+            else:
+                self.disp.error(f"未知子命令: {action}")
+                self.disp.info("可用子命令: install, uninstall, load, info, create")
+                return "continue"
 
         if user_input == "/workspace":
             if self.workspace_mgr:

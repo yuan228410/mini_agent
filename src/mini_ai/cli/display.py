@@ -12,9 +12,10 @@ from ..logger import logger
 _IS_TTY = sys.stdout.isatty()
 
 _SLASH_COMMANDS = [
-    ("/save", "保存当前对话为命名会话"),
-    ("/load", "加载已保存的会话"),
     ("/sessions", "列出所有已保存的会话"),
+    ("/session", "显示当前会话信息"),
+    ("/switch", "切换到指定会话"),
+    ("/new", "创建新会话"),
     ("/compact", "手动触发对话压缩"),
     ("/clear", "清空上下文消息（历史保留在 DB 中）"),
     ("/purge", "彻底删除历史消息（不可恢复）"),
@@ -22,16 +23,10 @@ _SLASH_COMMANDS = [
     ("/history", "查看历史消息"),
     ("/export", "导出对话为 Markdown（--thinking --tools 可选）"),
     ("/genskill", "从对话中总结生成技能"),
-    ("/skill", "使用指定技能执行任务"),
-    ("/thinking", "查看最近思考过程"),
-    ("/thinking collapsed", "折叠模式（仅摘要）"),
-    ("/thinking expanded", "展开模式（实时显示）"),
-    ("/thinking hidden", "隐藏思考过程"),
-    ("/workspace", "列出所有工作空间"),
-    ("/workspace new", "创建新工作空间"),
-    ("/workspace add", "添加现有文件夹为工作空间"),
-    ("/workspace remove", "移除工作空间（保留数据）"),
-    ("/workspace delete", "删除工作空间（含数据）"),
+    ("/skills", "列出所有技能"),
+    ("/skill", "技能管理（install/uninstall/load/info/create）"),
+    ("/thinking", "思考模式控制（collapsed/expanded/hidden）"),
+    ("/workspace", "工作空间管理（new/add/remove/delete）"),
     ("/plan", "进入计划模式（只规划不执行）"),
     ("/act", "切换到执行模式"),
     ("/mcp", "查看 MCP 服务器状态"),
@@ -40,17 +35,11 @@ _SLASH_COMMANDS = [
     ("/exit", "退出"),
 ]
 
+_SLASH_COMMANDS_DESC = dict(_SLASH_COMMANDS)
+
 def _build_completions():
+    """构建补全列表（只包含命令模板，技能名在运行时动态补全）"""
     items = list(_SLASH_COMMANDS)
-    try:
-        from ..skills import SkillLoader
-        from ..config import DATA_DIR, SKILL_PATHS
-        loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
-        for name, skill in loader.skills.items():
-            desc = skill["meta"].get("description", "")
-            items.append((f"/skill {name}", desc))
-    except Exception:
-        pass
     try:
         from ..config import AVAILABLE_MODELS, MODEL_CONFIG
         for name in AVAILABLE_MODELS:
@@ -137,6 +126,46 @@ class Display:
                 text = document.text_before_cursor
                 if not text.startswith("/"):
                     return
+                
+                # 多级补全：/skill 子命令
+                if text == "/skill" or text.startswith("/skill "):
+                    parts = text.split()
+                    # /skill <tab> 或 /skill <空格><tab> → 补全子命令
+                    if len(parts) == 1 or (len(parts) == 2 and parts[1] == ""):
+                        subcmds = ["install", "uninstall", "load", "info", "create"]
+                        for sub in subcmds:
+                            yield Completion(sub, start_position=0, display_meta=f"{sub} 技能")
+                        return
+                    # /skill <subcmd> <tab> → 补全技能名（仅 load/info/uninstall）
+                    if len(parts) == 2 and parts[1] in ["load", "info", "uninstall"]:
+                        try:
+                            from ..skills import SkillLoader
+                            from ..config import DATA_DIR, SKILL_PATHS
+                            loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
+                            for name, skill in loader.skills.items():
+                                desc = skill["meta"].get("description", "")[:50]
+                                yield Completion(name, start_position=0, display_meta=desc)
+                        except Exception:
+                            pass
+                        return
+                
+                # 多级补全：/thinking 子命令
+                if text == "/thinking" or text.startswith("/thinking "):
+                    parts = text.split()
+                    if len(parts) == 1 or (len(parts) == 2 and parts[1] == ""):
+                        for sub in ["collapsed", "expanded", "hidden"]:
+                            yield Completion(sub, start_position=0, display_meta=f"思考{sub}")
+                        return
+                
+                # 多级补全：/workspace 子命令
+                if text == "/workspace" or text.startswith("/workspace "):
+                    parts = text.split()
+                    if len(parts) == 1 or (len(parts) == 2 and parts[1] == ""):
+                        for sub, desc in [("new", "创建"), ("add", "添加"), ("remove", "移除"), ("delete", "删除")]:
+                            yield Completion(sub, start_position=0, display_meta=f"{desc}工作空间")
+                        return
+                
+                # 默认：匹配所有命令
                 for cmd, desc in _ALL_COMPLETIONS:
                     if cmd.startswith(text):
                         yield Completion(cmd, start_position=-len(text), display_meta=desc)

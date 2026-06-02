@@ -685,6 +685,16 @@ async def list_sessions(username: str = Query(...), workspace: str | None = Quer
     logger.debug(f"[perf] list_sessions ws={workspace} count={len(sessions)} time={time.time()-_t0:.3f}s")
     return {"sessions": sessions}
 
+
+@router.get("/todos")
+async def get_todos(username: str = Query(...), workspace: str | None = Query(default=None), session_id: str = Query(...)):
+    """获取指定会话的待办列表"""
+    from ...tools.update_todos import get_todos as _get_todos
+    cache_key = _cache_key(username, workspace, session_id)
+    todos = _get_todos(cache_key)
+    return {"todos": todos}
+
+
 @router.delete("/session")
 async def delete_session(body: dict):
     username = body.get("username", "")

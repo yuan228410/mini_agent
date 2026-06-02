@@ -15,7 +15,6 @@ class Workspace:
         self.ws_dir = ws_dir
         self.project_path = project_path
         self.memory_dir = ws_dir / "memory_data"
-        self.sessions_dir = ws_dir / "memory_data" / "sessions"
         self.team_dir = ws_dir / ".team"
         self.history_db_path = ws_dir / "memory_data" / "history.db"
 

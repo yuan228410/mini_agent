@@ -4,7 +4,7 @@ import {
   ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct, isWsConnected,
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, getWorkspaces, exportSession,
-  getSystemPrompt,
+  getSystemPrompt, getTodos,
   type WsEvent, type HistoryMessage, type ImageData,
 } from '../api'
 import MessageItem from './MessageItem.vue'
@@ -1042,6 +1042,28 @@ async function switchToSession(sid: string, ws?: string) {
     console.log(`[mini-ai] switchToSession: sid=${sid} isStreaming=true, watchdog started`)
   }
   await fetchConfig()
+  
+  // 获取当前会话的 todos
+  try {
+    const resp = await getTodos(sid, ws || props.workspace)
+    if (resp.todos && resp.todos.length > 0) {
+      // 将 todos 转换为显示格式
+      const lines = resp.todos.map((t: any) => {
+        const icon = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]'
+        if (t.status === 'in_progress') {
+          return `${icon} **${t.id}. ${t.content}** ← 当前`
+        }
+        return `${icon} ${t.id}. ${t.content}`
+      })
+      todosContent.value = '📋TODO\n' + lines.join('\n')
+      emit('todos-update', todosContent.value)
+    } else {
+      todosContent.value = ''
+      emit('todos-update', '')
+    }
+  } catch (err) {
+    console.warn('[ChatView] getTodos failed:', err)
+  }
 }
 
 defineExpose({ useSkill, switchToSession, activeSessionId, planMode, getCurrentWorkflowState })
