@@ -34,9 +34,7 @@ def test_init_mini_ai():
         assert "mini_ai" in soul_content
         assert "AI 编程助手" in soul_content
         
-        rules_content = rules_file.read_text(encoding="utf-8")
-        assert "规划" in rules_content
-        assert "效率优先" in rules_content
+        # RULES.md 现在是可选的自定义文件，不再检查内容
         
         # 测试重复初始化（不强制）
         result = init_mini_ai(force=False)

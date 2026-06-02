@@ -23,7 +23,46 @@ user/MEMORY.md    (用户级，优先级高于 global)
 workspace/MEMORY.md (工作空间级，最高优先级)
 ```
 
-合并规则：按 `## 标题` 拆分 section，同名 section 后层覆盖前层（workspace > user > global）。无标题的头部文本仅保留首个非空文件的内容。
+**合并规则**：按 `## 标题` 拆分 section，同名 section 后层覆盖前层（workspace > user > global）。无标题的头部文本仅保留首个非空文件的内容。
+
+**适用文件**：
+- `MEMORY.md` — 长期记忆
+- `SOUL.md` — 身份定义
+- `RULES.md` — 行为规范
+
+**合并示例**：
+```
+# global/SOUL.md
+## 自我介绍
+我是全局 AI
+
+## 行为风格
+- 喜欢写代码
+
+---
+# user/SOUL.md
+## 自我介绍
+我是用户级 AI  ← 覆盖 global
+
+## 新增特性
+- 喜欢问问题  ← 新增
+
+---
+# workspace/SOUL.md
+## 自我介绍
+我是工作空间 AI  ← 覆盖 user
+
+---
+# 最终合并结果
+## 自我介绍
+我是工作空间 AI
+
+## 行为风格
+- 喜欢写代码
+
+## 新增特性
+- 喜欢问问题
+```
 
 ## 数据流
 

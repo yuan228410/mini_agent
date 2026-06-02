@@ -55,29 +55,24 @@ class ContextBuilder:
     def build(self, memory_store=None, skill_loader=None, project_path: str = "", exclude_character: bool = False) -> str:
         parts = []
 
-        # 1. 系统核心能力（硬编码）
-        if not exclude_character:
-            from .core_prompt import get_core_prompt
-            parts.append(get_core_prompt())
-
-        # 2. 身份定义 + 行为规范（SOUL.md + RULES.md，三层级合并）
+        # 1. 身份定义（SOUL.md）
         if not exclude_character and memory_store:
             soul = memory_store.read_soul()
             if soul:
                 parts.append(soul)
                 logger.debug(f"[Context] 注入身份定义: {len(soul)} 字")
 
+        # 2. 系统核心能力（硬编码）
+        if not exclude_character:
+            from .core_prompt import get_core_prompt
+            parts.append(get_core_prompt())
+
+        # 3. 行为规范（RULES.md）
+        if not exclude_character and memory_store:
             rules = memory_store.read_rules()
             if rules:
                 parts.append(rules)
                 logger.debug(f"[Context] 注入行为规范: {len(rules)} 字")
-
-        # 3. 长期记忆
-        if memory_store:
-            mem = memory_store.read_memory()
-            if mem and mem.strip() != "# 长期记忆":
-                parts.append(f"## 长期记忆\n\n{mem}")
-                logger.debug(f"[Context] 注入长期记忆: {len(mem)} 字")
 
         # 4. 技能列表
         if skill_loader:
@@ -85,7 +80,14 @@ class ContextBuilder:
             if skills_text and skills_text != "(no skills available)":
                 parts.append(f"## 可用技能\n\n{skills_text}")
 
-        # 5. 项目规范
+        # 5. 长期记忆
+        if memory_store:
+            mem = memory_store.read_memory()
+            if mem and mem.strip() != "# 长期记忆":
+                parts.append(f"## 长期记忆\n\n{mem}")
+                logger.debug(f"[Context] 注入长期记忆: {len(mem)} 字")
+
+        # 6. 项目规范
         if project_path:
             parts.append("## 当前工作空间\n\n项目路径: " + project_path + "\n\n重要：执行命令时必须传 cwd=\"" + project_path + "\" 参数；读写文件使用绝对路径基于此目录。不要使用其他目录。")
 

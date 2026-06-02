@@ -175,12 +175,32 @@ def stop_config_watcher() -> None:
 
 # ── 内部：加载 & 校验 ──
 
+def _ensure_initialized(config_path: Path) -> None:
+    """首次运行时自动初始化：创建目录、拷贝配置模板和角色文件。"""
+    if config_path.exists():
+        return
+    import shutil
+    data_dir = config_path.parent
+    memory_dir = data_dir / "memory"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    # config.yaml
+    _template = PACKAGE_DIR / "templates" / "config.yaml"
+    _example = PACKAGE_DIR / "config.example.yaml"
+    src = _template if _template.exists() else _example
+    if src.exists():
+        shutil.copy2(src, config_path)
+    # SOUL.md / RULES.md
+    for name in ("SOUL.md", "RULES.md"):
+        t = PACKAGE_DIR / "templates" / name
+        d = memory_dir / name
+        if t.exists() and not d.exists():
+            shutil.copy2(t, d)
+
+
 def _load_and_validate(config_path: Path) -> dict:
     if not config_path.exists():
-        _example = PACKAGE_DIR / "config.example.yaml"
-        if _example.exists():
-            import shutil
-            shutil.copy2(_example, config_path)
+        return {}
 
     with open(config_path, encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
@@ -310,8 +330,11 @@ def init_config() -> None:
     """显式加载/重载配置。失败时设置 _config_error，不退出进程。"""
     global _config_error, _raw
 
+    _ensure_initialized(_config_path)
     try:
         _raw = _load_and_validate(_config_path)
+        if not _raw:
+            return
         _apply_config(_raw)
         _config_error = None
     except ConfigError as e:
@@ -319,8 +342,7 @@ def init_config() -> None:
         print(f"警告: {e}，使用默认配置", file=sys.stderr)
 
 
-# ── 模块导入时自动尝试加载（优雅降级）──
-
+# ── 模块导入时自动尝试加载（配置不存在则跳过，等 init_mini_ai 后再加载）──
 init_config()
 
 

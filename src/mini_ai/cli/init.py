@@ -31,32 +31,52 @@ def init_mini_ai(force: bool = False, username: Optional[str] = None) -> bool:
     data_dir = get_data_dir()
     global_memory_dir = get_global_memory_dir()
     
-    # 检查是否已初始化
+    # 检查是否已完整初始化（config + character 都存在）
     config_file = data_dir / "config.yaml"
-    if config_file.exists() and not force:
-        logger.info(f"[Init] mini-ai 已初始化，跳过（使用 --force 强制覆盖）")
+    soul_file = global_memory_dir / "SOUL.md"
+    if config_file.exists() and soul_file.exists() and not force:
+        logger.info("[Init] mini-ai 已初始化，跳过（使用 --force 强制覆盖）")
         return False
+    _skip_config = config_file.exists() and not force
     
-    logger.info("[Init] 开始初始化 mini-ai...")
+    logger.info("[Init] " + "=" * 60)
+    logger.info("[Init] 🚀 开始初始化 mini-ai...")
+    logger.info("[Init] " + "=" * 60)
+    logger.info(f"[Init] 数据目录: {data_dir}")
+    logger.info(f"[Init] 全局记忆目录: {global_memory_dir}")
     
     # 1. 创建目录结构
+    logger.info("[Init] 📁 创建目录结构...")
     data_dir.mkdir(parents=True, exist_ok=True)
     global_memory_dir.mkdir(parents=True, exist_ok=True)
+    logger.info(f"[Init] ✅ 目录创建完成")
     
-    # 2. 生成 config.yaml
-    _init_config(data_dir, force)
+    # 2. 生成 config.yaml（config.py import 时可能已创建，跳过）
+    if not _skip_config:
+        logger.info("[Init] 📄 生成配置文件...")
+        _init_config(data_dir, force)
     
     # 3. 生成全局 SOUL.md 和 RULES.md
+    logger.info("[Init] 📝 生成身份定义和行为规范...")
     _init_character(global_memory_dir, force)
     
     # 4. 初始化用户目录（如果提供了 username）
     if username:
+        logger.info(f"[Init] 👤 初始化用户目录: {username}")
         _init_user(username)
     
     # 5. 生成 .gitignore（避免敏感信息泄露）
     _init_gitignore(data_dir)
     
-    logger.info(f"[Init] ✅ 初始化完成！配置文件位置: {data_dir}")
+    # 6. 显示初始化总结
+    logger.info("[Init] " + "=" * 60)
+    logger.info("[Init] 📋 初始化总结:")
+    logger.info(f"[Init]    数据目录: {data_dir}")
+    logger.info(f"[Init]    配置文件: {data_dir / 'config.yaml'}")
+    logger.info(f"[Init]    身份定义: {global_memory_dir / 'SOUL.md'}")
+    logger.info(f"[Init]    行为规范: {global_memory_dir / 'RULES.md'}")
+    logger.info("[Init] " + "=" * 60)
+    logger.info("[Init] ✅ 初始化完成！")
     logger.info("[Init] ⚠️  必须配置以下项：")
     logger.info("[Init]    1. active_model: 指定使用的模型名称")
     logger.info("[Init]    2. models: 配置模型的 api_url 和 api_key")
@@ -81,8 +101,21 @@ def _init_config(data_dir: Path, force: bool) -> None:
         logger.debug(f"[Init] 配置文件已存在，跳过: {config_file}")
         return
     
+    # 记录拷贝前的信息
+    src_size = template_file.stat().st_size
+    logger.info(f"[Init] 📄 拷贝配置文件:")
+    logger.info(f"[Init]    源文件: {template_file}")
+    logger.info(f"[Init]    目标:   {config_file}")
+    logger.info(f"[Init]    大小:   {src_size} 字节")
+    
     shutil.copy2(template_file, config_file)
-    logger.info(f"[Init] 生成配置文件: {config_file}")
+    
+    # 验证拷贝结果
+    if config_file.exists():
+        dst_size = config_file.stat().st_size
+        logger.info(f"[Init] ✅ 配置文件拷贝成功 (验证大小: {dst_size} 字节)")
+    else:
+        logger.error(f"[Init] ❌ 配置文件拷贝失败！")
 
 
 def _init_character(memory_dir: Path, force: bool) -> None:
@@ -90,6 +123,8 @@ def _init_character(memory_dir: Path, force: bool) -> None:
     from ..config import PACKAGE_DIR
     
     templates_dir = PACKAGE_DIR / "templates"
+    
+    logger.info(f"[Init] 📁 初始化身份定义文件，目标目录: {memory_dir}")
     
     for name in ["SOUL.md", "RULES.md"]:
         src = templates_dir / name
@@ -99,12 +134,30 @@ def _init_character(memory_dir: Path, force: bool) -> None:
             logger.warning(f"[Init] 模板不存在: {src}")
             continue
         
-        if dst.exists() and not force:
-            logger.debug(f"[Init] 文件已存在，跳过: {dst}")
+        # 目标文件不存在，或为空，或强制覆盖时才拷贝
+        should_copy = force
+        if not should_copy and (not dst.exists() or dst.stat().st_size == 0):
+            should_copy = True
+        
+        if not should_copy:
+            logger.debug(f"[Init] 文件已存在且非空，跳过: {dst}")
             continue
         
+        # 记录拷贝信息
+        src_size = src.stat().st_size
+        logger.info(f"[Init] 📄 拷贝 {name}:")
+        logger.info(f"[Init]    源文件: {src}")
+        logger.info(f"[Init]    目标:   {dst}")
+        logger.info(f"[Init]    大小:   {src_size} 字节")
+        
         shutil.copy2(src, dst)
-        logger.info(f"[Init] 生成默认配置: {dst}")
+        
+        # 验证拷贝结果
+        if dst.exists():
+            dst_size = dst.stat().st_size
+            logger.info(f"[Init] ✅ {name} 拷贝成功 (验证大小: {dst_size} 字节)")
+        else:
+            logger.error(f"[Init] ❌ {name} 拷贝失败！")
 
 
 def _init_user(username: str) -> None:

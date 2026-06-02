@@ -124,22 +124,63 @@ CLI 命令见 [CLI 命令参考](cli-commands.md#工作空间)，Web 操作见 [
 按优先级拼接 system prompt：
 
 ```
-SOUL.md (核心身份)
----
-长期记忆 (MemoryStore)
----
-用户画像 (MemoryStore)
----
-可用技能 (SkillLoader — global/user/workspace 三层覆盖)
----
-CLAUDE.md / AGENTS.md (项目规范，自动读取当前目录)
----
-RULES.md (行为规范)
+1. 身份定义（SOUL.md）← 三层级合并（global → user → workspace）
+   ---
+2. 系统核心能力（硬编码，core_prompt.py）
+   ---
+3. 行为规范（RULES.md）← 三层级合并
+   ---
+4. 技能列表（SkillLoader）
+   ---
+5. 长期记忆（MEMORY.md）← 三层级合并
+   ---
+6. 项目规范（CLAUDE.md / AGENTS.md，自动读取当前目录）
 ```
 
-- SOUL.md 和 RULES.md 位于 `character/` 目录，修改即可改变 Agent 角色
-- CLAUDE.md 或 AGENTS.md 自动注入到 system prompt
-- `ContextBuilder.build()` 支持文件缓存（mtime 检查），高频调用不重复读盘
+### 三层级合并机制
+
+**路径优先级**：`global` → `user` → `workspace`（后者覆盖前者）
+
+| 层级 | 路径 | 说明 |
+|------|------|------|
+| **global** | `~/.mini_ai/memory/` | 全局共享，所有用户、所有工作空间 |
+| **user** | `~/.mini_ai/users/<username>/memory/` | 用户级，该用户所有工作空间共享 |
+| **workspace** | `<workspace_dir>/memory_data/` | 工作空间级，仅当前工作空间 |
+
+**合并策略**：
+- 按 `## 标题` 拆分各个文件
+- **同名 section，后者覆盖前者**（last-wins）
+- 不同名 section，叠加保留
+
+**示例**：
+```
+# global/SOUL.md
+## 自我介绍
+我是全局 AI
+
+## 行为风格
+- 喜欢写代码
+
+---
+# user/SOUL.md
+## 自我介绍
+我是用户级 AI  ← 覆盖 global
+
+## 新增特性
+- 喜欢问问题  ← 新增
+
+---
+# workspace/SOUL.md
+## 自我介绍
+我是工作空间 AI  ← 覆盖 user
+```
+
+### 关键实现
+
+- **SOUL.md / RULES.md / MEMORY.md** — 均支持三层级合并
+- **ContextBuilder.build()** — 支持文件缓存（mtime 检查），高频调用不重复读盘
+- **MemoryStore._tier_paths()** — 返回 `[global, user, workspace]` 路径列表
+- **_merge_sections()** — 按 `## 标题` 合并，同名 section 后者覆盖前者
 
 ---
 

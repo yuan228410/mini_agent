@@ -638,30 +638,47 @@ class HistoryDB:
     
     # === 统计操作 ===
     
-    def count(self, workspace: str = "", session_id: str = "") -> int:
+    def count(self, workspace: str = "", session_id: str = "",
+              keyword: str = "", date_from: str = "", date_to: str = "") -> int:
         """统计消息数量
         
         Args:
             workspace: 工作空间（空则统计所有）
             session_id: 会话ID（空则统计所有）
+            keyword: 搜索关键词（空则不过滤）
+            date_from: 起始日期（空则不过滤）
+            date_to: 结束日期（空则不过滤）
         
         Returns:
             消息数量
         """
         with self._lock:
             self._ensure_conn()
-            if workspace and session_id:
-                row = self._conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE workspace=? AND session_id=?",
-                    (workspace, session_id),
-                ).fetchone()
-            elif workspace:
-                row = self._conn.execute(
-                    "SELECT COUNT(*) FROM messages WHERE workspace=?",
-                    (workspace,),
-                ).fetchone()
-            else:
-                row = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+            
+            conditions = []
+            params = []
+            
+            if workspace:
+                conditions.append("workspace=?")
+                params.append(workspace)
+            if session_id:
+                conditions.append("session_id=?")
+                params.append(session_id)
+            if date_from:
+                conditions.append("ts >= ?")
+                params.append(date_from)
+            if date_to:
+                conditions.append("ts <= ?")
+                params.append(date_to)
+            if keyword:
+                conditions.append("content LIKE ?")
+                params.append(f"%{keyword}%")
+            
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            row = self._conn.execute(
+                f"SELECT COUNT(*) FROM messages {where_clause}",
+                params,
+            ).fetchone()
         
         return row[0] if row else 0
     
