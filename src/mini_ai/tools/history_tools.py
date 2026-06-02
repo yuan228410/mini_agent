@@ -6,15 +6,21 @@ import re
 from ..logger import logger
 
 _history_db = contextvars.ContextVar("history_db", default=None)
+_current_workspace = contextvars.ContextVar("current_workspace", default="default")
 
 
-def configure(history_db=None):
+def configure(history_db=None, workspace: str = "default"):
     if history_db is not None:
         _history_db.set(history_db)
+    _current_workspace.set(workspace)
 
 
 def _get_db():
     return _history_db.get()
+
+
+def _get_workspace() -> str:
+    return _current_workspace.get()
 
 
 def _compact_message(msg: dict) -> dict:
@@ -136,6 +142,7 @@ def _search_exec(args: dict) -> str:
     if not db:
         return "Error: 历史数据库未初始化"
 
+    workspace = _get_workspace()
     keyword = args.get("keyword", "")
     date_from = args.get("date_from", "")
     date_to = args.get("date_to", "")
@@ -148,13 +155,13 @@ def _search_exec(args: dict) -> str:
         limit = 20
 
     # 查询总数
-    total = db.count(keyword, date_from=date_from, date_to=date_to)
+    total = db.count(workspace=workspace, keyword=keyword, date_from=date_from, date_to=date_to)
     
     if total == 0:
         return f"未找到符合条件的历史记录"
 
     # 查询结果
-    results = db.search(keyword, date_from=date_from, date_to=date_to, limit=limit)
+    results = db.search(keyword=keyword, workspace=workspace, date_from=date_from, date_to=date_to, limit=limit)
     
     # 压缩处理
     if compact:
@@ -238,11 +245,12 @@ def _manage_exec(args: dict) -> str:
     if not db:
         return "Error: 历史数据库未初始化"
 
+    workspace = _get_workspace()
     action = args.get("action", "list")
     confirmed = args.get("confirmed", False)
 
     if action == "list":
-        msgs = db.list_for_review()
+        msgs = db.list_for_review(workspace)
         if not msgs:
             return "没有历史消息"
         lines = [f"共 {len(msgs)} 条消息："]
@@ -258,7 +266,7 @@ def _manage_exec(args: dict) -> str:
             keep_count = int(keep_count)
         except (TypeError, ValueError):
             return "keep_count 必须是整数"
-        msgs = db.list_for_review()
+        msgs = db.list_for_review(workspace)
         total = len(msgs)
         if total <= keep_count:
             return f"当前 {total} 条消息，无需清理（保留 {keep_count} 条）"
@@ -272,19 +280,19 @@ def _manage_exec(args: dict) -> str:
                 lines.append(f"  [{m['id']}] {m['role']}: {content}")
             lines.append("... 请用 confirmed=true 确认执行")
             return "\n".join(lines)
-        total_deleted = db.delete_before(keep_count)
+        total_deleted = db.delete_before(workspace, keep_count)
         return f"已删除 {total_deleted} 条旧消息，保留最近 {keep_count} 条"
 
     if action == "delete_keyword":
         keyword = args.get("keyword", "")
         if not keyword:
             return "请指定 keyword 参数"
-        results = db.search(keyword, limit=1000)
+        results = db.search(keyword=keyword, workspace=workspace, limit=1000)
         if not results:
             return f"未找到包含 '{keyword}' 的消息"
         ids = [r["id"] for r in results if "id" in r]
         if not ids:
-            all_msgs = db.list_for_review(limit=1000)
+            all_msgs = db.list_for_review(workspace, limit=1000)
             ids = [m["id"] for m in all_msgs if keyword.lower() in m["content"].lower()]
             results = [{"id": m["id"], "role": m["role"], "content": m["content"][:60]} for m in all_msgs if keyword.lower() in m["content"].lower()]
         if not ids:
@@ -302,23 +310,13 @@ def _manage_exec(args: dict) -> str:
         return f"已删除 {deleted} 条包含 '{keyword}' 的消息"
 
     if action == "delete_all":
-        msgs = db.list_for_review()
+        msgs = db.list_for_review(workspace)
         total = len(msgs)
         if total == 0:
             return "没有历史消息需要删除"
         if not confirmed:
             return f"将彻底删除所有 {total} 条历史消息（不可恢复）。请用 confirmed=true 确认执行"
-        batch_size = args.get("batch_size", 200)
-        total_deleted = 0
-        while True:
-            msgs = db.list_for_review()
-            if not msgs:
-                break
-            batch_ids = [m["id"] for m in msgs[:batch_size]]
-            db.delete_by_ids(batch_ids)
-            total_deleted += len(batch_ids)
-            if len(msgs) <= batch_size:
-                break
+        total_deleted = db.purge(workspace)
         return f"已彻底删除所有 {total_deleted} 条历史消息"
 
     return f"未知 action: {action}"

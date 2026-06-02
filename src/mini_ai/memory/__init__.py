@@ -2,5 +2,5 @@
 from .store import MemoryStore
 from .compactor import Compactor
 from .session import SessionManager
-from .history_db import HistoryDB
+from .history_db import HistoryDB, HistoryDBPool
 from .updater import MemoryUpdater

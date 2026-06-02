@@ -31,7 +31,7 @@ def has_active_teammates(team_mgr):
     with team_mgr.lock:
         return any(m["status"] == "working" for m in team_mgr.config.get("members", []))
 
-def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, history_db=None, ctx=None):
+def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, history_db=None, ctx=None, workspace="default", session_id=""):
     from datetime import datetime, timezone, timedelta
     
     # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只等队友完成 + 处理 loop 退出后到达的消息
@@ -59,7 +59,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
             messages.append({"role": "user", "content": inbox_text, "timestamp": _ts})
             messages.append({"role": "user", "content": REPLY_INSTRUCTION, "timestamp": _ts})
             if history_db:
-                history_db.append("user", inbox_text)
+                history_db.append(workspace, session_id, "user", inbox_text)
             last_msg = run_loop_fn(messages, tools, inject_fn, disp, ctx=ctx)
             waited = 0
 
@@ -71,7 +71,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
         messages.append({"role": "user", "content": final, "timestamp": _ts})
         messages.append({"role": "user", "content": REPLY_INSTRUCTION, "timestamp": _ts})
         if history_db:
-            history_db.append("user", final)
+            history_db.append(workspace, session_id, "user", final)
         last_msg = run_loop_fn(messages, tools, inject_fn, disp, ctx=ctx)
 
     if not has_active_teammates(team_mgr):

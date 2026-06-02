@@ -288,9 +288,9 @@ class ToolRegistry:
         memory_tools.configure(memory_store=memory_store)
         self.add_tools(*memory_tools.ALL_MEMORY_TOOLS)
 
-    def register_history_tools(self, history_db):
+    def register_history_tools(self, history_db, workspace: str = "default"):
         from . import history_tools
-        history_tools.configure(history_db=history_db)
+        history_tools.configure(history_db=history_db, workspace=workspace)
         self.add_tools(*history_tools.ALL_HISTORY_TOOLS)
 
 # ── 模块级默认实例 ──
@@ -323,8 +323,8 @@ def register_blackboard(blackboard, workflow_dirs=None, bus=None, manager=None) 
 def register_memory_tools(memory_store) -> None:
     _registry.register_memory_tools(memory_store)
 
-def register_history_tools(history_db) -> None:
-    _registry.register_history_tools(history_db)
+def register_history_tools(history_db, workspace: str = "default") -> None:
+    _registry.register_history_tools(history_db, workspace)
 
 def get_definitions() -> list[dict]:
     return _registry.get_definitions()

@@ -86,6 +86,10 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     
+    # 关闭历史数据库连接池
+    from ..memory.history_db import HistoryDBPool
+    HistoryDBPool.close_all()
+    
     shutdown_mcp()
 
 def create_app() -> FastAPI:

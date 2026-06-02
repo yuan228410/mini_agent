@@ -8,9 +8,9 @@ from datetime import datetime
 from . import __version__
 from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, SessionManager
-from .memory.history_db import HistoryDB
+from .memory import MemoryStore, Compactor, SessionManager, HistoryDB, HistoryDBPool
 from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
-                     DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw)
+                     DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw, user_data_dir)
 from .context import ContextBuilder
 from .llm import get_usage, reset_usage, estimate_tokens
 from .logger import logger
@@ -102,6 +102,8 @@ def _inject_todos(messages: list[dict]):
 @dataclass
 class SessionContext:
     """一个 workspace 对应的完整会话状态。"""
+    username: str
+    session_id: str
     skill_loader: SkillLoader
     store: MemoryStore
     history_db: HistoryDB
@@ -119,8 +121,11 @@ def _create_workspace_session(
     disp: Display,
     app_ctx: AppContext,
     ws_mgr: WorkspaceManager,
+    username: str = "default",
+    session_id: str | None = None,
 ) -> tuple[SessionContext, list[dict]]:
     """为指定 workspace 创建完整的会话状态，返回 (session, messages, cmd_handler)。"""
+    import uuid
     ws_dir = ws.ws_dir
     ws_name = ws.name
 
@@ -129,8 +134,11 @@ def _create_workspace_session(
     set_project_path(ws.project_path or str(Path.cwd()))
 
     # ── 技能 ──
+    user_skills_dir = user_data_dir(username) / "skills"
+    ws_skills_dir = ws_dir / "skills"
     skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS,
-                               workspace_skills_dir=ws_dir / "skills")
+                               user_skills_dir=user_skills_dir,
+                               workspace_skills_dir=ws_skills_dir)
     register(skill_loader)
     register_subagents(_subagent_loader)
 
@@ -153,11 +161,47 @@ def _create_workspace_session(
     bus.register_wake("lead", lead_event)
 
     # ── 记忆 + 历史 ──
-    store = MemoryStore(ws_dir / "memory_data", global_memory_dir=DATA_DIR / "memory")
-    history_db = HistoryDB(ws_dir / "memory_data" / "history.db", workspace=ws_name)
+    global_memory_dir = DATA_DIR / "memory"
+    user_memory_dir = user_data_dir(username) / "memory"
+    ws_memory_dir = ws_dir / "memory_data"
+    
+    # 先创建 history_db（用于检查会话是否存在）
+    history_db = HistoryDBPool.get(username)  # 使用指定用户
+    
+    # 生成会话 ID（如果未指定）
+    if not session_id:
+        session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
+        logger.info(f"[会话] 创建新会话: {session_id}")
+        disp.info(f"创建新会话: {session_id}")
+    else:
+        # 指定了会话ID，检查是否存在
+        existing = history_db.load_session(ws_name, session_id, limit=1)
+        if existing:
+            logger.info(f"[会话] 恢复会话: {session_id}")
+            disp.info(f"恢复会话: {session_id}")
+        else:
+            # 不存在，创建新会话（使用指定的ID）
+            logger.info(f"[会话] 会话 {session_id} 不存在，创建新会话")
+            disp.info(f"创建新会话: {session_id}")
+    
+    # 会话级记忆目录（与 Web 端一致）
+    sessions_base = ws_dir / "sessions"
+    sessions_base.mkdir(parents=True, exist_ok=True)
+    session_dir = sessions_base / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+    session_memory_dir = session_dir / "memory_data"
+    session_memory_dir.mkdir(parents=True, exist_ok=True)
+    
+    # MemoryStore：与 Web 端一致，第一参数为用户级记忆
+    store = MemoryStore(
+        user_memory_dir,
+        episode_dir=session_memory_dir,
+        global_memory_dir=global_memory_dir,
+        workspace_memory_dir=ws_memory_dir,
+    )
     sessions = SessionManager(ws_dir / "memory_data" / "sessions")
     register_memory_tools(store)
-    register_history_tools(history_db)
+    register_history_tools(history_db, ws_name)
 
     # ── Context ──
     ctx_builder = ContextBuilder(DATA_DIR)
@@ -175,7 +219,7 @@ def _create_workspace_session(
         context_builder=ctx_builder,
         skill_loader=skill_loader,
         project_path=ws.project_path or str(Path.cwd()),
-        summary_dir=ws_dir,
+        summary_dir=session_dir,
     )
 
     # ── CommandHandler（含 run_loop 闭包）──
@@ -197,7 +241,7 @@ def _create_workspace_session(
         inject_fn=_inject_todos, run_tool_fn=_run_loop,
         lead_tools=_lead_tool_defs(app_ctx), ctx=req_ctx, workspace_mgr=ws_mgr,
         history_db=history_db, context_builder=ctx_builder, skill_loader=skill_loader,
-        project_path=ws.project_path,
+        project_path=ws.project_path, username=username, session_id=session_id,
     )
 
     # ── 构建消息 ──
@@ -206,13 +250,16 @@ def _create_workspace_session(
     messages = [{"role": "system", "content": system_prompt}]
     _inject_todos(messages)
 
+    # 加载指定会话的历史消息
     ctx_limit = COMPACTOR.get("context_limit", 50)
-    restored = history_db.load_all(limit=ctx_limit)
+    restored = history_db.load_session(ws_name, session_id, limit=ctx_limit)
     if restored:
         messages.extend(restored)
-        logger.info(f"[恢复] {len(restored)} 条历史消息")
+        logger.info(f"[恢复] 会话 {session_id} 的 {len(restored)} 条历史消息")
 
     session = SessionContext(
+        username=username,
+        session_id=session_id,
         skill_loader=skill_loader,
         store=store,
         history_db=history_db,
@@ -231,7 +278,7 @@ def _create_workspace_session(
 # main
 # ═══════════════════════════════════════════
 
-def _flush_deferred(history_db, messages, deferred_list):
+def _flush_deferred(history_db, messages, deferred_list, workspace: str, session_id: str):
     """把延迟的 assistant 消息（含 tool_calls）写入历史 DB。"""
     tool_results_map = {m.get("tool_call_id", ""): m.get("content", "")
                         for m in messages if m.get("role") == "tool"}
@@ -247,7 +294,7 @@ def _flush_deferred(history_db, messages, deferred_list):
         if am.get("thinking"):
             am_meta["thinking"] = am["thinking"]
         am_meta["tool_calls"] = enriched_tcs
-        history_db.append("assistant", am.get("content") or "",
+        history_db.append(workspace, session_id, "assistant", am.get("content") or "",
                           metadata=json.dumps(am_meta))
     deferred_list.clear()
 
@@ -258,6 +305,10 @@ def main():
                         version=f"mini-ai {__version__}")
     parser.add_argument("--web", action="store_true", help="启动 Web 界面")
     parser.add_argument("--port", type=int, default=8765, help="Web 端口 (默认 8765)")
+    parser.add_argument("--user", type=str, default="default", help="用户名 (默认 default)")
+    parser.add_argument("--workspace", type=str, help="工作空间名称 (默认当前目录名)")
+    parser.add_argument("--session", type=str, help="会话 ID，不指定则自动生成新会话")
+    parser.add_argument("--new-session", action="store_true", help="强制创建新会话")
     args = parser.parse_args()
 
     # 启动配置热加载
@@ -293,7 +344,10 @@ def main():
         return
 
     # ── CLI 模式 ──
-    ws_mgr = WorkspaceManager(DATA_DIR, ensure_default=False)
+    # 使用用户数据目录（与 Web 模式一致）
+    from .config import user_data_dir
+    user_root = user_data_dir(args.user)
+    ws_mgr = WorkspaceManager(user_root, ensure_default=False)
 
     # 显示
     disp = Display(
@@ -302,24 +356,49 @@ def main():
         on_status_update=None,  # 延后设置
     )
 
-    # 首次工作空间
-    cwd = Path.cwd()
-    cwd_name = cwd.name
-    ws = ws_mgr.get(cwd_name)
-    if not ws:
-        ws_mgr.create(cwd_name, str(cwd))
-        ws = ws_mgr.get(cwd_name)
+    # 确定工作空间名称
+    if args.workspace:
+        # 用户指定了工作空间名称
+        ws_name = args.workspace
+        ws = ws_mgr.get(ws_name)
+        if not ws:
+            # 不存在则自动创建
+            ws_mgr.create(ws_name, str(Path.cwd()))
+            ws = ws_mgr.get(ws_name)
+            disp.info(f"工作空间 '{ws_name}' 已创建")
+        else:
+            disp.info(f"使用已有工作空间 '{ws_name}'")
+    else:
+        # 默认使用当前目录名
+        cwd = Path.cwd()
+        ws_name = cwd.name
+        ws = ws_mgr.get(ws_name)
+        if not ws:
+            ws_mgr.create(ws_name, str(cwd))
+            ws = ws_mgr.get(ws_name)
     if ws and not ws.project_path:
-        ws.update_project_path(str(cwd))
+        ws.update_project_path(str(Path.cwd()))
 
     # 通过 _create_workspace_session 创建会话
-    session, messages = _create_workspace_session(ws, disp, _app_ctx, ws_mgr)
-    cmd = session.cmd
+    session, messages = _create_workspace_session(
+        ws, disp, _app_ctx, ws_mgr,
+        username=args.user,
+        session_id=None if args.new_session else args.session,
+    )
 
     # 从 session 解包常用变量
     history_db = session.history_db
     compactor = session.compactor
     bus = _app_ctx.bus
+    team_mgr = session.team_mgr
+    current_session_id = session.session_id
+    current_username = session.username
+    cmd = session.cmd
+    
+    # 获取当前工作空间名称
+    def _get_workspace_name():
+        cwd = Path.cwd()
+        return cwd.name
     team_mgr = session.team_mgr
 
     # 延后设置状态更新回调（需要 messages/history_db 引用）
@@ -382,7 +461,8 @@ def main():
 
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         messages.append({"role": "user", "content": user_input, "timestamp": ts})
-        history_db.append("user", user_input, metadata=json.dumps({"timestamp": ts}))
+        workspace_name = _get_workspace_name()
+        history_db.append(workspace_name, current_session_id, "user", user_input, metadata=json.dumps({"timestamp": ts}))
         disp.user_label(ts)
 
         try:
@@ -392,8 +472,9 @@ def main():
             _cli_deferred = []
 
             def _persist(m):
+                ws_name = _get_workspace_name()
                 if m["role"] == "tool":
-                    history_db.append("tool", m.get("content", ""),
+                    history_db.append(ws_name, current_session_id, "tool", m.get("content", ""),
                                       metadata=json.dumps({"name": m.get("name", ""),
                                                            "tool_call_id": m.get("tool_call_id", "")}))
                 elif m["role"] == "assistant":
@@ -401,7 +482,7 @@ def main():
                         _cli_deferred.append(m)
                     else:
                         meta = {"thinking": m["thinking"]} if m.get("thinking") else {}
-                        history_db.append("assistant", m.get("content", ""),
+                        history_db.append(ws_name, current_session_id, "assistant", m.get("content", ""),
                                           metadata=json.dumps(meta) if meta else "")
 
             msg, _ = run_tool_loop(
@@ -413,7 +494,7 @@ def main():
                 persist_fn=_persist,
                 bus=bus,
             )
-            _flush_deferred(history_db, messages, _cli_deferred)  # 异常时跳过，避免写入不完整消息
+            _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)  # 异常时跳过，避免写入不完整消息
 
             # 计划模式自动执行
             if cmd.plan_mode and msg and msg.get("content"):
@@ -432,7 +513,7 @@ def main():
                         persist_fn=_persist,
                         bus=bus,
                     )
-                    _flush_deferred(history_db, messages, _cli_deferred)
+                    _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)
                     if msg2 and msg2.get("content"):
                         msg = msg2
 
@@ -442,6 +523,7 @@ def main():
                     bus, team_mgr, session.lead_event,
                     cmd.run_tool_fn, messages, _lead_tool_defs(_app_ctx),
                     _inject_todos, disp, history_db=history_db, ctx=cmd.ctx,
+                    workspace=_get_workspace_name(), session_id=current_session_id,
                 )
                 if teammate_msg:
                     msg = teammate_msg

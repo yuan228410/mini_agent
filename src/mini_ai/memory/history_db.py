@@ -1,12 +1,13 @@
-"""历史消息 SQLite 存储 — FTS5 全文搜索支持"""
+"""历史消息 SQLite 存储 — 统一数据库 + FTS5 全文搜索"""
 import atexit
 import json
 import sqlite3
 import threading
 from datetime import datetime
-from ..utils import _UTC8
 from pathlib import Path
+from typing import Optional
 
+from ..utils import _UTC8
 from ..logger import logger
 
 
@@ -42,11 +43,15 @@ def _process_multimodal_content(content: str | list, metadata: str = "") -> tupl
 
 
 class HistoryDB:
-
-    def __init__(self, db_path: Path, workspace: str = "default"):
+    """统一历史数据库
+    
+    数据库路径：~/.mini_ai/users/<username>/history.db
+    每个用户一个数据库文件，所有工作空间、所有会话共享。
+    """
+    
+    def __init__(self, db_path: Path):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.workspace = workspace
         self._lock = threading.Lock()
         self._fts_available = True
         self._closed = False
@@ -54,36 +59,40 @@ class HistoryDB:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
         atexit.register(self.close)
-        logger.debug(f"[HistoryDB] 初始化: workspace={workspace}, path={db_path}")
-
+        logger.debug(f"[HistoryDB] 初始化: path={db_path}")
+    
     def _init_schema(self):
+        """初始化数据库表结构"""
         with self._conn:
             self._conn.executescript("""
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     workspace TEXT NOT NULL,
-                    session_id TEXT DEFAULT '',
+                    session_id TEXT NOT NULL,
                     ts TEXT NOT NULL,
                     role TEXT NOT NULL,
-                    content TEXT DEFAULT '',
+                    content TEXT,
                     metadata TEXT DEFAULT ''
                 );
-                CREATE INDEX IF NOT EXISTS idx_messages_workspace ON messages(workspace);
-                CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(ts);
+                
+                -- 索引优化
+                CREATE INDEX IF NOT EXISTS idx_workspace ON messages(workspace);
+                CREATE INDEX IF NOT EXISTS idx_session ON messages(workspace, session_id);
+                CREATE INDEX IF NOT EXISTS idx_ts ON messages(ts);
+                CREATE INDEX IF NOT EXISTS idx_role ON messages(role);
             """)
             try:
                 self._conn.execute(
-                    "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=id)"
+                    "CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(content, content=messages, content_rowid=id, tokenize='unicode61')"
                 )
             except sqlite3.OperationalError:
                 self._fts_available = False
                 logger.warning("[HistoryDB] FTS5 不可用，全文搜索将退化为模糊匹配")
-                pass
-
+    
     def is_fts_available(self) -> bool:
         """返回 FTS5 是否可用，供上层判断搜索模式"""
         return self._fts_available
-
+    
     def _ensure_conn(self):
         """确保连接可用，已关闭则重新创建"""
         if self._closed:
@@ -99,51 +108,57 @@ class HistoryDB:
             self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._init_schema()
-
-    def append(self, role: str, content: str | list, session_id: str = "", metadata: str = ""):
-        # 处理多模态消息（content 可能是 list）
+    
+    # === 写入操作 ===
+    
+    def append(self, workspace: str, session_id: str, role: str, 
+               content: str | list, metadata: str = "") -> int:
+        """写入单条消息
+        
+        Args:
+            workspace: 工作空间名称
+            session_id: 会话ID
+            role: 角色 (system/user/assistant/tool)
+            content: 消息内容
+            metadata: 扩展元数据 (JSON)
+        
+        Returns:
+            插入的消息ID
+        """
         content, metadata = _process_multimodal_content(content, metadata)
         
         ts = datetime.now(_UTC8).isoformat()
         content_preview = (content or "")[:80].replace("\n", " ")
-        logger.debug(f"[HistoryDB] append: role={role}, sid={session_id}, len={len(content or '')}, preview={content_preview}")
+        logger.debug(f"[HistoryDB] append: workspace={workspace}, sid={session_id}, role={role}, len={len(content or '')}, preview={content_preview}")
+        
         with self._lock:
             self._ensure_conn()
             with self._conn:
                 cur = self._conn.execute(
                     "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                    (self.workspace, session_id, ts, role, content, metadata),
+                    (workspace, session_id, ts, role, content, metadata),
                 )
+                msg_id = cur.lastrowid
                 try:
                     self._conn.execute(
                         "INSERT INTO messages_fts(rowid, content) VALUES (?, ?)",
-                        (cur.lastrowid, content),
+                        (msg_id, content),
                     )
                 except sqlite3.OperationalError:
                     if self._fts_available:
                         self._fts_available = False
                         logger.warning("[HistoryDB] FTS5 写入失败，后续搜索将退化为模糊匹配")
-                    pass
-
-    def begin_transaction(self):
-        """开启事务"""
-        self._ensure_conn()
-        self._conn.execute("BEGIN")
-
-    def commit(self):
-        """提交事务"""
-        self._conn.commit()
-
-    def rollback(self):
-        """回滚事务"""
-        self._conn.rollback()
-
-    def append_batch(self, messages: list[dict], session_id: str = "") -> int:
-        """批量插入消息（事务保护）
+        
+        return msg_id
+    
+    def append_batch(self, workspace: str, session_id: str, 
+                     messages: list[dict]) -> int:
+        """批量写入消息（事务保护）
         
         Args:
+            workspace: 工作空间名称
+            session_id: 会话ID
             messages: 消息列表，每条消息包含 role, content, metadata
-            session_id: 会话 ID
         
         Returns:
             插入的消息数量
@@ -163,12 +178,11 @@ class HistoryDB:
                     content = msg.get("content", "")
                     metadata = msg.get("metadata", "")
                     
-                    # 处理多模态消息（content 可能是 list）
                     content, metadata = _process_multimodal_content(content, metadata)
                     
                     cur = self._conn.execute(
                         "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
-                        (self.workspace, session_id, ts, role, content, metadata),
+                        (workspace, session_id, ts, role, content, metadata),
                     )
                     try:
                         self._conn.execute(
@@ -178,31 +192,340 @@ class HistoryDB:
                     except sqlite3.OperationalError:
                         if self._fts_available:
                             self._fts_available = False
-                        pass
                     count += 1
                 
                 self._conn.commit()
-                logger.debug(f"[HistoryDB] append_batch: 插入 {count} 条消息, sid={session_id}")
+                logger.debug(f"[HistoryDB] append_batch: 插入 {count} 条消息, workspace={workspace}, sid={session_id}")
             except Exception as e:
                 self._conn.rollback()
                 logger.error(f"[HistoryDB] append_batch 失败: {e}")
                 raise
         
         return count
-
-    def purge(self):
-        """彻底删除所有历史消息（不可恢复）"""
+    
+    # === 读取操作 ===
+    
+    def load_session(self, workspace: str, session_id: str, 
+                     limit: int = 0) -> list[dict]:
+        """加载指定会话的所有消息
+        
+        Args:
+            workspace: 工作空间名称
+            session_id: 会话ID
+            limit: 限制数量（0表示不限制）
+        
+        Returns:
+            消息列表
+        """
+        logger.debug(f"[HistoryDB] load_session: workspace={workspace}, sid={session_id}, limit={limit}")
+        with self._lock:
+            self._ensure_conn()
+            if limit > 0:
+                rows = self._conn.execute(
+                    "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? ORDER BY id DESC LIMIT ?) ORDER BY id",
+                    (workspace, session_id, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? ORDER BY id",
+                    (workspace, session_id),
+                ).fetchall()
+        
+        return self._parse_messages(rows)
+    
+    def load_recent(self, workspace: str = "", limit: int = 100) -> list[dict]:
+        """加载最近消息（跨会话）
+        
+        Args:
+            workspace: 工作空间名称（空则加载所有）
+            limit: 限制数量
+        
+        Returns:
+            消息列表（含 workspace, session_id 字段）
+        """
+        with self._lock:
+            self._ensure_conn()
+            if workspace:
+                rows = self._conn.execute(
+                    "SELECT workspace, session_id, role, content, metadata, ts FROM messages WHERE workspace=? ORDER BY id DESC LIMIT ?",
+                    (workspace, limit),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT workspace, session_id, role, content, metadata, ts FROM messages ORDER BY id DESC LIMIT ?",
+                    (limit,),
+                ).fetchall()
+        
+        results = []
+        for workspace, session_id, role, content, metadata, ts in rows:
+            msg = {
+                "workspace": workspace,
+                "session_id": session_id,
+                "role": role,
+                "content": content,
+                "timestamp": ts[:19] if ts else ""
+            }
+            if metadata:
+                try:
+                    extra = json.loads(metadata)
+                    if "_multimodal_content" in extra:
+                        msg["content"] = extra["_multimodal_content"]
+                        del extra["_multimodal_content"]
+                    for k, v in extra.items():
+                        if k not in ("role", "content"):
+                            msg[k] = v
+                except json.JSONDecodeError:
+                    pass
+            results.append(msg)
+        
+        return results
+    
+    # === 搜索操作 ===
+    
+    def search(self, keyword: str = "", workspace: str = "", session_id: str = "",
+               date_from: str = "", date_to: str = "", limit: int = 20) -> list[dict]:
+        """搜索历史消息
+        
+        Args:
+            keyword: 搜索关键词
+            workspace: 工作空间（空则搜索所有）
+            session_id: 会话ID（空则搜索所有）
+            date_from: 起始日期
+            date_to: 结束日期
+            limit: 返回数量限制
+        
+        Returns:
+            消息列表
+        """
+        logger.debug(f"[HistoryDB] search: keyword={keyword[:30] if keyword else '(空)'}, workspace={workspace}, sid={session_id}, limit={limit}")
+        
+        conditions = []
+        params = []
+        
+        if workspace:
+            conditions.append("workspace=?")
+            params.append(workspace)
+        if session_id:
+            conditions.append("session_id=?")
+            params.append(session_id)
+        if date_from:
+            conditions.append("ts >= ?")
+            params.append(date_from)
+        if date_to:
+            conditions.append("ts <= ?")
+            params.append(date_to)
+        if keyword:
+            conditions.append("content LIKE ?")
+            params.append(f"%{keyword}%")
+        
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        
+        with self._lock:
+            self._ensure_conn()
+            rows = self._conn.execute(
+                f"SELECT id, workspace, session_id, ts, role, content FROM messages "
+                f"{where_clause} ORDER BY ts DESC LIMIT ?",
+                params + [limit],
+            ).fetchall()
+        
+        return [
+            {
+                "id": id,
+                "workspace": ws,
+                "session_id": sid,
+                "ts": ts,
+                "role": role,
+                "content": content
+            }
+            for id, ws, sid, ts, role, content in rows
+        ]
+    
+    def search_fts(self, keyword: str, workspace: str = "", 
+                   limit: int = 20) -> list[dict]:
+        """全文搜索（FTS5）
+        
+        Args:
+            keyword: 搜索关键词
+            workspace: 工作空间（空则搜索所有）
+            limit: 返回数量限制
+        
+        Returns:
+            消息列表
+        """
+        if not self._fts_available:
+            return self.search(keyword=keyword, workspace=workspace, limit=limit)
+        
+        with self._lock:
+            self._ensure_conn()
+            try:
+                if workspace:
+                    rows = self._conn.execute(
+                        """SELECT m.id, m.workspace, m.session_id, m.ts, m.role, m.content
+                           FROM messages m
+                           JOIN messages_fts fts ON m.id = fts.rowid
+                           WHERE messages_fts MATCH ? AND m.workspace = ?
+                           ORDER BY m.ts DESC LIMIT ?""",
+                        (keyword, workspace, limit),
+                    ).fetchall()
+                else:
+                    rows = self._conn.execute(
+                        """SELECT m.id, m.workspace, m.session_id, m.ts, m.role, m.content
+                           FROM messages m
+                           JOIN messages_fts fts ON m.id = fts.rowid
+                           WHERE messages_fts MATCH ?
+                           ORDER BY m.ts DESC LIMIT ?""",
+                        (keyword, limit),
+                    ).fetchall()
+                
+                return [
+                    {
+                        "id": id,
+                        "workspace": ws,
+                        "session_id": sid,
+                        "ts": ts,
+                        "role": role,
+                        "content": content
+                    }
+                    for id, ws, sid, ts, role, content in rows
+                ]
+            except sqlite3.OperationalError:
+                # FTS 查询失败，退化为 LIKE 搜索
+                return self.search(keyword=keyword, workspace=workspace, limit=limit)
+    
+    # === 删除操作 ===
+    
+    def delete_session(self, workspace: str, session_id: str) -> int:
+        """删除指定会话的所有消息
+        
+        Args:
+            workspace: 工作空间名称
+            session_id: 会话ID
+        
+        Returns:
+            删除的消息数量
+        """
         with self._lock:
             self._ensure_conn()
             with self._conn:
-                self._conn.execute(
-                    "DELETE FROM messages WHERE workspace=?",
-                    (self.workspace,),
+                try:
+                    self._conn.execute(
+                        "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=? AND session_id=?)",
+                        (workspace, session_id),
+                    )
+                except Exception:
+                    pass
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=? AND session_id=?",
+                    (workspace, session_id),
                 )
-        logger.info(f"[HistoryDB] 已清除 workspace={self.workspace}")
-
-    def delete_by_ids(self, ids: list[int]):
-        """按 ID 列表删除消息"""
+        logger.info(f"[HistoryDB] 删除会话 '{session_id}' 的 {cur.rowcount} 条消息, workspace={workspace}")
+        return cur.rowcount
+    
+    def delete_workspace(self, workspace: str) -> int:
+        """删除工作空间的所有消息
+        
+        Args:
+            workspace: 工作空间名称
+        
+        Returns:
+            删除的消息数量
+        """
+        with self._lock:
+            self._ensure_conn()
+            with self._conn:
+                try:
+                    self._conn.execute(
+                        "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=?)",
+                        (workspace,),
+                    )
+                except Exception:
+                    pass
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=?",
+                    (workspace,),
+                )
+        logger.info(f"[HistoryDB] 删除工作空间 '{workspace}' 的 {cur.rowcount} 条消息")
+        return cur.rowcount
+    
+    def delete_before(self, workspace: str, keep_count: int) -> int:
+        """保留最近 N 条消息，删除其余
+        
+        Args:
+            workspace: 工作空间名称
+            keep_count: 保留数量
+        
+        Returns:
+            删除的消息数量
+        """
+        if keep_count <= 0:
+            return self.delete_workspace(workspace)
+        
+        with self._lock:
+            self._ensure_conn()
+            with self._conn:
+                row = self._conn.execute(
+                    "SELECT id FROM messages WHERE workspace=? ORDER BY id DESC LIMIT 1 OFFSET ?",
+                    (workspace, keep_count - 1),
+                ).fetchone()
+                if not row:
+                    return 0
+                cutoff_id = row[0]
+                cur = self._conn.execute(
+                    "DELETE FROM messages WHERE workspace=? AND id < ?",
+                    (workspace, cutoff_id),
+                )
+                try:
+                    self._conn.execute("DELETE FROM messages_fts WHERE rowid < ?", (cutoff_id,))
+                except Exception:
+                    pass
+        
+        logger.info(f"[HistoryDB] delete_before: workspace={workspace}, 保留最近 {keep_count} 条，删除 {cur.rowcount} 条旧消息")
+        return cur.rowcount
+    
+    def purge(self, workspace: str = "") -> int:
+        """清空历史消息
+        
+        Args:
+            workspace: 工作空间名称（空则清空所有）
+        
+        Returns:
+            删除的消息数量
+        """
+        with self._lock:
+            self._ensure_conn()
+            with self._conn:
+                if workspace:
+                    cur = self._conn.execute(
+                        "DELETE FROM messages WHERE workspace=?",
+                        (workspace,),
+                    )
+                    try:
+                        self._conn.execute(
+                            "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=?)",
+                            (workspace,),
+                        )
+                    except Exception:
+                        pass
+                    logger.info(f"[HistoryDB] 已清除 workspace={workspace}, 共 {cur.rowcount} 条消息")
+                else:
+                    cur = self._conn.execute("DELETE FROM messages")
+                    try:
+                        self._conn.execute("DELETE FROM messages_fts")
+                    except Exception:
+                        pass
+                    logger.info(f"[HistoryDB] 已清除所有消息, 共 {cur.rowcount} 条")
+        
+        return cur.rowcount
+    
+    def delete_by_ids(self, ids: list[int]) -> int:
+        """按 ID 列表删除消息
+        
+        Args:
+            ids: 消息ID列表
+        
+        Returns:
+            删除的消息数量
+        """
         if not ids:
             return 0
         placeholders = ",".join("?" * len(ids))
@@ -210,8 +533,8 @@ class HistoryDB:
             self._ensure_conn()
             with self._conn:
                 cur = self._conn.execute(
-                    f"DELETE FROM messages WHERE workspace=? AND id IN ({placeholders})",
-                    [self.workspace] + list(ids),
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    list(ids),
                 )
                 try:
                     self._conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", list(ids))
@@ -219,15 +542,113 @@ class HistoryDB:
                     pass
         logger.info(f"[HistoryDB] 删除 {cur.rowcount} 条消息")
         return cur.rowcount
-
-    def update_session_name(self, session_id: str, name: str):
-        """更新指定会话的 system 消息 metadata 中的 name"""
+    
+    # === 统计操作 ===
+    
+    def count(self, workspace: str = "", session_id: str = "") -> int:
+        """统计消息数量
+        
+        Args:
+            workspace: 工作空间（空则统计所有）
+            session_id: 会话ID（空则统计所有）
+        
+        Returns:
+            消息数量
+        """
+        with self._lock:
+            self._ensure_conn()
+            if workspace and session_id:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE workspace=? AND session_id=?",
+                    (workspace, session_id),
+                ).fetchone()
+            elif workspace:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE workspace=?",
+                    (workspace,),
+                ).fetchone()
+            else:
+                row = self._conn.execute("SELECT COUNT(*) FROM messages").fetchone()
+        
+        return row[0] if row else 0
+    
+    def list_sessions(self, workspace: str = "") -> list[dict]:
+        """列出所有会话（含消息数、最后更新时间）
+        
+        Args:
+            workspace: 工作空间（空则列出所有）
+        
+        Returns:
+            会话列表：[{"workspace": ..., "session_id": ..., "message_count": ..., "updated_at": ...}]
+        """
+        with self._lock:
+            self._ensure_conn()
+            if workspace:
+                rows = self._conn.execute(
+                    """SELECT workspace, session_id, COUNT(*) as message_count, MAX(ts) as updated_at
+                       FROM messages
+                       WHERE workspace=?
+                       GROUP BY workspace, session_id
+                       ORDER BY updated_at DESC""",
+                    (workspace,),
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    """SELECT workspace, session_id, COUNT(*) as message_count, MAX(ts) as updated_at
+                       FROM messages
+                       GROUP BY workspace, session_id
+                       ORDER BY updated_at DESC"""
+                ).fetchall()
+        
+        return [
+            {
+                "workspace": ws,
+                "session_id": sid,
+                "message_count": count,
+                "updated_at": updated_at
+            }
+            for ws, sid, count, updated_at in rows
+        ]
+    
+    def get_session_name(self, workspace: str, session_id: str) -> Optional[str]:
+        """获取会话名称（从第一条 system 消息的 metadata 中提取）
+        
+        Args:
+            workspace: 工作空间名称
+            session_id: 会话ID
+        
+        Returns:
+            会话名称（如果没有则返回 None）
+        """
+        with self._lock:
+            self._ensure_conn()
+            row = self._conn.execute(
+                "SELECT metadata FROM messages WHERE workspace=? AND session_id=? AND role='system' ORDER BY id LIMIT 1",
+                (workspace, session_id),
+            ).fetchone()
+        
+        if row and row[0]:
+            try:
+                meta = json.loads(row[0])
+                return meta.get("name")
+            except json.JSONDecodeError:
+                pass
+        return None
+    
+    def update_session_name(self, workspace: str, session_id: str, name: str):
+        """更新会话名称（存储在第一条 system 消息的 metadata 中）
+        
+        Args:
+            workspace: 工作空间名称
+            session_id: 会话ID
+            name: 会话名称
+        """
         with self._lock:
             self._ensure_conn()
             with self._conn:
                 row = self._conn.execute(
                     "SELECT id, metadata FROM messages WHERE workspace=? AND session_id=? AND role='system' ORDER BY id LIMIT 1",
-                    (self.workspace, session_id),
+                    (workspace, session_id),
                 ).fetchone()
                 if row:
                     mid, raw_meta = row
@@ -240,180 +661,53 @@ class HistoryDB:
                         "UPDATE messages SET metadata=? WHERE id=?",
                         (json.dumps(meta, ensure_ascii=False), mid),
                     )
-
-    def delete_by_session(self, session_id: str) -> int:
-        """删除指定会话的所有消息"""
-        with self._lock:
-            self._ensure_conn()
-            with self._conn:
-                try:
-                    self._conn.execute(
-                        "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=? AND session_id=?)",
-                        (self.workspace, session_id),
-                    )
-                except Exception:
-                    pass
-                cur = self._conn.execute(
-                    "DELETE FROM messages WHERE workspace=? AND session_id=?",
-                    (self.workspace, session_id),
-                )
-        logger.info(f"[HistoryDB] 删除会话 '{session_id}' 的 {cur.rowcount} 条消息")
-        return cur.rowcount
-
-    def delete_before(self, keep_count: int):
-        """保留最近 N 条消息，删除其余"""
-        if keep_count <= 0:
-            with self._lock:
-                self._ensure_conn()
-                with self._conn:
-                    cur = self._conn.execute(
-                        "DELETE FROM messages WHERE workspace=?",
-                        (self.workspace,),
-                    )
-                    try:
-                        self._conn.execute(
-                            "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=?)",
-                            (self.workspace,),
-                        )
-                    except Exception:
-                        pass
-            logger.info(f"[HistoryDB] 删除所有消息: {cur.rowcount} 条")
-            return cur.rowcount
-        with self._lock:
-            self._ensure_conn()
-            with self._conn:
-                row = self._conn.execute(
-                    "SELECT id FROM messages WHERE workspace=? ORDER BY id DESC LIMIT 1 OFFSET ?",
-                    (self.workspace, keep_count - 1),
-                ).fetchone()
-                if not row:
-                    return 0
-                cutoff_id = row[0]
-                cur = self._conn.execute(
-                    "DELETE FROM messages WHERE workspace=? AND id < ?",
-                    (self.workspace, cutoff_id),
-                )
-                try:
-                    self._conn.execute("DELETE FROM messages_fts WHERE rowid < ?", (cutoff_id,))
-                except Exception:
-                    pass
-        logger.info(f"[HistoryDB] delete_before: 保留最近 {keep_count} 条，删除 {cur.rowcount} 条旧消息, workspace={self.workspace}")
-        return cur.rowcount
-
-    def list_for_review(self, limit: int = 100) -> list[dict]:
-        """列出消息供审核（含 id），用于选择性删除"""
-        with self._lock:
-            self._ensure_conn()
-            rows = self._conn.execute(
-                "SELECT id, role, content, ts FROM messages WHERE workspace=? ORDER BY id",
-                (self.workspace,),
-            ).fetchall()
-        results = []
-        for row in rows:
-            msg = {"id": row[0], "role": row[1], "content": row[2][:200], "ts": row[3]}
-            results.append(msg)
-        return results
-
-    def search(self, keyword: str = "", date_from: str = "", date_to: str = "",
-               workspace: str = "", limit: int = 20) -> list[dict]:
-        ws = workspace or self.workspace
-        logger.debug(f"[HistoryDB] search: keyword={keyword[:30] if keyword else '(空)'}, workspace={ws}, limit={limit}")
-        conditions = ["workspace=?"]
-        params = [ws]
-
-        if date_from:
-            conditions.append("ts >= ?")
-            params.append(date_from)
-        if date_to:
-            conditions.append("ts <= ?")
-            params.append(date_to)
-
-        if keyword:
-            conditions.append("content LIKE ?")
-            params.append(f"%{keyword}%")
-
-        with self._lock:
-            self._ensure_conn()
-            rows = self._conn.execute(
-                f"SELECT id, ts, role, content FROM messages "
-                f"WHERE {' AND '.join(conditions)} "
-                f"ORDER BY ts DESC LIMIT ?",
-                params + [limit],
-            ).fetchall()
-
-        return [{"id": id, "ts": ts, "role": role, "content": content} for id, ts, role, content in rows]
-
-    def count(self, keyword: str = "", date_from: str = "", date_to: str = "",
-              workspace: str = "") -> int:
-        """统计符合条件的消息总数"""
-        ws = workspace or self.workspace
-        conditions = ["workspace=?"]
-        params = [ws]
-
-        if date_from:
-            conditions.append("ts >= ?")
-            params.append(date_from)
-        if date_to:
-            conditions.append("ts <= ?")
-            params.append(date_to)
-        if keyword:
-            conditions.append("content LIKE ?")
-            params.append(f"%{keyword}%")
-
-        with self._lock:
-            self._ensure_conn()
-            row = self._conn.execute(
-                f"SELECT COUNT(*) FROM messages WHERE {' AND '.join(conditions)}",
-                params
-            ).fetchone()
-        return row[0] if row else 0
-
-    def load_all(self, session_id: str = "", limit: int = 0) -> list[dict]:
-        logger.debug(f"[HistoryDB] load_all: sid={session_id}, limit={limit}, workspace={self.workspace}")
-        with self._lock:
-            self._ensure_conn()
-            if session_id:
-                if limit > 0:
-                    rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? ORDER BY id DESC LIMIT ?) ORDER BY id",
-                        (self.workspace, session_id, limit),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? ORDER BY id",
-                        (self.workspace, session_id),
-                    ).fetchall()
-            else:
-                if limit > 0:
-                    rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? ORDER BY id DESC LIMIT ?) ORDER BY id",
-                        (self.workspace, limit),
-                    ).fetchall()
-                else:
-                    rows = self._conn.execute(
-                        "SELECT role, content, metadata, ts FROM messages WHERE workspace=? ORDER BY id",
-                        (self.workspace,),
-                    ).fetchall()
+                    logger.debug(f"[HistoryDB] 更新会话名称: {session_id} -> {name}")
+    
+    # === 辅助方法 ===
+    
+    def _parse_messages(self, rows: list) -> list[dict]:
+        """解析消息行"""
         results = []
         for role, content, metadata, ts in rows:
             msg = {"role": role, "content": content, "timestamp": ts[:19] if ts else ""}
             if metadata:
                 try:
                     extra = json.loads(metadata)
-                    # 恢复多模态内容（含图片的 list）
                     if "_multimodal_content" in extra:
                         msg["content"] = extra["_multimodal_content"]
                         del extra["_multimodal_content"]
-                    # 合并其他字段，防止覆盖核心字段
                     for k, v in extra.items():
                         if k not in ("role", "content"):
                             msg[k] = v
                 except json.JSONDecodeError:
                     pass
             results.append(msg)
-        logger.debug(f"[HistoryDB] load_all 返回: {len(results)} 条消息")
         return results
-
+    
+    def list_for_review(self, workspace: str, limit: int = 100) -> list[dict]:
+        """列出消息供审核（含 id），用于选择性删除
+        
+        Args:
+            workspace: 工作空间名称
+            limit: 限制数量
+        
+        Returns:
+            消息列表
+        """
+        with self._lock:
+            self._ensure_conn()
+            rows = self._conn.execute(
+                "SELECT id, role, content, ts FROM messages WHERE workspace=? ORDER BY id LIMIT ?",
+                (workspace, limit),
+            ).fetchall()
+        
+        return [
+            {"id": row[0], "role": row[1], "content": row[2][:200], "ts": row[3]}
+            for row in rows
+        ]
+    
+    # === 生命周期 ===
+    
     def close(self):
         """关闭数据库连接"""
         if self._closed:
@@ -431,10 +725,77 @@ class HistoryDB:
         return self._closed
     
     def __enter__(self):
-        """上下文管理器入口"""
         return self
     
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """上下文管理器退出，自动关闭连接"""
         self.close()
         return False
+
+
+# === 连接池管理器 ===
+
+class HistoryDBPool:
+    """历史数据库连接池（单例模式，按用户管理连接）
+    
+    使用方式：
+        db = HistoryDBPool.get(username)
+        db.append(workspace, session_id, role, content)
+        HistoryDBPool.close(username)  # 关闭指定用户的连接
+        HistoryDBPool.close_all()      # 关闭所有连接
+    """
+    
+    _instance = None
+    _lock = threading.Lock()
+    _pools: dict[str, HistoryDB] = {}  # username -> HistoryDB
+    
+    @classmethod
+    def get(cls, username: str) -> HistoryDB:
+        """获取用户的数据库连接（复用）
+        
+        Args:
+            username: 用户名
+        
+        Returns:
+            HistoryDB 实例
+        """
+        with cls._lock:
+            if username not in cls._pools:
+                from ..config import user_data_dir
+                db_path = user_data_dir(username) / "history.db"
+                cls._pools[username] = HistoryDB(db_path)
+                logger.debug(f"[HistoryDBPool] 创建连接: username={username}")
+            return cls._pools[username]
+    
+    @classmethod
+    def close(cls, username: str):
+        """关闭指定用户的数据库连接
+        
+        Args:
+            username: 用户名
+        """
+        with cls._lock:
+            if username in cls._pools:
+                cls._pools[username].close()
+                del cls._pools[username]
+                logger.debug(f"[HistoryDBPool] 关闭连接: username={username}")
+    
+    @classmethod
+    def close_all(cls):
+        """关闭所有数据库连接"""
+        with cls._lock:
+            for username, db in cls._pools.items():
+                try:
+                    db.close()
+                except Exception as e:
+                    logger.warning(f"[HistoryDBPool] 关闭连接失败: username={username}, error={e}")
+            cls._pools.clear()
+            logger.info("[HistoryDBPool] 已关闭所有连接")
+    
+    @classmethod
+    def stats(cls) -> dict:
+        """获取连接池统计信息"""
+        with cls._lock:
+            return {
+                "total_connections": len(cls._pools),
+                "users": list(cls._pools.keys())
+            }

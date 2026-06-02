@@ -48,7 +48,7 @@ def _cleanup_session_components(comp: dict):
     """清理会话组件资源"""
     if not comp:
         return
-    resources = ["history_db", "compactor", "store"]
+    resources = ["compactor", "store"]  # history_db 现在是统一连接池，不单独关闭
     for name in resources:
         try:
             obj = comp.get(name)
@@ -87,13 +87,13 @@ def _get_workspace_base(username: str, workspace: str | None) -> Path | None:
     ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
     ws = ws_mgr.get(workspace)
     if ws:
-        base = ws.ws_dir / "web_sessions"
+        base = ws.ws_dir / "sessions"
         base.mkdir(parents=True, exist_ok=True)
         return base
     return None
 
 def _resolve_base(username: str, workspace: str | None) -> Path:
-    """解析工作空间下的 web_sessions 目录。"""
+    """解析工作空间下的 sessions 目录。"""
     if not workspace:
         workspace = "default"
     ws_base = _get_workspace_base(username, workspace)
@@ -103,7 +103,7 @@ def _resolve_base(username: str, workspace: str | None) -> Path:
     ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
     ws = ws_mgr.get(workspace)
     if ws:
-        base = ws.ws_dir / "web_sessions"
+        base = ws.ws_dir / "sessions"
         base.mkdir(parents=True, exist_ok=True)
         return base
     # 仅 default 不存在时自动创建
@@ -111,7 +111,7 @@ def _resolve_base(username: str, workspace: str | None) -> Path:
         ws_mgr.create("default", str(Path.cwd()))
         ws = ws_mgr.get("default")
         if ws:
-            base = ws.ws_dir / "web_sessions"
+            base = ws.ws_dir / "sessions"
             base.mkdir(parents=True, exist_ok=True)
             return base
     raise ValueError(f"工作空间 '{workspace}' 不存在")
@@ -158,8 +158,7 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
                 comp["blackboard"] = team_comp.get("blackboard")
             return comp
 
-    from ...memory import MemoryStore, Compactor
-    from ...memory.history_db import HistoryDB
+    from ...memory import MemoryStore, Compactor, HistoryDBPool
     from ...context import ContextBuilder
     from ...skills import SkillLoader
     from ..deps import SKILL_PATHS
@@ -191,7 +190,8 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
                              global_memory_dir=global_memory_dir,
                              workspace_memory_dir=ws_memory_dir)
 
-    history_db = HistoryDB(session_memory_dir / "history.db", workspace=workspace or "default")
+    # 使用统一数据库连接池
+    history_db = HistoryDBPool.get(username)
 
     user_skills_dir = user_data_dir(username) / "skills"
     ws_skills_dir = ws_dir / "skills" if ws_dir else None
@@ -236,7 +236,6 @@ def _get_or_create_components(username: str, sid: str, base: Path | None = None,
     components["blackboard"] = team_comp.get("blackboard")
     with _sessions_lock:
         if cache_key in _SESSION_COMPONENTS:
-            history_db.close()
             return _SESSION_COMPONENTS[cache_key]
         _SESSION_COMPONENTS[cache_key] = components
     return components
@@ -361,7 +360,7 @@ def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: 
         if base is None:
             base = _resolve_base(username, workspace or "default")
         comp = _get_or_create_components(username, sid, base, workspace)
-        result = comp["history_db"].load_all(sid, limit=COMPACTOR.get("context_limit", 50))
+        result = comp["history_db"].load_session(workspace or "default", sid, limit=COMPACTOR.get("context_limit", 50))
         logger.debug(f"[perf] _load_from_db sid={sid} msgs={len(result) if result else 0} time={time.time()-_t0:.3f}s")
         return result
     except Exception as e:
@@ -451,7 +450,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
             comp = _get_or_create_components(username, comp_key, base, workspace)
             register_memory_tools(comp["store"])
-            register_history_tools(comp["history_db"])
+            register_history_tools(comp["history_db"], workspace or "default")
             register(comp["skill_loader"])
             if comp.get("project_path"):
                 from ...tools import set_project_path
@@ -485,7 +484,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             if user_msgs:
                 last_user = user_msgs[-1]
                 user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
-                comp["history_db"].append("user", last_user.get("content", ""), session_id=comp_key, metadata=json.dumps(user_meta) if user_meta else "")
+                comp["history_db"].append(workspace or "default", comp_key, "user", last_user.get("content", ""), metadata=json.dumps(user_meta) if user_meta else "")
 
             if len(user_msgs) == 1 and messages[0].get("name", "") in ("", "新会话"):
                 # 处理多模态消息（content 可能是 list）
@@ -506,7 +505,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
             def _persist(m):
                 if m["role"] == "tool":
-                    comp["history_db"].append("tool", m.get("content", ""), session_id=comp_key, metadata=json.dumps({"name": m.get("name", ""), "tool_call_id": m.get("tool_call_id", "")}))
+                    comp["history_db"].append(workspace or "default", comp_key, "tool", m.get("content", ""), metadata=json.dumps({"name": m.get("name", ""), "tool_call_id": m.get("tool_call_id", "")}))
                 elif m["role"] == "assistant":
                     if m.get("tool_calls"):
                         _deferred_assistant.append(m)
@@ -514,7 +513,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         asst_meta = {}
                         if m.get("thinking"):
                             asst_meta["thinking"] = m["thinking"]
-                        comp["history_db"].append("assistant", m.get("content", ""), session_id=comp_key, metadata=json.dumps(asst_meta) if asst_meta else "")
+                        comp["history_db"].append(workspace or "default", comp_key, "assistant", m.get("content", ""), metadata=json.dumps(asst_meta) if asst_meta else "")
 
             msg, _ = run_tool_loop(
                 messages, tools,
@@ -544,7 +543,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         return False
                     messages.append({"role": "user", "content": inbox_text, "timestamp": now_ts()})
                     messages.append({"role": "user", "content": "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。", "timestamp": now_ts()})
-                    comp["history_db"].append("user", inbox_text, session_id=comp_key)
+                    comp["history_db"].append(workspace or "default", comp_key, "user", inbox_text)
                     logger.info(f"[Web-Team] {label}回禀注入，继续 run_tool_loop")
                     return True
 
@@ -596,11 +595,11 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 if am.get("thinking"):
                     am_meta["thinking"] = am["thinking"]
                 am_meta["tool_calls"] = enriched_tcs
-                comp["history_db"].append("assistant", am.get("content") or "", session_id=comp_key, metadata=json.dumps(am_meta))
+                comp["history_db"].append(workspace or "default", comp_key, "assistant", am.get("content") or "", metadata=json.dumps(am_meta))
             if not msg or not msg.get("content"):
                 err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
                 messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
-                comp["history_db"].append("assistant", err_text, session_id=comp_key)
+                comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
                 loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "error", "data": {"error": err_text, "session_id": session_key}}))
             if msg and msg.get("content") and not any(
                 m.get("role") == "assistant" and m.get("content") == msg["content"]
@@ -702,8 +701,8 @@ async def delete_session(body: dict):
         base = _resolve_base(username, ws)
         comp = _SESSION_COMPONENTS.get(cache_key)
         if comp:
-            comp["history_db"].delete_by_session(session_id)
-            comp["history_db"].close()
+            comp["history_db"].delete_session(ws or "default", session_id)
+            # 不再关闭 history_db，因为现在是统一连接池
     except Exception:
         pass
     with _sessions_lock:
@@ -747,8 +746,8 @@ async def batch_delete_sessions(body: dict):
         try:
             comp = _SESSION_COMPONENTS.get(cache_key)
             if comp:
-                comp["history_db"].delete_by_session(sid)
-                comp["history_db"].close()
+                comp["history_db"].delete_session(workspace or "default", sid)
+                # 不再关闭 history_db，因为现在是统一连接池
         except Exception:
             pass
         with _sessions_lock:
@@ -1001,7 +1000,7 @@ async def chat_search(keyword: str = Query(default=""), session_id: str = Query(
         return {"results": []}
     base = _resolve_base(username, workspace or None)
     comp = _get_or_create_components(username, session_id, base, workspace or None)
-    results = comp["history_db"].search(keyword, date_from=date_from, date_to=date_to, limit=limit)
+    results = comp["history_db"].search(keyword, workspace=workspace or "", date_from=date_from, date_to=date_to, limit=limit)
     return {"results": results}
 
 # ── History & Reset ──
@@ -1016,7 +1015,7 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
     base = _resolve_base(username, workspace or None)
     cache_key = _cache_key(username, workspace or None, session_id)
     comp = _get_or_create_components(username, session_id, base, workspace or None)
-    messages = comp["history_db"].load_all(session_id, limit=WEB.get("history_limit", 200))
+    messages = comp["history_db"].load_session(workspace or "default", session_id, limit=WEB.get("history_limit", 200))
     if not messages:
         return {"session_id": session_id, "history": []}
     logger.info(f"[chat_history] sid={session_id} ws={workspace} base={base} msgs={len(messages)} time={time.time()-_t0:.3f}s")
@@ -1093,7 +1092,7 @@ async def chat_export(session_id: str = Query(default=""), username: str = Query
         logger.error(f"[export] _resolve_base error: {e}")
         return JSONResponse({"error": f"工作空间错误: {e}"}, status_code=400)
     comp = _get_or_create_components(username, session_id, base, workspace or None)
-    messages = comp["history_db"].load_all(session_id, limit=limit) or []
+    messages = comp["history_db"].load_session(workspace or "default", session_id, limit=limit) or []
     if not messages:
         return JSONResponse({"error": f"会话 '{session_id}' 不存在或无消息"}, status_code=404)
 

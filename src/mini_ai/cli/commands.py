@@ -6,7 +6,7 @@ from ..utils import now_ts
 
 
 class CommandHandler:
-    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path=""):
+    def __init__(self, *, disp, store, sessions, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path="", username="default", session_id=None):
         self.disp = disp
         self.store = store
         self.sessions = sessions
@@ -20,6 +20,8 @@ class CommandHandler:
         self.context_builder = context_builder
         self.skill_loader = skill_loader
         self.project_path = project_path
+        self.username = username
+        self.session_id = session_id
         self.plan_mode = False
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
@@ -52,8 +54,79 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/sessions":
-            self.disp.info(self.sessions.render_list())
+            # 列出数据库中的所有会话
+            sessions = self.history_db.list_sessions(self._get_workspace())
+            if not sessions:
+                self.disp.info("暂无会话记录")
+                return "continue"
+            
+            lines = [f"共 {len(sessions)} 个会话：\n"]
+            for s in sessions:
+                current = " (当前)" if s["session_id"] == self.session_id else ""
+                name = self.history_db.get_session_name(self._get_workspace(), s["session_id"]) or s["session_id"][:15]
+                ts = s.get("updated_at", "")[:16].replace("T", " ")
+                lines.append(f"  {'*' if current else ' '} {name:20s} {s['message_count']:>4} 条  {ts}{current}")
+            self.disp.info("\n".join(lines))
             return "continue"
+
+        if user_input == "/session":
+            # 显示当前会话信息
+            name = self.history_db.get_session_name(self._get_workspace(), self.session_id)
+            self.disp.info(f"当前会话: {name or self.session_id}\nID: {self.session_id}\n用户: {self.username}")
+            return "continue"
+
+        if user_input.startswith("/switch "):
+            # 切换到指定会话
+            sid = user_input[8:].strip()
+            if not sid:
+                self.disp.error("用法: /switch <会话ID或名称>")
+                return "continue"
+            
+            # 尝试按名称查找
+            sessions = self.history_db.list_sessions(self._get_workspace())
+            matched = None
+            for s in sessions:
+                sname = self.history_db.get_session_name(self._get_workspace(), s["session_id"])
+                if s["session_id"] == sid or sname == sid:
+                    matched = s["session_id"]
+                    break
+            
+            if not matched:
+                self.disp.error(f"会话 '{sid}' 不存在")
+                return "continue"
+            
+            # 重新加载会话
+            self.session_id = matched
+            messages[:] = [messages[0]]  # 保留 system
+            restored = self.history_db.load_session(self._get_workspace(), matched, limit=50)
+            if restored:
+                messages.extend(restored)
+            self.inject_fn(messages)
+            self.disp.info(f"已切换到会话: {matched}")
+            return "continue"
+
+        if user_input == "/new":
+            # 创建新会话
+            import uuid
+            old_sid = self.session_id
+            self.session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
+            messages[:] = [messages[0]]  # 保留 system
+            self.inject_fn(messages)
+            self.disp.info(f"已创建新会话: {self.session_id}")
+            return "continue"
+
+    def _get_workspace(self) -> str:
+        """获取当前工作空间名称"""
+        if self.workspace_mgr:
+            # 从 project_path 获取工作空间名称
+            cwd = self.project_path or "."
+            from pathlib import Path
+            ws_name = Path(cwd).name if cwd else "default"
+            # 验证工作空间是否存在
+            ws = self.workspace_mgr.get(ws_name)
+            if ws:
+                return ws.name
+        return "default"
 
         if user_input == "/thinking":
             self.disp.show_thinking()
@@ -76,7 +149,8 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/history":
-            history = self.history_db.load_all(limit=50)
+            workspace = self._get_workspace()
+            history = self.history_db.load_session(workspace, self.session_id, limit=50)
             if not history:
                 self.disp.info("暂无历史消息")
                 return "continue"
@@ -103,7 +177,8 @@ class CommandHandler:
             if not path:
                 from datetime import datetime as _dt
                 path = f"chat_export_{_dt.now().strftime('%Y%m%d_%H%M%S')}.md"
-            msgs = self.history_db.load_all()
+            workspace = self._get_workspace()
+            msgs = self.history_db.load_session(workspace, self.session_id)
             if not msgs:
                 self.disp.info("没有历史消息可导出")
                 return "continue"
