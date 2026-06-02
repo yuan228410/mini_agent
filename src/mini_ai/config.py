@@ -14,6 +14,15 @@ from typing import Callable, TypedDict, Literal, Any
 
 import yaml
 
+# 延迟导入 logger（避免循环依赖）
+logger = None
+def _get_logger():
+    global logger
+    if logger is None:
+        from .logger import logger as _logger
+        logger = _logger
+    return logger
+
 PACKAGE_DIR = Path(__file__).parent
 DATA_DIR = Path(os.environ.get("MINI_AI_DATA", Path.home() / ".mini_ai"))
 DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -139,11 +148,10 @@ def start_config_watcher() -> None:
     global _config_watcher
     if _config_watcher:
         return
-    
-    from .logger import logger
+
     _config_watcher = ConfigWatcher(_config_path, init_config)
     _config_watcher.start()
-    logger.info("[Config] 热加载监听已启动")
+    _get_logger().info("[Config] 热加载监听已启动")
 
 
 def stop_config_watcher() -> None:
@@ -194,7 +202,19 @@ def _apply_config(raw: dict) -> None:
     MODEL_CONFIG = copy.deepcopy(models[active_model])
     AVAILABLE_MODELS = list(models.keys())
 
-    TIMEOUTS = raw.get("timeouts") or {}
+    # 超时配置（带默认值）
+    _timeout_defaults = {
+        "llm": 120,
+        "llm_connect": 30,
+        "llm_retries": 3,
+        "llm_retry_delay": 2,
+        "teammate_recv": 5,
+        "lead_wait": 1800,
+        "lead_poll_interval": 2,
+        "web_fetch": 20,
+    }
+    TIMEOUTS = {**_timeout_defaults, **(raw.get("timeouts") or {})}
+    
     COMPACTOR = raw.get("compactor") or {}
     TEAMMATE = raw.get("teammate") or {}
     TOOL = raw.get("tool") or {}

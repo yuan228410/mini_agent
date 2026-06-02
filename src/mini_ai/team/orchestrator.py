@@ -12,19 +12,46 @@ from ..utils import now_ts
 
 class Orchestrator:
 
-    def __init__(self, graph: TaskGraph, blackboard: Blackboard, *, context_length: int = 256000, bus=None, manager=None):
+    def __init__(self, graph: TaskGraph, blackboard: Blackboard, *, context_length: int = 256000, bus=None, manager=None, display=None):
         self.graph = graph
         self.blackboard = blackboard
         self.context_length = context_length
         self.bus = bus
         self.manager = manager
+        self._display = display
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
 
+    def _push_event(self, event: str, data: dict):
+        """推送工作流事件到 WebDisplay"""
+        if self._display:
+            try:
+                self._display._push(event, data)
+                logger.info(f"[Orchestrator] 推送事件成功: {event}")
+            except Exception as e:
+                logger.warning(f"[Orchestrator] 推送事件失败: {e}")
+        else:
+            logger.warning(f"[Orchestrator] display 为空，无法推送事件: {event}")
+
     def run(self, timeout: int = 1800) -> str:
         logger.info(f"[Orchestrator] 启动，{len(self.graph.nodes)} 个任务，超时 {timeout}s")
         start = time.monotonic()
+
+        # 推送 workflow_start 事件
+        tasks_info = [
+            {
+                "id": t.id,
+                "agent": t.agent,
+                "prompt": t.prompt[:100] + "..." if len(t.prompt) > 100 else t.prompt,
+                "depends_on": t.depends_on,
+            }
+            for t in self.graph.nodes.values()
+        ]
+        self._push_event("workflow_start", {
+            "tasks": tasks_info,
+            "total": len(self.graph.nodes),
+        })
 
         while not self.graph.is_complete():
             if time.monotonic() - start > timeout:
@@ -38,6 +65,12 @@ class Orchestrator:
 
             for task in ready:
                 self.graph.mark_running(task.id)
+                # 推送 task_start 事件
+                self._push_event("task_start", {
+                    "id": task.id,
+                    "agent": task.agent,
+                    "prompt": task.prompt[:100] + "..." if len(task.prompt) > 100 else task.prompt,
+                })
                 prompt = self.graph.resolve_prompt(task)
                 # 捕获当前上下文（包含 ContextVar）
                 ctx = contextvars.copy_context()
@@ -54,9 +87,32 @@ class Orchestrator:
                 for task_id, (result, error) in list(self._pending_results.items()):
                     if result is not None:
                         self.graph.mark_done(task_id, result)
+                        # 推送 task_end 事件
+                        self._push_event("task_end", {
+                            "id": task_id,
+                            "status": "done",
+                            "result_preview": result[:200] + "..." if result and len(result) > 200 else result,
+                        })
                     else:
                         self.graph.mark_failed(task_id, error or "执行失败")
+                        # 推送 task_end 事件
+                        self._push_event("task_end", {
+                            "id": task_id,
+                            "status": "failed",
+                            "error": error or "执行失败",
+                        })
                     del self._pending_results[task_id]
+
+        # 推送 workflow_end 事件
+        elapsed = round(time.monotonic() - start, 1)
+        completed = sum(1 for n in self.graph.nodes.values() if n.status == "done")
+        failed = sum(1 for n in self.graph.nodes.values() if n.status == "failed")
+        self._push_event("workflow_end", {
+            "elapsed": elapsed,
+            "completed": completed,
+            "failed": failed,
+            "total": len(self.graph.nodes),
+        })
 
         return self._summarize()
 

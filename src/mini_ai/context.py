@@ -39,7 +39,14 @@ class ContextBuilder:
             with self._cache_lock:
                 self._file_cache.pop(str(path), None)
             return None
-        text = path.read_text(encoding="utf-8").strip() or None
+        # 使用 with 语句确保文件句柄正确关闭
+        try:
+            with open(path, encoding="utf-8") as f:
+                text = f.read().strip() or None
+        except OSError:
+            with self._cache_lock:
+                self._file_cache.pop(str(path), None)
+            return None
         with self._cache_lock:
             if text is not None:
                 self._file_cache[str(path)] = (mtime, text)

@@ -346,6 +346,13 @@ def execute(args: dict, abort_event: threading.Event | None = None) -> str:
             from ..web.display import WebDisplay
             sub_display = WebDisplay(lead_display.queue, lead_display.loop)
             sub_display.set_teammate(f"sub:{spec['name']}")
+            
+            # 推送 agent_start 事件
+            sub_display._push("agent_start", {
+                "agent_type": f"sub:{spec['name']}",
+                "task": task[:100] + "..." if len(task) > 100 else task,
+                "max_turns": spec.get("max_turns", 10),
+            })
     except (ImportError, AttributeError):
         pass
 

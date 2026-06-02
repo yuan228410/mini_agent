@@ -42,27 +42,39 @@ _SESSION_COMPONENTS: dict[str, dict] = {}
 _SESSION_PLAN_MODE: dict[str, bool] = {}
 _TEAM_COMPONENTS: dict[str, dict] = {}
 
-_MAX_CACHED_SESSIONS = 50
+_MAX_CACHED_SESSIONS = 20  # 降低缓存上限，减少资源占用
+
+def _cleanup_session_components(comp: dict):
+    """清理会话组件资源"""
+    if not comp:
+        return
+    resources = ["history_db", "compactor", "store"]
+    for name in resources:
+        try:
+            obj = comp.get(name)
+            if obj and hasattr(obj, "close"):
+                obj.close()
+                logger.debug(f"[Web] 已关闭资源: {name}")
+        except Exception as e:
+            logger.warning(f"[Web] 关闭 {name} 失败: {e}")
 
 def _touch_session(cache_key: str):
     """记录会话访问时间，超限时淘汰最久未活跃的"""
     _SESSION_ACCESS[cache_key] = time.monotonic()
     if len(_SESSION_ACCESS) > _MAX_CACHED_SESSIONS:
+        # 淘汰最久未活跃的 5 个会话
         oldest = sorted(_SESSION_ACCESS, key=_SESSION_ACCESS.get)[:len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5]
         for k in oldest:
             comp = _SESSION_COMPONENTS.pop(k, None)
             if comp:
-                try:
-                    comp.get("history_db") and comp["history_db"].close()
-                except Exception:
-                    pass
+                _cleanup_session_components(comp)
             _SESSIONS.pop(k, None)
             _META_CACHE.pop(k, None)
             _SESSION_STATUS.pop(k, None)
             _SESSION_MODELS.pop(k, None)
             _SESSION_LOCKS.pop(k, None)
             _SESSION_ACCESS.pop(k, None)
-        logger.debug(f"[Web] 淘汰 {len(oldest)} 个非活跃会话缓存")
+        logger.info(f"[Web] 淘汰 {len(oldest)} 个非活跃会话缓存，当前缓存数: {len(_SESSION_ACCESS)}")
 
 def _ws_key(username: str, workspace: str | None) -> str:
     return f"{username}:{workspace or 'default'}"
@@ -456,7 +468,11 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
                 messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 
-            disp = WebDisplay(queue, loop)
+            disp = WebDisplay(queue, loop, session_id=comp_key)
+            # 注册 display 到全局 registry，供 workflow 等工具使用
+            from ...tools import _registry
+            _registry.register_display(disp)
+            
             if comp.get("team_mgr"):
                 comp["team_mgr"].set_display(disp)
             plan_mode = _SESSION_PLAN_MODE.get(session_key, False)

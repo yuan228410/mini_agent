@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from .state import LoopState
 from ..utils import now_ts
+from ..logger import logger
 
 class ErrorHandler:
     """统一错误处理器
@@ -120,16 +121,15 @@ class ErrorHandler:
         }
     
     def _handle_unknown_error(
-        self, 
-        error: Exception, 
+        self,
+        error: Exception,
         state: LoopState
     ) -> dict[str, Any] | None:
         """处理未知异常"""
-        from ..logger import logger
         from datetime import datetime, timezone, timedelta
-        
+
         _ts = now_ts()
-        
+
         logger.error(f"[ErrorHandler] 未处理异常: {error}", exc_info=True)
         
         return {

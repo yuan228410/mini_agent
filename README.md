@@ -29,7 +29,7 @@ uv run mini-ai --web
 | 🔀 **多模型切换** | OpenAI / Anthropic 双协议，运行时 `/model` 一键切换，立即生效 | [架构设计](docs/architecture.md) |
 | ⚙️ **工具系统** | 25+ 内置工具，ToolRegistry 统一注册/分发，并行执行和结果截断 | [工具系统](docs/tools.md) |
 | 🧠 **记忆系统** | 四层存储：对话历史 → 情景 → 长期 → 画像，自动压缩归档不丢失 | [记忆系统](docs/memory-system.md) |
-| 🤝 **多 Agent 协作** | 5 种子代理 + 队友 + DAG 工作流，支持动态注册和链式传递 | [多 Agent 编排](docs/team-collaboration.md) |
+| 🤝 **多 Agent 协作** | 5 种子代理 + 队友 + DAG 工作流，支持动态注册和链式传递，Web 实时可视化 | [多 Agent 编排](docs/team-collaboration.md) |
 | 🌐 **MCP 协议** | stdio/streamable_http 连接 MCP 服务器，工具自动注册 | [架构设计](docs/architecture.md) |
 | 📋 **计划模式** | `/plan` 规划，`/act` 执行，支持审批配置 | [CLI 命令](docs/cli-commands.md) |
 | 🖥️ **双模式** | CLI（Rich）和 Web（FastAPI + Vue 3）同一套后端 | [Web 界面](docs/web-interface.md) |

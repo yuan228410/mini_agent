@@ -146,13 +146,12 @@ def _has_recent_tool_error(messages: list[dict]) -> bool:
 
 def _force_summary(messages: list[dict], ctx, display, bus, state: LoopState) -> tuple[dict | None, bool]:
     """强制生成总结
-    
+
     在达到 max_turns 或连续错误过多时调用，
     尝试让 LLM 生成一个总结性回复。
     """
     from ..llm import chat as llm_chat
-    from ..logger import logger
-    
+
     # 记录最近的工具调用摘要（用于排查循环失控）
     tool_calls_summary = []
     for m in messages[-20:]:
@@ -256,13 +255,12 @@ def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abo
         abort_event: 中断事件
         tool_names: 工具白名单（None 表示全部工具）
         context_length: 上下文长度限制（默认 128k）
-    
+
     Returns:
         最终响应文本
     """
     from ..tools import get_definitions
-    from ..logger import logger
-    
+
     try:
         if tool_names:
             # 根据工具名过滤

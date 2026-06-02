@@ -2,8 +2,10 @@
 import json
 import threading
 from datetime import datetime
-from ..utils import _UTC8
 from pathlib import Path
+
+from ..logger import logger
+from ..utils import _UTC8
 
 try:
     import fcntl
@@ -32,7 +34,6 @@ def _read_locked(filepath: Path) -> str:
             try:
                 return filepath.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as e:
-                from .logger import logger
                 logger.warning(f"[MemoryStore] 读取 {filepath} 失败: {e}")
                 return ""
             finally:
@@ -214,7 +215,6 @@ class MemoryStore:
         with _exclusive_lock(p):
             existing = p.read_text(encoding="utf-8") if p.exists() else f"# {p.stem}\n"
             p.write_text(existing.rstrip() + "\n\n" + content.strip() + "\n", encoding="utf-8")
-        from .logger import logger
         logger.debug(f"[MemoryStore] append_today: {len(content)} 字 -> {p.name}")
 
     # ── 长期层 ──
@@ -239,7 +239,6 @@ class MemoryStore:
                 except OSError:
                     pass
             self.memory_file.write_text(content.strip() + "\n", encoding="utf-8")
-        from .logger import logger
         logger.info(f"[MemoryStore] write_memory: {len(content)} 字 -> {self.memory_file.name}")
 
     def write_memory_at(self, content: str, level: str) -> None:
@@ -249,7 +248,6 @@ class MemoryStore:
             return
         d.mkdir(parents=True, exist_ok=True)
         _write_locked(d / "MEMORY.md", content.strip() + "\n")
-        from .logger import logger
         logger.info(f"[MemoryStore] write_memory_at: {len(content)} 字, level={level}")
 
     # ── 用户画像 ──
@@ -271,7 +269,6 @@ class MemoryStore:
                 except OSError:
                     pass
             self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
-        from .logger import logger
         logger.info(f"[MemoryStore] write_user: {len(content)} 字 -> {self.user_file.name}")
 
     def write_user_at(self, content: str, level: str) -> None:
@@ -281,5 +278,4 @@ class MemoryStore:
             return
         d.mkdir(parents=True, exist_ok=True)
         _write_locked(d / "USER.md", content.strip() + "\n")
-        from .logger import logger
         logger.info(f"[MemoryStore] write_user_at: {len(content)} 字, level={level}")

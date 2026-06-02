@@ -208,7 +208,9 @@ def chat(messages, tools=True, ctx=None):
         try:
             ensure_session_anthropic(ctx)
             sess = get_session(ctx)
-            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
+            connect_timeout = TIMEOUTS.get("llm_connect", 30)
+            read_timeout = TIMEOUTS.get("llm", 120)
+            response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
             if response.status_code >= 400:
                 err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
                 if attempt < max_retries:
@@ -220,12 +222,15 @@ def chat(messages, tools=True, ctx=None):
                 return None
             break
         except requests.RequestException as e:
+            error_msg = str(e)
+            if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
             if attempt < max_retries:
                 delay = retry_delay * (attempt + 1)
-                logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
+                logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")
                 time.sleep(delay)
             else:
-                logger.error(f"[Anth✗] 请求异常(已重试{max_retries}次): {e}")
+                logger.error(f"[Anth✗] 请求异常(已重试{max_retries}次): {error_msg}")
                 return None
 
     try:
@@ -303,17 +308,23 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         try:
             ensure_session_anthropic(ctx)
             sess = get_session(ctx)
-            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+            # 流式请求：timeout=(连接超时, 读取超时)
+            connect_timeout = TIMEOUTS.get("llm_connect", 30)
+            read_timeout = TIMEOUTS.get("llm", 120)
+            response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout), stream=True)
             response.raise_for_status()
             break
         except requests.RequestException as e:
+            error_msg = str(e)
+            if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
             if attempt < max_retries:
                 delay = retry_delay * (attempt + 1)
-                logger.warning(f"[Anth↻] 流式重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
+                logger.warning(f"[Anth↻] 流式重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")
                 time.sleep(delay)
             else:
-                logger.error(f"[Anth✗] 流式请求异常(已重试{max_retries}次): {e}")
-                yield {"type": "error", "error": str(e)}
+                logger.error(f"[Anth✗] 流式请求异常(已重试{max_retries}次): {error_msg}")
+                yield {"type": "error", "error": error_msg}
                 return
 
     get_usage()["_prev_completion"] = get_usage()["completion_tokens"]
@@ -321,82 +332,99 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     current_block = None
     input_tokens = output_tokens = 0
 
+    # 使用 iter_content 替代 iter_lines，支持读取超时
+    buffer = ""
     response.encoding = "utf-8"
-    for line in response.iter_lines(decode_unicode=True):
-        if not line:
-            continue
+    try:
+        for chunk in response.iter_content(chunk_size=None, decode_unicode=True):
+            if not chunk:
+                continue
+            buffer += chunk
+            
+            # 按行处理
+            while "\n" in buffer:
+                line, buffer = buffer.split("\n", 1)
+                line = line.strip()
+                if not line:
+                    continue
+                
+                event_type = None
+                data_str = None
+                if line.startswith("event: "):
+                    event_type = line[7:]
+                    continue
+                if line.startswith("data: "):
+                    data_str = line[6:]
 
-        event_type = None
-        data_str = None
-        if line.startswith("event: "):
-            event_type = line[7:]
-            continue
-        if line.startswith("data: "):
-            data_str = line[6:]
+                if not data_str:
+                    continue
+                try:
+                    data = json.loads(data_str)
+                except (ValueError, json.JSONDecodeError):
+                    continue
 
-        if not data_str:
-            continue
-        try:
-            data = json.loads(data_str)
-        except (ValueError, json.JSONDecodeError):
-            continue
+                evt_type = event_type or data.get("type")
+                if evt_type == "content_block_start":
+                    cb = data.get("content_block", {})
+                    current_block = {"type": cb["type"], "index": data.get("index", 0)}
+                    if cb["type"] == "text":
+                        current_block["text"] = ""
+                    elif cb["type"] == "thinking":
+                        current_block["thinking"] = ""
+                        yield {"type": "thinking_start"}
+                    elif cb["type"] == "tool_use":
+                        current_block["id"] = cb.get("id", "")
+                        current_block["name"] = cb.get("name", "")
+                        current_block["input"] = {}
+                        current_block["input_json"] = ""
 
-        evt_type = event_type or data.get("type")
-        if evt_type == "content_block_start":
-            cb = data.get("content_block", {})
-            current_block = {"type": cb["type"], "index": data.get("index", 0)}
-            if cb["type"] == "text":
-                current_block["text"] = ""
-            elif cb["type"] == "thinking":
-                current_block["thinking"] = ""
-                yield {"type": "thinking_start"}
-            elif cb["type"] == "tool_use":
-                current_block["id"] = cb.get("id", "")
-                current_block["name"] = cb.get("name", "")
-                current_block["input"] = {}
-                current_block["input_json"] = ""
+                elif evt_type == "content_block_delta":
+                    delta = data.get("delta", {})
+                    dtype = delta.get("type", "")
+                    if not current_block:
+                        current_block = {"type": "text", "index": 0, "text": ""}
+                    if dtype == "thinking_delta":
+                        chunk_text = delta.get("thinking", "")
+                        if "thinking" not in current_block:
+                            current_block["thinking"] = ""
+                        current_block["thinking"] += chunk_text
+                        yield {"type": "thinking", "content": chunk_text}
+                    elif dtype == "text_delta":
+                        text = delta.get("text", "")
+                        if "text" not in current_block:
+                            current_block["text"] = ""
+                        current_block["text"] += text
+                        yield {"type": "text", "content": text}
+                    elif dtype == "input_json_delta":
+                        if "input_json" not in current_block:
+                            current_block["input_json"] = ""
+                        current_block["input_json"] += delta.get("partial_json", "")
 
-        elif evt_type == "content_block_delta":
-            delta = data.get("delta", {})
-            dtype = delta.get("type", "")
-            if not current_block:
-                current_block = {"type": "text", "index": 0, "text": ""}
-            if dtype == "thinking_delta":
-                chunk_text = delta.get("thinking", "")
-                if "thinking" not in current_block:
-                    current_block["thinking"] = ""
-                current_block["thinking"] += chunk_text
-                yield {"type": "thinking", "content": chunk_text}
-            elif dtype == "text_delta":
-                text = delta.get("text", "")
-                if "text" not in current_block:
-                    current_block["text"] = ""
-                current_block["text"] += text
-                yield {"type": "text", "content": text}
-            elif dtype == "input_json_delta":
-                if "input_json" not in current_block:
-                    current_block["input_json"] = ""
-                current_block["input_json"] += delta.get("partial_json", "")
+                elif evt_type == "content_block_stop":
+                    if current_block:
+                        if current_block.get("type") == "thinking":
+                            yield {"type": "thinking_end"}
+                        if current_block.get("type") == "tool_use" and current_block.get("input_json"):
+                            try:
+                                current_block["input"] = json.loads(current_block["input_json"])
+                            except (ValueError, json.JSONDecodeError):
+                                pass
+                        blocks.append(current_block)
+                        current_block = None
 
-        elif evt_type == "content_block_stop":
-            if current_block:
-                if current_block.get("type") == "thinking":
-                    yield {"type": "thinking_end"}
-                if current_block.get("type") == "tool_use" and current_block.get("input_json"):
-                    try:
-                        current_block["input"] = json.loads(current_block["input_json"])
-                    except (ValueError, json.JSONDecodeError):
-                        pass
-                blocks.append(current_block)
-                current_block = None
+                elif evt_type == "message_delta":
+                    usage = data.get("usage") or {}
+                    output_tokens = usage.get("output_tokens", 0)
 
-        elif evt_type == "message_delta":
-            usage = data.get("usage") or {}
-            output_tokens = usage.get("output_tokens", 0)
-
-        elif evt_type == "message_start":
-            usage = data.get("message", {}).get("usage") or {}
-            input_tokens = usage.get("input_tokens", 0)
+                elif evt_type == "message_start":
+                    usage = data.get("message", {}).get("usage") or {}
+                    input_tokens = usage.get("input_tokens", 0)
+                    
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+        error_msg = f"读取响应流超时: {e}"
+        logger.error(f"[Anth✗] {error_msg}")
+        yield {"type": "error", "error": error_msg}
+        return
 
     us = get_usage()
     prev_comp = us.get("_prev_completion", 0)

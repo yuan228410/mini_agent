@@ -16,5 +16,6 @@ uv.lock
 # Web frontend
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
 .claude/
 src/mini_ai/web/static/

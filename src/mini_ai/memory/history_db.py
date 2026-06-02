@@ -49,6 +49,7 @@ class HistoryDB:
         self.workspace = workspace
         self._lock = threading.Lock()
         self._fts_available = True
+        self._closed = False
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._init_schema()
@@ -84,6 +85,14 @@ class HistoryDB:
         return self._fts_available
 
     def _ensure_conn(self):
+        """确保连接可用，已关闭则重新创建"""
+        if self._closed:
+            self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._init_schema()
+            self._closed = False
+            logger.debug(f"[HistoryDB] 重新建立连接: {self.db_path}")
+            return
         try:
             self._conn.execute("SELECT 1")
         except Exception:
@@ -406,8 +415,26 @@ class HistoryDB:
         return results
 
     def close(self):
-        try:
-            self._conn.close()
-            logger.debug(f"[HistoryDB] 已关闭: {self.db_path}")
-        except Exception:
-            pass
+        """关闭数据库连接"""
+        if self._closed:
+            return
+        with self._lock:
+            try:
+                self._conn.close()
+                self._closed = True
+                logger.debug(f"[HistoryDB] 已关闭: {self.db_path}")
+            except Exception as e:
+                logger.warning(f"[HistoryDB] 关闭失败: {e}")
+    
+    def is_closed(self) -> bool:
+        """检查连接是否已关闭"""
+        return self._closed
+    
+    def __enter__(self):
+        """上下文管理器入口"""
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出，自动关闭连接"""
+        self.close()
+        return False

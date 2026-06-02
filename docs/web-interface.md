@@ -95,6 +95,7 @@ cd web && pnpm dev                     # Vite dev server，自动代理 /api →
 - **多模态消息历史** — 历史消息中的图片可正确加载显示，支持 OpenAI 多模态格式
 - **图片上传** — 输入框支持上传图片（最多 10MB），支持 PNG/JPEG/GIF/WebP 格式，大图自动压缩
 - **MCP 服务器管理** — 设置面板添加/删除 MCP 服务器（stdio/streamable_http），工具面板查看连接状态和工具列表
+- **工作流可视化面板** — 实时展示 DAG 工作流执行状态，支持并行任务进度追踪、耗时统计、错误展示
 
 ## 前端组件
 
@@ -117,7 +118,8 @@ web/src/
     ├── SkillPanel.vue   # 技能面板：右侧抽屉，点击技能名激活
     ├── StatusBar.vue    # 底部状态栏：等宽小字号，靠右对齐
     ├── ThemeToggle.vue  # 主题切换按钮：☀/🌙，旋转过渡动画
-    └── FileBrowserPanel.vue # 工作空间文件浏览面板
+    ├── FileBrowserPanel.vue # 工作空间文件浏览面板
+    └── WorkflowPanel.vue # 工作流可视化面板：实时展示 DAG 工作流执行状态
 ```
 
 ## 后端架构
@@ -165,6 +167,18 @@ data: {"prompt_tokens": 4120, "completion_tokens": 49}
 
 event: error
 data: {"error": "错误信息"}
+
+event: workflow_start
+data: {"tasks": [...], "total": 3}
+
+event: task_start
+data: {"id": "search", "agent": "researcher", "prompt": "搜索 RAG 技术"}
+
+event: task_end
+data: {"id": "search", "status": "done", "result_preview": "搜索结果..."}
+
+event: workflow_end
+data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 ```
 
 ### WebSocket 模式
@@ -368,4 +382,5 @@ Vite 开发模式自动代理 `/api` 请求到 `http://localhost:8765`（后端�
 
 | 日期 | 功能 |
 |------|------|
+| 2026-06-01 | 工作流可视化面板、DAG 任务实时追踪 |
 | 2026-06-01 | 滚动到底部按钮、多模态消息历史加载 |

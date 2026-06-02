@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
+import { ref, onMounted, nextTick, computed } from 'vue'
 import { initTheme, toggleTheme, type Theme } from './theme'
 import { hasUsername, getUsername, setUsername, closeWs } from './api'
 import ChatView from './components/ChatView.vue'
@@ -11,6 +11,7 @@ import SkillPanel from './components/SkillPanel.vue'
 import TeamPanel from './components/TeamPanel.vue'
 import FileBrowserPanel from './components/FileBrowserPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
+import WorkflowPanel from './components/WorkflowPanel.vue'
 
 const SIDEBAR_KEY = 'mini-ai-sidebar-open'
 const SIDEBAR_WIDTH_KEY = 'mini-ai-sidebar-width'
@@ -32,6 +33,28 @@ const sidebarCollapsed = ref(false)
 const rightPanelTab = ref<string>('files')
 const rightPanelCollapsed = ref(false)
 const rightPanelWidth = ref(300)
+
+// 用户相关
+const currentUsername = ref('')
+const needUsername = ref(false)
+const usernameInput = ref('')
+
+// 会话相关
+const sessionId = ref('')
+const planMode = ref(false)
+const todosContent = ref('')
+const activeWorkspace = ref('')
+
+// 组件引用
+const chatViewRef = ref<InstanceType<typeof ChatView>>()
+const sidebarRef = ref<InstanceType<typeof SessionSidebar>>()
+
+// 当前会话的工作流状态
+const currentWorkflowState = computed(() => {
+  const state = chatViewRef.value?.getCurrentWorkflowState()
+  console.log('[App] currentWorkflowState computed:', state)
+  return state
+})
 
 function startSidebarResize(e: MouseEvent) {
   const startX = e.clientX
@@ -78,16 +101,7 @@ function startRightPanelResize(e: MouseEvent) {
   document.addEventListener('mousemove', onMove)
   document.addEventListener('mouseup', onUp)
 }
-const activeWorkspace = ref('')
-const chatViewRef = ref<InstanceType<typeof ChatView>>()
-const sidebarRef = ref<InstanceType<typeof SessionSidebar>>()
-const needUsername = ref(false)
-const usernameInput = ref('')
-const currentUsername = ref('')
-const sessionId = ref('')
-const planMode = ref(false)
-const todosContent = ref('')
-const todosCollapsed = ref(false)
+
 
 onMounted(async () => {
   theme.value = initTheme()
@@ -119,9 +133,7 @@ function onPlanModeChange(mode: boolean) {
   planMode.value = mode
 }
 
-function onTodosUpdate(content: string) {
-  todosContent.value = content
-}
+
 
 function renderTodos() {
   if (!todosContent.value) return ''
@@ -179,12 +191,16 @@ function submitUsername() {
 }
 
 function logout() {
-  setUsername('')
+  localStorage.removeItem('mini-ai-username')
+  closeWs()
   currentUsername.value = ''
   needUsername.value = true
-  closeWs()
-  sessionId.value = ''
 }
+
+function onTodosUpdate(content: string) {
+  todosContent.value = content
+}
+
 </script>
 
 <template>
@@ -277,10 +293,11 @@ function logout() {
       <div class="right-panel" :class="{ 'rp-collapsed': rightPanelCollapsed }" :style="rightPanelCollapsed ? {} : { width: rightPanelWidth + 'px' }">
         <div class="rp-tabs">
           <button class="rp-tab" :class="{ active: rightPanelTab === 'todos' }" @click="rightPanelTab = rightPanelTab === 'todos' ? '' : 'todos'" v-if="todosContent">📋</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'">👥</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'">🔧</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'">📄</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'">⚙</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'workflow' }" @click="rightPanelTab = rightPanelTab === 'workflow' ? '' : 'workflow'" title="工作流">🔀</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'" title="协作">👥</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'" title="工具">🔧</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'" title="文件">📄</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'" title="设置">⚙</button>
           <button class="rp-tab rp-collapse" @click="rightPanelCollapsed = !rightPanelCollapsed">{{ rightPanelCollapsed ? '◂' : '▸' }}</button>
         </div>
         <div class="rp-body" v-show="!rightPanelCollapsed">
@@ -288,6 +305,10 @@ function logout() {
             <div class="rp-title">📋 任务计划</div>
             <div class="rp-todos" v-html="renderTodos()"></div>
           </div>
+          <div v-if="rightPanelTab === 'workflow'" class="rp-content">
+            <WorkflowPanel embedded :session-workflow-state="currentWorkflowState" />
+          </div>
+
           <div v-if="rightPanelTab === 'team'" class="rp-content">
             <TeamPanel :username="currentUsername" :workspace="activeWorkspace" embedded />
           </div>

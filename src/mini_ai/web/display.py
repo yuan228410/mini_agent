@@ -3,9 +3,10 @@ import asyncio
 import time
 
 class WebDisplay:
-    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = ""):
         self.queue = queue
         self.loop = loop
+        self.session_id = session_id  # 会话ID，用于前端路由工作流事件
         self._teammate = ""
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
@@ -26,6 +27,9 @@ class WebDisplay:
         usage = get_usage()
         if data is None:
             data = {}
+        # 自动注入 session_id（用于前端路由工作流事件到对应会话）
+        if self.session_id:
+            data["session_id"] = self.session_id
         data["prompt_tokens"] = usage["prompt_tokens"]
         data["completion_tokens"] = usage["completion_tokens"]
         self.loop.call_soon_threadsafe(

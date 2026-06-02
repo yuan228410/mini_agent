@@ -432,6 +432,22 @@ tasks:
 → workflow_status() → 返回每个节点的状态和结果摘要
 ```
 
+### Web 可视化面板
+
+Web 界面自动展示工作流执行状态：
+
+- **实时进度** — 任务列表显示 pending/running/done/failed 状态，带动画效果
+- **并行任务** — 同时运行的任务并排显示，进度独立追踪
+- **耗时统计** — 每个任务显示执行时长，工作流整体耗时
+- **错误展示** — 失败任务显示错误摘要，点击查看详情
+- **结果预览** — 完成任务显示结果摘要（前 100 字符）
+
+前端组件：`WorkflowPanel.vue`，通过 WebSocket 事件实时更新：
+- `workflow_start` — 初始化工作流状态
+- `task_start` — 标记任务为 running
+- `task_end` — 标记任务为 done/failed，记录结果
+- `workflow_end` — 工作流完成，显示统计信息
+
 ---
 
 ## 选型指南

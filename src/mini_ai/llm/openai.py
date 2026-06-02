@@ -93,7 +93,9 @@ def chat(messages, tools=True, ctx=None):
     response = None
     for attempt in range(max_retries + 1):
         try:
-            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"])
+            connect_timeout = TIMEOUTS.get("llm_connect", 30)
+            read_timeout = TIMEOUTS.get("llm", 120)
+            response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
             if response.status_code >= 400:
                 err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
                 if attempt < max_retries:
@@ -185,17 +187,22 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     response = None
     for attempt in range(max_retries + 1):
         try:
-            response = sess.post(get_api_url(ctx), json=payload, timeout=TIMEOUTS["llm"], stream=True)
+            connect_timeout = TIMEOUTS.get("llm_connect", 30)
+            read_timeout = TIMEOUTS.get("llm", 120)
+            response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout), stream=True)
             response.raise_for_status()
             break
         except requests.RequestException as e:
+            error_msg = str(e)
+            if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
             if attempt < max_retries:
                 delay = retry_delay * (attempt + 1)
-                logger.warning(f"[LLM↻] 流式重试 {attempt+1}/{max_retries}: {e}，{delay}s 后重试")
+                logger.warning(f"[LLM↻] 流式重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")
                 time.sleep(delay)
             else:
-                logger.error(f"[LLM✗] 流式请求异常(已重试{max_retries}次): {e}")
-                yield {"type": "error", "error": str(e)}
+                logger.error(f"[LLM✗] 流式请求异常(已重试{max_retries}次): {error_msg}")
+                yield {"type": "error", "error": error_msg}
                 return
 
     get_usage()["_prev_completion"] = get_usage()["completion_tokens"]

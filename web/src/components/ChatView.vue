@@ -20,6 +20,7 @@ interface Message {
   timestamp?: string
   teammate?: string
   teammateColor?: string
+  workflow?: { status: string; tasks: Record<string, { status: string; agent: string; prompt?: string; result?: string }> }
 }
 
 interface SessionState {
@@ -30,6 +31,25 @@ interface SessionState {
   draftText: string
   // 多 Agent 并行：每个队友独立的缓冲区
   _teammateBuffers: Map<string, { content: string; thinking: string }>
+  // 会话级别工作流状态
+  workflowState?: WorkflowState
+}
+
+// 工作流状态定义
+interface WorkflowState {
+  status: 'idle' | 'running' | 'done' | 'failed'
+  tasks: Record<string, {
+    id: string
+    agent: string
+    status: 'pending' | 'running' | 'done' | 'failed'
+    prompt?: string
+    result?: string
+    depends_on?: string[]
+  }>
+  elapsed?: number
+  completed?: number
+  failed?: number
+  total?: number
 }
 
 const SESSION_KEY = 'mini-ai-session-id'
@@ -49,6 +69,8 @@ const isStreaming = ref(false)
 const planMode = ref(false)
 const todosContent = ref('')
 const draftText = ref('')
+// 响应式的工作流状态（用于触发 Vue 更新）
+const workflowStateRef = ref<WorkflowState | undefined>()
 const teammateColorMap: Record<string, string> = {
   researcher: '#4a9eff',
   coder: '#e8922d',
@@ -89,13 +111,14 @@ const STREAMING_TIMEOUT = 120_000  // 2 min — 若 isStreaming 期间无任何 
 function _state(sid: string): SessionState {
   const key = _cacheKey(sid, props.workspace)
   if (!_states.has(key)) {
-    _states.set(key, { 
-      messages: [], 
-      isStreaming: false, 
-      _currentContent: '', 
-      _currentThinking: '', 
+    _states.set(key, {
+      messages: [],
+      isStreaming: false,
+      _currentContent: '',
+      _currentThinking: '',
       draftText: '',
-      _teammateBuffers: new Map()
+      _teammateBuffers: new Map(),
+      workflowState: { status: 'idle', tasks: {} }
     })
   }
   return _states.get(key)!
@@ -133,6 +156,8 @@ function _load(sid: string) {
     }
     
     draftText.value = s.draftText
+    // 同步工作流状态
+    workflowStateRef.value = s.workflowState ? { ...s.workflowState, tasks: { ...s.workflowState.tasks } } : undefined
   }
 }
 
@@ -442,7 +467,11 @@ function _startNewAssistantMsg(s: SessionState) {
 function _updateUI(s: SessionState) {
   const key = _cacheKey(activeSessionId.value, props.workspace)
   const activeS = _states.get(key)
-  if (s === activeS) messages.value = [...s.messages]
+  if (s === activeS) {
+    messages.value = [...s.messages]
+    // 同步工作流状态到响应式 ref
+    workflowStateRef.value = s.workflowState ? { ...s.workflowState, tasks: { ...s.workflowState.tasks } } : undefined
+  }
 }
 
 function _processEvent(s: SessionState, event: WsEvent) {
@@ -674,6 +703,175 @@ function _processEvent(s: SessionState, event: WsEvent) {
     case 'error':
       s._currentContent += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
       break
+    // ── 新增：工作流事件 ──
+    case 'workflow_start':
+      {
+        const tasks = event.data.tasks || []
+        const total = event.data.total || tasks.length
+
+        // 更新会话级别工作流状态
+        if (!s.workflowState) {
+          s.workflowState = { status: 'running', tasks: {}, total }
+        } else {
+          s.workflowState.status = 'running'
+          s.workflowState.total = total
+        }
+        tasks.forEach((t: any) => {
+          s.workflowState!.tasks[t.id] = {
+            id: t.id,
+            agent: t.agent,
+            status: 'pending',
+            prompt: t.prompt,
+            depends_on: t.depends_on || []
+          }
+        })
+        console.log('[ChatView] workflow_start: workflowState updated:', s.workflowState)
+
+        let content = `🔀 **工作流启动** (${total} 个任务)\n\n`
+        tasks.forEach((t: any) => {
+          const deps = t.depends_on && t.depends_on.length > 0 ? ` ← ${t.depends_on.join(', ')}` : ''
+          content += `- **${t.id}** (${t.agent})${deps}\n`
+        })
+        s.messages.push({
+          role: 'assistant',
+          content,
+          timestamp: _localTs(),
+          streaming: false,
+          workflow: { status: 'running', tasks: {} }
+        })
+        _updateUI(s)
+        // 通知 WorkflowPanel
+        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'workflow_start', data: event.data } }))
+      }
+      break
+    case 'task_start':
+      {
+        const taskId = event.data.id || ''
+        const agent = event.data.agent || ''
+        const prompt = event.data.prompt || ''
+
+        // 更新会话级别工作流状态
+        if (s.workflowState) {
+          if (!s.workflowState.tasks[taskId]) {
+            s.workflowState.tasks[taskId] = { id: taskId, agent, status: 'running', prompt }
+          } else {
+            s.workflowState.tasks[taskId].status = 'running'
+          }
+        }
+
+        // 更新工作流消息
+        const wfMsg = s.messages.slice().reverse().find(m => m.workflow)
+        if (wfMsg && wfMsg.workflow) {
+          wfMsg.workflow.tasks[taskId] = { status: 'running', agent }
+          const runningCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'running').length
+          const doneCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'done').length
+          wfMsg.workflow.status = runningCount > 0 ? 'running' : 'idle'
+          _updateUI(s)
+        }
+        // 添加任务开始通知
+        s.messages.push({
+          role: 'assistant',
+          content: `▶ **${taskId}** (${agent}) 开始执行`,
+          timestamp: _localTs(),
+          streaming: false,
+          teammate: `wf:${taskId}`,
+          teammateColor: _tmColor(taskId)
+        })
+        _updateUI(s)
+        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'task_start', data: event.data } }))
+      }
+      break
+    case 'task_end':
+      {
+        const taskId = event.data.id || ''
+        const status = event.data.status || 'done'
+        const result = event.data.result_preview || event.data.error || ''
+
+        // 更新会话级别工作流状态
+        if (s.workflowState && s.workflowState.tasks[taskId]) {
+          s.workflowState.tasks[taskId].status = status === 'done' ? 'done' : 'failed'
+          s.workflowState.tasks[taskId].result = result
+        }
+
+        // 更新工作流消息
+        const wfMsg = s.messages.slice().reverse().find(m => m.workflow)
+        if (wfMsg && wfMsg.workflow) {
+          wfMsg.workflow.tasks[taskId] = {
+            status,
+            agent: wfMsg.workflow.tasks[taskId]?.agent || '',
+            result: result.slice(0, 100)
+          }
+          const runningCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'running').length
+          const doneCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'done').length
+          const failedCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'failed').length
+          wfMsg.workflow.status = runningCount > 0 ? 'running' : (failedCount > 0 ? 'failed' : 'done')
+          _updateUI(s)
+        }
+        // 添加任务完成通知
+        const icon = status === 'done' ? '✅' : '❌'
+        s.messages.push({
+          role: 'assistant',
+          content: `${icon} **${taskId}** ${status === 'done' ? '完成' : '失败'}${result ? `: ${result.slice(0, 100)}${result.length > 100 ? '...' : ''}` : ''}`,
+          timestamp: _localTs(),
+          streaming: false,
+          teammate: `wf:${taskId}`,
+          teammateColor: _tmColor(taskId)
+        })
+        _updateUI(s)
+        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'task_end', data: event.data } }))
+      }
+      break
+    case 'workflow_end':
+      {
+        const elapsed = event.data.elapsed || 0
+        const completed = event.data.completed || 0
+        const failed = event.data.failed || 0
+        const total = event.data.total || 0
+
+        // 更新会话级别工作流状态
+        if (s.workflowState) {
+          s.workflowState.status = failed > 0 ? 'failed' : 'done'
+          s.workflowState.elapsed = elapsed
+          s.workflowState.completed = completed
+          s.workflowState.failed = failed
+        }
+
+        // 更新工作流消息
+        const wfMsg = s.messages.slice().reverse().find(m => m.workflow)
+        if (wfMsg && wfMsg.workflow) {
+          wfMsg.workflow.status = failed > 0 ? 'failed' : 'done'
+          _updateUI(s)
+        }
+        // 添加工作流完成通知
+        s.messages.push({
+          role: 'assistant',
+          content: `🏁 **工作流完成**\n\n- 耗时: ${elapsed}s\n- 成功: ${completed}/${total}\n${failed > 0 ? `- 失败: ${failed}` : ''}`,
+          timestamp: _localTs(),
+          streaming: false
+        })
+        _updateUI(s)
+        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'workflow_end', data: event.data } }))
+      }
+      break
+    // ── 新增：Agent 启动事件 ──
+    case 'agent_start':
+      {
+        const agentType = event.data.agent_type || ''
+        const role = event.data.role || ''
+        const task = event.data.task || ''
+        const icon = agentType.startsWith('sub:') ? '📦' : '🤖'
+        const label = agentType.startsWith('sub:') ? agentType.slice(4) : agentType
+        s.messages.push({
+          role: 'assistant',
+          content: `${icon} **${label}** 已启动${role ? ` (${role})` : ''}\n\n任务: ${task}`,
+          timestamp: _localTs(),
+          streaming: false,
+          teammate: agentType,
+          teammateColor: _tmColor(agentType)
+        })
+        _updateUI(s)
+      }
+      break
   }
 }
 
@@ -846,7 +1044,13 @@ async function switchToSession(sid: string, ws?: string) {
   await fetchConfig()
 }
 
-defineExpose({ useSkill, switchToSession, activeSessionId, planMode })
+defineExpose({ useSkill, switchToSession, activeSessionId, planMode, getCurrentWorkflowState })
+
+// 获取当前会话的工作流状态
+function getCurrentWorkflowState(): WorkflowState | undefined {
+  console.log('[ChatView] getCurrentWorkflowState called, state:', workflowStateRef.value)
+  return workflowStateRef.value
+}
 </script>
 
 <template>

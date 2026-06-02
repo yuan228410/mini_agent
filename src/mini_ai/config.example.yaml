@@ -59,6 +59,7 @@ streaming: true
 # ── 超时配置 ──────────────────────────────────────────────────
 timeouts:
   llm: 120              # LLM 单次请求超时（秒），默认 120，建议 120
+  llm_connect: 30       # LLM 连接超时（秒），默认 30，建议 30
   llm_retries: 3        # LLM 请求失败重试次数，默认 3
   llm_retry_delay: 2    # 重试间隔（秒），默认 2
   teammate_recv: 5      # 队友消息接收超时（秒），默认 5

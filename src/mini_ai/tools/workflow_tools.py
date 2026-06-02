@@ -95,10 +95,18 @@ def _run_exec(args: dict) -> str:
     _last_graphs[threading.current_thread().ident] = graph
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
+    # 获取 display 用于推送事件
+    display = None
+    try:
+        from ..tools import _registry
+        display = _registry._display
+    except (ImportError, AttributeError):
+        pass
+
     orch = Orchestrator(
         graph, _blackboard,
         context_length=MODEL_CONFIG.get("context_length", 256000),
-        bus=_bus, manager=_manager,
+        bus=_bus, manager=_manager, display=display,
     )
     result = orch.run()
     return result
