@@ -140,12 +140,13 @@ def _merge_sections(texts: list[str]) -> str:
     return "\n\n".join(parts)
 
 class MemoryStore:
-    """记忆存储（情景层 + 长期层 + 用户画像）。
+    """记忆存储（情景层 + 长期层 + 身份定义 + 行为规范）。
 
     支持三层级合并读取：global → user → workspace
     - 情景层: YYYY-MM-DD.md — 每日情景记忆短文（per-session）
     - 长期层: MEMORY.md — 常驻上下文的长期记忆（三层级合并）
-    - 用户画像: USER.md（三层级合并）
+    - 身份定义: SOUL.md — AI 角色定位和行为风格（三层级合并）
+    - 行为规范: RULES.md — 工作流程和协作策略（三层级合并）
     """
 
     def __init__(self, memory_dir: Path, episode_dir: Path | None = None,
@@ -153,7 +154,6 @@ class MemoryStore:
                  workspace_memory_dir: Path | None = None):
         self.memory_dir = Path(memory_dir)
         self.memory_file = self.memory_dir / "MEMORY.md"
-        self.user_file = self.memory_dir / "USER.md"
         self._episode_dir = Path(episode_dir) if episode_dir else self.memory_dir
         self._global_dir = Path(global_memory_dir) if global_memory_dir else None
         self._workspace_dir = Path(workspace_memory_dir) if workspace_memory_dir else None
@@ -162,28 +162,17 @@ class MemoryStore:
     def _ensure(self):
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self._episode_dir.mkdir(parents=True, exist_ok=True)
-        for f, default in [
-            (self.memory_file, "# 长期记忆\n\n"),
-            (self.user_file, "# 用户画像\n\n"),
-        ]:
-            if not f.exists():
-                _write_locked(f, default)
+        # 只创建 MEMORY.md 默认文件
+        if not self.memory_file.exists():
+            _write_locked(self.memory_file, "# 长期记忆\n\n")
         if self._global_dir:
             self._global_dir.mkdir(parents=True, exist_ok=True)
-            for f, default in [
-                (self._global_dir / "MEMORY.md", "# 长期记忆\n\n"),
-                (self._global_dir / "USER.md", "# 用户画像\n\n"),
-            ]:
-                if not f.exists():
-                    _write_locked(f, default)
+            if not (self._global_dir / "MEMORY.md").exists():
+                _write_locked(self._global_dir / "MEMORY.md", "# 长期记忆\n\n")
         if self._workspace_dir:
             self._workspace_dir.mkdir(parents=True, exist_ok=True)
-            for f, default in [
-                (self._workspace_dir / "MEMORY.md", "# 长期记忆\n\n"),
-                (self._workspace_dir / "USER.md", "# 用户画像\n\n"),
-            ]:
-                if not f.exists():
-                    _write_locked(f, default)
+            if not (self._workspace_dir / "MEMORY.md").exists():
+                _write_locked(self._workspace_dir / "MEMORY.md", "# 长期记忆\n\n")
 
     def _tier_paths(self) -> list[Path]:
         paths = []
@@ -250,32 +239,32 @@ class MemoryStore:
         _write_locked(d / "MEMORY.md", content.strip() + "\n")
         logger.info(f"[MemoryStore] write_memory_at: {len(content)} 字, level={level}")
 
-    # ── 用户画像 ──
-    def read_user(self) -> str:
-        texts = [self._read_file(p / "USER.md") for p in self._tier_paths()]
-        merged = _merge_sections(texts)
-        return merged
+    # ── 身份定义（SOUL.md）──
+    def read_soul(self) -> str:
+        """读取身份定义（三层级合并）"""
+        texts = []
+        for p in self._tier_paths():
+            soul_file = p / "SOUL.md"
+            if soul_file.exists():
+                texts.append(self._read_file(soul_file))
+        return _merge_sections(texts)
 
-    def has_user(self) -> bool:
-        content = self.read_user().strip()
-        return bool(content and content != "# 用户画像")
+    def has_soul(self) -> bool:
+        """检查是否有身份定义"""
+        content = self.read_soul().strip()
+        return bool(content)
 
-    def write_user(self, content: str) -> None:
-        with _exclusive_lock(self.user_file):
-            if self.user_file.exists():
-                try:
-                    import shutil
-                    shutil.copy2(self.user_file, self.user_file.with_suffix(".md.bak"))
-                except OSError:
-                    pass
-            self.user_file.write_text(content.strip() + "\n", encoding="utf-8")
-        logger.info(f"[MemoryStore] write_user: {len(content)} 字 -> {self.user_file.name}")
+    # ── 行为规范（RULES.md）──
+    def read_rules(self) -> str:
+        """读取行为规范（三层级合并）"""
+        texts = []
+        for p in self._tier_paths():
+            rules_file = p / "RULES.md"
+            if rules_file.exists():
+                texts.append(self._read_file(rules_file))
+        return _merge_sections(texts)
 
-    def write_user_at(self, content: str, level: str) -> None:
-        d = self.get_tier_dir(level)
-        if not d:
-            logger.warning(f"[MemoryStore] write_user_at: level={level} 无对应目录")
-            return
-        d.mkdir(parents=True, exist_ok=True)
-        _write_locked(d / "USER.md", content.strip() + "\n")
-        logger.info(f"[MemoryStore] write_user_at: {len(content)} 字, level={level}")
+    def has_rules(self) -> bool:
+        """检查是否有行为规范"""
+        content = self.read_rules().strip()
+        return bool(content)

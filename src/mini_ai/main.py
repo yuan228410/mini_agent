@@ -296,6 +296,12 @@ def _flush_deferred(history_db, messages, deferred_list, workspace: str, session
 
 
 def main():
+    # 🆕 启动时检查并初始化
+    from .cli.init import check_and_init
+    if not check_and_init():
+        print("❌ 初始化失败，请检查日志")
+        return 1
+    
     parser = argparse.ArgumentParser(prog="mini-ai", description="智能对话 Agent")
     parser.add_argument("-v", "--version", action="version",
                         version=f"mini-ai {__version__}")

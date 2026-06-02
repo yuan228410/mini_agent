@@ -25,11 +25,6 @@
 - 黑板 key：`角色_主题`（如 `researcher_result`）
 - 不主动创建超过 5 个队友
 
-## 视觉任务
-- 图片分析直接派遣 vision 子代理：`dispatch_subagent(type="vision", task="分析这张图片 https://...")`
-- **无需手动下载**，dispatch_subagent 自动处理 URL
-- 触发词：分析图片、识别图片、OCR、提取文字
-
 ## 记忆
 - 关键信息用 remember 保存
 - recall 检索，forget 删除
