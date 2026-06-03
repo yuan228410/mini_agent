@@ -21,27 +21,13 @@ _remember_def = {
     "type": "function",
     "function": {
         "name": "remember",
-        "description": (
-            "将重要信息主动写入长期记忆。适用于：用户偏好、关键决策、项目背景、重要发现等"
-            "需要跨对话保留的信息。记忆会持久保存，后续对话可自动参考。"
-        ),
+        "description": "写入长期记忆。适用于用户偏好、关键决策、项目背景等跨对话保留的信息。",
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {
-                    "type": "string",
-                    "description": "要记住的信息内容，简洁但具体",
-                },
-                "category": {
-                    "type": "string",
-                    "enum": ["user_preference", "project_info", "decision", "discovery", "general"],
-                    "description": "记忆分类",
-                },
-                "level": {
-                    "type": "string",
-                    "enum": ["global", "user", "workspace"],
-                    "description": "记忆写入层级：global（全局）、user（用户级，默认）、workspace（工作空间级）",
-                },
+                "content": {"type": "string", "description": "要记住的内容"},
+                "category": {"type": "string", "enum": ["user_preference", "project_info", "decision", "discovery", "general"], "description": "记忆分类"},
+                "level": {"type": "string", "enum": ["global", "user", "workspace"], "description": "层级：global/user/workspace，默认 user"},
             },
             "required": ["content"],
         },
@@ -82,17 +68,11 @@ _recall_def = {
     "type": "function",
     "function": {
         "name": "recall",
-        "description": (
-            "从长期记忆中检索信息。可按关键词过滤。"
-            "长期记忆包含用户偏好、项目背景、历史决策等跨对话持久信息。"
-        ),
+        "description": "检索长期记忆。可按关键词过滤，不传 keyword 返回全部。",
         "parameters": {
             "type": "object",
             "properties": {
-                "keyword": {
-                    "type": "string",
-                    "description": "可选关键词过滤，不填返回全部记忆",
-                },
+                "keyword": {"type": "string", "description": "关键词过滤"},
             },
         },
     },
@@ -104,17 +84,47 @@ def _recall_exec(args: dict) -> str:
     if not store:
         return "Error: 记忆系统未初始化"
     keyword = args.get("keyword", "").strip()
-    memory = store.read_memory()
-    if not memory:
-        return "长期记忆为空"
-
-    if keyword:
+    
+    if not keyword:
+        # 无关键词，返回全部记忆
+        memory = store.read_memory()
+        return memory if memory else "长期记忆为空"
+    
+    # 有关键词，逐行过滤（避免读取整个大文件）
+    tier_paths = store._tier_paths() if hasattr(store, '_tier_paths') else []
+    if not tier_paths:
+        # 降级：使用原方法
+        memory = store.read_memory()
+        if not memory:
+            return "长期记忆为空"
         lines = [l for l in memory.splitlines() if keyword.lower() in l.lower()]
         if not lines:
             return f"未找到包含 '{keyword}' 的记忆"
         return "\n".join(lines)
-
-    return memory
+    
+    # 逐层读取并过滤
+    matched_lines = []
+    seen = set()  # 去重
+    
+    for tier_dir in reversed(tier_paths):  # workspace → user → global
+        memory_file = tier_dir / "MEMORY.md"
+        if not memory_file.exists():
+            continue
+        
+        try:
+            with memory_file.open('r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.rstrip('\n')
+                    if keyword.lower() in line.lower() and line not in seen:
+                        matched_lines.append(line)
+                        seen.add(line)
+        except Exception:
+            continue
+    
+    if not matched_lines:
+        return f"未找到包含 '{keyword}' 的记忆"
+    
+    return "\n".join(matched_lines)
 
 
 # ── forget ──
@@ -123,19 +133,12 @@ _forget_def = {
     "type": "function",
     "function": {
         "name": "forget",
-        "description": "从长期记忆中删除包含指定关键词的条目。",
+        "description": "删除长期记忆中包含关键词的条目。删除不可逆。",
         "parameters": {
             "type": "object",
             "properties": {
-                "keyword": {
-                    "type": "string",
-                    "description": "要删除的记忆中包含的关键词",
-                },
-                "level": {
-                    "type": "string",
-                    "enum": ["global", "user", "workspace"],
-                    "description": "记忆删除层级：global（全局）、user（用户级，默认）、workspace（工作空间级）",
-                },
+                "keyword": {"type": "string", "description": "要删除的记忆关键词"},
+                "level": {"type": "string", "enum": ["global", "user", "workspace"], "description": "层级，默认 user"},
             },
             "required": ["keyword"],
         },

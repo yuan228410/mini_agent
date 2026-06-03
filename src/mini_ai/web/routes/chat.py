@@ -208,6 +208,7 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
     skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, user_skills_dir=user_skills_dir, workspace_skills_dir=ws_skills_dir)
 
     ctx_builder = ContextBuilder(DATA_DIR)
+    
     compactor = Compactor(
         user_store,
         keep_recent=COMPACTOR.get("keep_recent", 50),
@@ -248,6 +249,7 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
     components["blackboard"] = team_comp.get("blackboard")
     
     return components
+
 
 def _build_system_prompt(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> str:
     _t0 = time.time()
@@ -447,6 +449,11 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          session_key: str = "",
                          username: str = "",
                          workspace: str | None = None) -> tuple:
+    # 设置 session_id 到 contextvars（用于日志跟踪）
+    from ...logger import set_session_id
+    sid = session_key.split(":")[-1] if ":" in session_key else session_key
+    set_session_id(sid)
+    
     with session_lock:
         _SESSION_STATUS[session_key] = "generating"
         logger.debug(f"[Web] _run_tool_loop_sync start key={session_key} workspace={workspace}")
@@ -638,6 +645,9 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
         finally:
             _SESSION_STATUS[session_key] = "idle"
+            # 清理 session_id
+            from ...logger import set_session_id
+            set_session_id(None)
 
 # ── Session CRUD ──
 

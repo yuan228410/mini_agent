@@ -16,13 +16,13 @@ definition = {
     "type": "function",
     "function": {
         "name": "web_fetch",
-        "description": "抓取网页URL内容并提取纯文本",
+        "description": "抓取网页内容。默认返回 8000 字符，超时 20 秒。",
         "parameters": {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "要抓取的网页URL"},
-                "extract_mode": {"type": "string", "enum": ["text", "html"], "description": "text=提取纯文本, html=原始HTML"},
-                "max_chars": {"type": "integer", "description": "最大返回字符数，默认8000"}
+                "url": {"type": "string", "description": "网页URL"},
+                "extract_mode": {"type": "string", "enum": ["text", "html"], "description": "text=纯文本, html=原始HTML"},
+                "max_chars": {"type": "integer", "description": "最大字符数，默认8000"}
             },
             "required": ["url"]
         }

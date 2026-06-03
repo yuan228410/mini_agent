@@ -69,7 +69,7 @@ class ToolCache:
         self._misses = 0
     
     def _key(self, tool_name: str, args: dict) -> str:
-        """生成缓存 key
+        """生成缓存 key（优化版：快速路径 + 降级方案）
         
         Args:
             tool_name: 工具名称
@@ -78,6 +78,18 @@ class ToolCache:
         Returns:
             缓存 key
         """
+        # 快速路径：对于简单参数（只有字符串/数字/布尔值），直接拼接
+        # 避免不必要的 JSON 序列化开销
+        if args and all(isinstance(v, (str, int, float, bool, type(None))) for v in args.values()):
+            # 使用 frozenset 保证顺序无关
+            try:
+                key_str = f"{tool_name}:{frozenset(args.items())}"
+                # 只对最终字符串做 hash，避免对每个值单独 hash
+                return hashlib.md5(key_str.encode()).hexdigest()[:12]
+            except (TypeError, ValueError):
+                pass  # 降级到 JSON 方案
+        
+        # 通用方案：JSON 序列化（支持复杂嵌套结构）
         args_json = json.dumps(args, sort_keys=True, default=str)
         args_hash = hashlib.md5(args_json.encode()).hexdigest()[:12]
         return f"{tool_name}:{args_hash}"
@@ -94,11 +106,13 @@ class ToolCache:
         """
         # 黑名单工具不缓存
         if tool_name in self.BLACKLIST:
-            self._misses += 1
+            with self._lock:
+                self._misses += 1
             return None, False
         # config 的 write 操作不缓存，read/list/reload 可缓存
         if tool_name == "config" and args.get("action") == "write":
-            self._misses += 1
+            with self._lock:
+                self._misses += 1
             return None, False
         
         key = self._key(tool_name, args)
@@ -115,8 +129,8 @@ class ToolCache:
                 else:
                     # 过期，删除
                     del self._cache[key]
+            self._misses += 1
         
-        self._misses += 1
         return None, False
     
     def set(self, tool_name: str, args: dict, result: Any):
@@ -194,7 +208,7 @@ class ToolCache:
                 self._misses += 1
                 return None, False
 
-        # 等待计算完成
+        # 等待计算完成（在锁外等待，避免死锁）
         event.wait(timeout=timeout)
 
         with self._lock:
@@ -202,15 +216,30 @@ class ToolCache:
             if entry and time.time() - entry.timestamp < self._ttl:
                 self._hits += 1
                 return entry.result, True
+            # 等待超时或执行失败，清理 pending 状态
+            self._pending.pop(key, None)
+            self._misses += 1
 
-        self._misses += 1
         return None, False
 
     def mark_done(self, tool_name: str, args: dict, result: Any):
-        """写入缓存并通知等待线程"""
+        """写入缓存并通知等待线程
+        
+        即使结果为 None 或执行失败，也应调用此方法清理 pending 状态
+        """
         key = self._key(tool_name, args)
         with self._lock:
-            self._cache[key] = CacheEntry(result, time.time())
+            # 只有非 None 结果才缓存
+            if result is not None:
+                self._cache[key] = CacheEntry(result, time.time())
+            event = self._pending.pop(key, None)
+        if event:
+            event.set()
+    
+    def mark_failed(self, tool_name: str, args: dict):
+        """标记执行失败，清理 pending 状态并通知等待线程"""
+        key = self._key(tool_name, args)
+        with self._lock:
             event = self._pending.pop(key, None)
         if event:
             event.set()

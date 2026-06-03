@@ -13,7 +13,8 @@ _WEB_COMMANDS = [
     {"name": "/skill install", "desc": "安装技能", "has_arg": True, "arg_name": "URL或路径 [--global/--user/--workspace]"},
     {"name": "/skill create", "desc": "创建技能模板", "has_arg": True, "arg_name": "技能名称 [--global/--user/--workspace]"},
     {"name": "/thinking", "desc": "设置思考展示模式", "has_arg": True, "arg_name": "collapsed/expanded/hidden"},
-    {"name": "/prompt", "desc": "预览系统提示词", "has_arg": False},
+    {"name": "/prompt", "desc": "预览系统提示词（含 token 数）", "has_arg": False},
+    {"name": "/tools", "desc": "预览工具定义（含 token 数）", "has_arg": False},
 ]
 
 

@@ -20,34 +20,15 @@ definition = {
     "type": "function",
     "function": {
         "name": "register_subagent",
-        "description": (
-            "创建并注册一个新的子代理类型。子代理是可独立派遣执行任务的一次性 Agent。"
-            "创建后立即可用 dispatch_subagent 调用。"
-        ),
+        "description": "创建新的子代理类型。创建后立即可用 dispatch_subagent 调用。",
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {
-                    "type": "string",
-                    "description": "子代理名称，英文字母和连字符，如 code-reviewer、data-analyzer",
-                },
-                "description": {
-                    "type": "string",
-                    "description": "简短描述，用于在 dispatch_subagent 工具列表中展示",
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "子代理的系统提示词，定义其职责、行为规范和可用工具。包含工具列表时用 tools 参数指定",
-                },
-                "tools": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "允许子代理使用的工具列表，如 ['run_command', 'web_fetch']。留空则使用全部工具",
-                },
-                "max_turns": {
-                    "type": "integer",
-                    "description": "最大工具调用轮次，默认 10",
-                },
+                "name": {"type": "string", "description": "子代理名称"},
+                "description": {"type": "string", "description": "简短描述"},
+                "prompt": {"type": "string", "description": "系统提示词"},
+                "tools": {"type": "array", "items": {"type": "string"}, "description": "允许使用的工具列表"},
+                "max_turns": {"type": "integer", "description": "最大轮次，默认 10"},
             },
             "required": ["name", "description", "prompt"],
         },

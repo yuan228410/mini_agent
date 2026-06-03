@@ -480,12 +480,12 @@ export async function getConfig(sessionId?: string, workspace?: string): Promise
   return resp.json()
 }
 
-export async function getSystemPrompt(workspace?: string): Promise<{system_prompt: string, length: number}> {
+export async function getSystemPrompt(workspace?: string): Promise<{system_prompt: string, chars: number, tokens: number}> {
   const params = new URLSearchParams()
   const u = _username()
   if (u) params.set('username', u)
   if (workspace) params.set('workspace', workspace)
-  const resp = await _fetch(`/api/system-prompt?${params.toString()}`)
+  const resp = await _fetch(`/api/config/system-prompt?${params.toString()}`)
   return resp.json()
 }
 
@@ -529,6 +529,19 @@ export async function deleteSkill(name: string, username?: string, workspace?: s
 
 export async function getCommands(): Promise<CommandsResponse> {
   const resp = await _fetch('/api/commands')
+  return resp.json()
+}
+
+export interface ToolsResponse {
+  tools: any[]
+  count: number
+  chars: number
+  tokens: number
+  tool_names: string[]
+}
+
+export async function getTools(): Promise<ToolsResponse> {
+  const resp = await _fetch('/api/config/tools')
   return resp.json()
 }
 

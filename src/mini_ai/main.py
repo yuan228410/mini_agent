@@ -393,6 +393,10 @@ def main():
     current_username = session.username
     cmd = session.cmd
     
+    # 设置 session_id 到 contextvars（用于日志跟踪）
+    from .logger import set_session_id
+    set_session_id(current_session_id)
+    
     # 获取当前工作空间名称
     def _get_workspace_name():
         cwd = Path.cwd()

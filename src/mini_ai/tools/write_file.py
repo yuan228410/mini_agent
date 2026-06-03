@@ -7,7 +7,7 @@ definition = {
     "type": "function",
     "function": {
         "name": "write_file",
-        "description": "将内容写入指定文件，会自动创建父目录。支持覆盖或追加模式。",
+        "description": "写入文件，自动创建父目录。支持覆盖/追加模式。单次限制 10MB。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -16,7 +16,7 @@ definition = {
                 "mode": {
                     "type": "string",
                     "enum": ["overwrite", "append"],
-                    "description": "写入模式：overwrite 覆盖（默认）, append 追加到末尾",
+                    "description": "写入模式：overwrite（默认）, append",
                 },
             },
             "required": ["path", "content"],

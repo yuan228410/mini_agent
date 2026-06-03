@@ -91,29 +91,29 @@ class ToolRegistry:
         _disp = display if display is not None else self._display
         spawned = False
 
-        groups: list[tuple[str, list[dict]]] = []
-        i = 0
-        while i < len(calls):
-            tc = calls[i]
+        # 优化：先收集所有并行工具，再一次性执行
+        # 避免连续并行工具被串行工具打断
+        parallel_calls = []
+        serial_calls = []
+        
+        for tc in calls:
             name = tc["function"]["name"]
             if name == "spawn_teammate":
                 spawned = True
             if name in self._parallel_tools:
-                group = []
-                while i < len(calls) and calls[i]["function"]["name"] in self._parallel_tools:
-                    group.append(calls[i])
-                    i += 1
-                groups.append(("parallel", group))
+                parallel_calls.append(tc)
             else:
-                groups.append(("serial", [tc]))
-                i += 1
+                serial_calls.append(tc)
 
-        for mode, group in groups:
-            if mode == "parallel" and len(group) > 1:
-                self._execute_parallel(group, messages, _disp, persist_fn)
-            else:
-                for tc in group:
-                    self._execute_one(tc, messages, _disp, persist_fn)
+        # 先执行所有并行工具
+        if len(parallel_calls) > 1:
+            self._execute_parallel(parallel_calls, messages, _disp, persist_fn)
+        elif len(parallel_calls) == 1:
+            self._execute_one(parallel_calls[0], messages, _disp, persist_fn)
+        
+        # 再执行串行工具
+        for tc in serial_calls:
+            self._execute_one(tc, messages, _disp, persist_fn)
 
         return spawned
 

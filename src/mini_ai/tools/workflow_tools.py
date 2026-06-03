@@ -34,13 +34,7 @@ _run_def = {
     "type": "function",
     "function": {
         "name": "run_workflow",
-        "description": (
-            "提交并执行一个多 agent 工作流（DAG）。适用于有依赖链的多步任务（如先搜索再编码）。定义任务节点和依赖关系，"
-            "系统自动按依赖顺序编排执行：无依赖的任务并行，有依赖的等前置完成后触发。\n"
-            "每个任务的 prompt 中可用 {task_id} 引用依赖任务的结果。\n"
-            "示例：[{\"id\":\"search\",\"agent\":\"researcher\",\"prompt\":\"搜索 X\",\"depends_on\":[]},"
-            "{\"id\":\"code\",\"agent\":\"coder\",\"prompt\":\"根据搜索结果编码: {search}\",\"depends_on\":[\"search\"]}]"
-        ),
+        "description": "执行多 agent 工作流（DAG）。无依赖任务并行，有依赖任务串行。prompt 中用 {task_id} 引用依赖结果。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -50,15 +44,11 @@ _run_def = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {"type": "string", "description": "任务唯一 ID"},
-                            "agent": {"type": "string", "description": "执行者名称（teammate 名或 subagent:type）"},
+                            "id": {"type": "string", "description": "任务 ID"},
+                            "agent": {"type": "string", "description": "执行者（teammate 名或 subagent:type）"},
                             "prompt": {"type": "string", "description": "任务描述，{dep_id} 引用依赖结果"},
-                            "depends_on": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "依赖的任务 ID 列表",
-                            },
-                            "timeout": {"type": "integer", "description": "单任务超时秒数，默认 600"},
+                            "depends_on": {"type": "array", "items": {"type": "string"}, "description": "依赖的任务 ID"},
+                            "timeout": {"type": "integer", "description": "超时秒数，默认 600"},
                         },
                         "required": ["id", "agent", "prompt"],
                     },
@@ -118,7 +108,7 @@ _status_def = {
     "type": "function",
     "function": {
         "name": "workflow_status",
-        "description": "查看最近一次工作流的执行状态。",
+        "description": "查看最近工作流执行状态。",
         "parameters": {"type": "object", "properties": {}},
     },
 }

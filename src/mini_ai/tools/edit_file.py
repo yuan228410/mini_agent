@@ -7,14 +7,14 @@ definition = {
     "type": "function",
     "function": {
         "name": "edit_file",
-        "description": "对文件进行部分编辑（搜索替换），无需重写整个文件。找到 old_string 替换为 new_string，只替换第一个匹配。",
+        "description": "编辑文件（搜索替换）。old_string 必须精确匹配（包括空格和缩进）。",
         "parameters": {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "文件路径"},
                 "old_string": {"type": "string", "description": "要查找的原始字符串（精确匹配）"},
                 "new_string": {"type": "string", "description": "替换为的新字符串"},
-                "replace_all": {"type": "boolean", "description": "是否替换所有匹配，默认 false（只替换第一个）"},
+                "replace_all": {"type": "boolean", "description": "替换所有匹配，默认 false"},
             },
             "required": ["path", "old_string", "new_string"],
         },

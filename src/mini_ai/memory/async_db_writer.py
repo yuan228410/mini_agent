@@ -149,6 +149,9 @@ class AsyncDBWriter:
         
         logger.info("[AsyncDBWriter] 执行紧急刷盘...")
         
+        # 先设置停止标志，防止新任务进入
+        self._stop_event.set()
+        
         # 发送刷盘任务
         try:
             self._queue.put_nowait(FlushTask())
@@ -164,6 +167,11 @@ class AsyncDBWriter:
         # 如果队列还有数据，直接写入
         if not self._queue.empty():
             self._flush_remaining_tasks()
+        
+        # 确保数据库连接关闭
+        self._close_connection()
+        
+        logger.info("[AsyncDBWriter] 紧急刷盘完成")
     
     def _flush_remaining_tasks(self):
         """刷盘剩余任务（最后保底）"""

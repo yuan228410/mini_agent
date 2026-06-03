@@ -7,22 +7,58 @@ from pathlib import Path
 from ..logger import logger
 from ..utils import _UTC8
 
+# 跨平台文件锁支持
 try:
     import fcntl
     _HAS_FCNTL = True
 except ImportError:
     _HAS_FCNTL = False
-    _FALLBACK_LOCK = threading.Lock()
+
+# Windows 平台文件锁支持
+try:
+    import msvcrt
+    _HAS_MSVCRT = True
+except ImportError:
+    _HAS_MSVCRT = False
+
+# 回退锁（仅线程安全，非进程安全）
+_FALLBACK_LOCK = threading.Lock()
 
 def _file_lock_path(filepath: Path) -> Path:
     """同一目录下用 .lock 文件做跨进程/跨实例文件锁。"""
     return filepath.with_suffix(filepath.suffix + ".lock")
 
+def _acquire_lock(lock_file) -> bool:
+    """跨平台获取文件锁"""
+    if _HAS_FCNTL:
+        # Unix/Linux/macOS
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return True
+    elif _HAS_MSVCRT:
+        # Windows
+        import os
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        return True
+    else:
+        # 回退到线程锁
+        _FALLBACK_LOCK.acquire()
+        return True
+
+def _release_lock(lock_file) -> None:
+    """跨平台释放文件锁"""
+    if _HAS_FCNTL:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    elif _HAS_MSVCRT:
+        import os
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        _FALLBACK_LOCK.release()
+
 def _read_locked(filepath: Path) -> str:
     """加共享锁读取文件，防止读到写入一半的内容。"""
     if not filepath.exists():
         return ""
-    if not _HAS_FCNTL:
+    if not _HAS_FCNTL and not _HAS_MSVCRT:
         try:
             return filepath.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -30,14 +66,14 @@ def _read_locked(filepath: Path) -> str:
     lock_path = _file_lock_path(filepath)
     try:
         with lock_path.open("w") as lf:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_SH)
+            _acquire_lock(lf)
             try:
                 return filepath.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError) as e:
                 logger.warning(f"[MemoryStore] 读取 {filepath} 失败: {e}")
                 return ""
             finally:
-                fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+                _release_lock(lf)
     except OSError:
         # lock 文件无法创建时回退到无锁读取
         try:
@@ -49,16 +85,16 @@ def _write_locked(filepath: Path, content: str) -> None:
     """加排他锁写入文件，防止跨实例并发写入冲突。"""
     lock_path = _file_lock_path(filepath)
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    if not _HAS_FCNTL:
+    if not _HAS_FCNTL and not _HAS_MSVCRT:
         with _FALLBACK_LOCK:
             filepath.write_text(content, encoding="utf-8")
         return
     with lock_path.open("w") as lf:
-        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+        _acquire_lock(lf)
         try:
             filepath.write_text(content, encoding="utf-8")
         finally:
-            fcntl.flock(lf.fileno(), fcntl.LOCK_UN)
+            _release_lock(lf)
 
 class _exclusive_lock:
     """文件排他锁上下文管理器，用于 read-modify-write 和 backup+write 的原子操作。
@@ -75,13 +111,13 @@ class _exclusive_lock:
     def __enter__(self):
         lock_path = _file_lock_path(self._filepath)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        if not _HAS_FCNTL:
+        if not _HAS_FCNTL and not _HAS_MSVCRT:
             _FALLBACK_LOCK.acquire()
             self._acquired = True
             return
         self._lf = lock_path.open("w")
         try:
-            fcntl.flock(self._lf.fileno(), fcntl.LOCK_EX)
+            _acquire_lock(self._lf)
             self._acquired = True
         except Exception:
             # flock 失败时确保关闭文件句柄
@@ -97,19 +133,20 @@ class _exclusive_lock:
         try:
             if self._lf is not None:
                 try:
-                    fcntl.flock(self._lf.fileno(), fcntl.LOCK_UN)
+                    _release_lock(self._lf)
                 except Exception:
                     pass
-                finally:
-                    try:
-                        self._lf.close()
-                    except Exception:
-                        pass
-                    self._lf = None
-            elif self._acquired and not _HAS_FCNTL:
+                try:
+                    self._lf.close()
+                except Exception:
+                    pass
+                self._lf = None
+            elif self._acquired:
+                # 回退锁模式
                 _FALLBACK_LOCK.release()
-        finally:
-            self._acquired = False
+        except Exception:
+            pass
+        self._acquired = False
 
 def _merge_sections(texts: list[str]) -> str:
     """按 ## 标题拆分，同名 section last-wins，整体叠加。"""

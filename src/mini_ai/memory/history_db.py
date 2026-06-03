@@ -150,6 +150,12 @@ class HistoryDB:
     def _ensure_conn(self):
         """确保连接可用，已关闭则重新创建"""
         if self._closed:
+            # 关闭旧连接（如果存在）
+            if hasattr(self, '_conn') and self._conn:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
             self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
@@ -161,6 +167,11 @@ class HistoryDB:
         try:
             self._conn.execute("SELECT 1")
         except Exception:
+            # 关闭旧连接
+            try:
+                self._conn.close()
+            except Exception:
+                pass
             self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA busy_timeout=5000")

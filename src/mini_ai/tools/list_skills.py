@@ -20,7 +20,7 @@ definition = {
     "type": "function",
     "function": {
         "name": "list_skills",
-        "description": "列出所有可用的技能(skill)，返回技能名称、描述和层级",
+        "description": "列出所有可用技能。",
         "parameters": {"type": "object", "properties": {}, "required": []}
     }
 }

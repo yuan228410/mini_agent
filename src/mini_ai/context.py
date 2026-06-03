@@ -9,11 +9,11 @@ class ContextBuilder:
     """按优先级组装系统提示词。
 
     组装顺序：
-      1. 系统核心能力（硬编码）
-      2. 身份定义（SOUL.md，三层级合并）
+      1. 身份定义（SOUL.md，三层级合并）
+      2. 系统核心能力（硬编码）
       3. 行为规范（RULES.md，三层级合并）
-      4. 长期记忆 (MemoryStore)
-      5. 技能列表 (SkillLoader)
+      4. 技能列表 (SkillLoader)
+      5. 长期记忆 (MemoryStore)
       6. 项目规范 (CLAUDE.md / AGENTS.md)
     """
 
@@ -89,7 +89,7 @@ class ContextBuilder:
 
         # 6. 项目规范
         if project_path:
-            parts.append("## 当前工作空间\n\n项目路径: " + project_path + "\n\n重要：执行命令时必须传 cwd=\"" + project_path + "\" 参数；读写文件使用绝对路径基于此目录。不要使用其他目录。")
+            parts.append("## 当前工作空间\n\n项目路径: " + project_path + "\n\n重要：执行命令传 cwd=\"" + project_path + "\"，读写文件用绝对路径。")
 
         cwd_docs = self._read_project_docs(project_path)
         if cwd_docs:
@@ -112,6 +112,6 @@ class ContextBuilder:
                 text = self._read_cached(path)
                 if text:
                     logger.debug(f"[Context] 加载项目规范: {path} ({len(text)} 字符)")
-                    return f"## 项目规范（{name}）\n\n以下是你所在项目的技术文档，描述项目架构和工具，不是你的身份定义：\n\n{text}"
+                    return f"## 项目规范（{name}）\n\n{text}"
         logger.debug(f"[Context] 未找到项目规范 (搜索: {search_dirs})")
         return None

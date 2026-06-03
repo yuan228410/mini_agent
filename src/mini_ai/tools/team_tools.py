@@ -28,17 +28,13 @@ _spawn_def = {
     "type": "function",
     "function": {
         "name": "spawn_teammate",
-        "description": (
-            "召入一个持久队友加入 agent team。队友有名字、职司和独立线程，"
-            "通过 inbox 收发消息。适合需要多人协作、固定角色、或并行处理的任务。"
-            "已有队友（含 offline）可通过此工具重新激活并派发新任务。"
-        ),
+        "description": "召入持久队友。队友有独立线程，通过 inbox 收发消息。建议不超过 6 个队友。",
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "队友名字，例如 alice、coder、reviewer"},
-                "role": {"type": "string", "description": "队友职司，例如 coder、reviewer、researcher"},
-                "prompt": {"type": "string", "description": "交给该队友的第一件任务"},
+                "name": {"type": "string", "description": "队友名字"},
+                "role": {"type": "string", "description": "队友职司"},
+                "prompt": {"type": "string", "description": "第一件任务"},
             },
             "required": ["name", "role", "prompt"],
         },
@@ -72,21 +68,13 @@ _send_def = {
     "type": "function",
     "function": {
         "name": "send_message",
-        "description": (
-            "给指定队友发送 inbox 消息。消息会追加到对方邮箱，"
-            "对方下次 read_inbox 时取出并清空。"
-            "支持 message（普通消息）、shutdown_request（请求退出）两种类型。"
-        ),
+        "description": "给队友发送消息。消息追加到对方 inbox，对方下次 read_inbox 时取出。",
         "parameters": {
             "type": "object",
             "properties": {
-                "to": {"type": "string", "description": "收件人名字，例如 lead、coder、alice"},
+                "to": {"type": "string", "description": "收件人名字"},
                 "content": {"type": "string", "description": "消息内容"},
-                "msg_type": {
-                    "type": "string",
-                    "enum": ["message", "shutdown_request"],
-                    "description": "消息类型，默认 message",
-                },
+                "msg_type": {"type": "string", "enum": ["message", "shutdown_request"], "description": "消息类型，默认 message"},
             },
             "required": ["to", "content"],
         },
@@ -127,11 +115,11 @@ _broadcast_def = {
     "type": "function",
     "function": {
         "name": "broadcast",
-        "description": "向所有队友广播一条消息。",
+        "description": "向所有队友广播消息。",
         "parameters": {
             "type": "object",
             "properties": {
-                "content": {"type": "string", "description": "广播消息内容"},
+                "content": {"type": "string", "description": "广播内容"},
             },
             "required": ["content"],
         },

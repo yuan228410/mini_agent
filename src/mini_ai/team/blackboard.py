@@ -14,15 +14,15 @@ class Blackboard:
     def __init__(self, persist_path: Path | None = None, max_entries: int = _MAX_ENTRIES):
         self._data: dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._condition = threading.Condition(self._lock)  # 使用 Condition 替代 Event
         self._persist_path = persist_path
         self._max_entries = max_entries
-        self._change_event = threading.Event()
-        self._change_event.set()  # 初始为 set，首次 wait_for_change 不超时
+        self._version = 0  # 版本号，用于检测变化
         if persist_path and persist_path.exists():
             self._load()
 
     def put(self, key: str, value: str, author: str = "") -> str:
-        with self._lock:
+        with self._condition:
             if key not in self._data and len(self._data) >= self._max_entries:
                 oldest_key = min(self._data, key=lambda k: self._data[k].get("ts", 0))
                 del self._data[oldest_key]
@@ -32,9 +32,10 @@ class Blackboard:
                 "author": author,
                 "ts": time.time(),
             }
+            self._version += 1  # 增加版本号
             self._persist()
             logger.info(f"[Blackboard] put {key} ({len(value)} chars) by {author or '?'}")
-            self._change_event.set()
+            self._condition.notify_all()  # 通知所有等待者
             return f"已写入 blackboard[{key}]（{len(value)} 字符）"
 
     def get(self, key: str, default: str | object = ""):
@@ -58,20 +59,28 @@ class Blackboard:
             return {k: v["value"] for k, v in self._data.items()}
 
     def clear(self):
-        with self._lock:
+        with self._condition:
             self._data.clear()
+            self._version += 1
             self._persist()
-            self._change_event.set()
+            self._condition.notify_all()
 
     def wait_for_change(self, timeout: float = 5.0) -> bool:
-        """等待黑板数据变化，返回是否有变化。"""
-        with self._lock:
-            if self._change_event.is_set():
-                self._change_event.clear()
-                return True
-        # 不在锁内 clear — 让 event 保持 set 直到 wait 消费，
-        # 避免 clear 后、wait 前 put() 的 set 被遗漏
-        return self._change_event.wait(timeout=timeout)
+        """等待黑板数据变化，返回是否有变化。
+        
+        使用 Condition 替代 Event，避免竞态条件：
+        - 在锁内检查版本号
+        - 使用 condition.wait() 原子地释放锁并等待
+        - 被唤醒后自动重新获取锁
+        """
+        with self._condition:
+            current_version = self._version
+            # 等待版本号变化
+            result = self._condition.wait_for(
+                lambda: self._version != current_version,
+                timeout=timeout
+            )
+            return result
     def render(self) -> str:
         with self._lock:
             if not self._data:

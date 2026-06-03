@@ -13,29 +13,26 @@ definition = {
     "type": "function",
     "function": {
         "name": "update_todos",
-        "description": (
-            "创建或更新当前任务的待办列表，每次传入完整的列表（全量覆盖）。"
-            "用于：拆解复杂任务、推进状态（pending→in_progress→completed）。"
-            "并行任务可同时有多个 in_progress（最多 5 个）。"
-        ),
+        "description": "更新待办列表。每次传入完整列表（全量覆盖）。并行任务最多 5 个 in_progress。",
         "parameters": {
             "type": "object",
             "properties": {
                 "todos": {
                     "type": "array",
-                    "description": "完整的待办列表，按执行顺序排列",
+                    "description": "待办列表",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {"type": "integer", "description": "序号，从 1 开始"},
-                            "content": {"type": "string", "description": "这一步要做什么"},
-                            "status": {"type": "string", "enum": list(_VALID_STATUS)},
+                            "id": {"type": "integer", "description": "序号（从1开始）"},
+                            "content": {"type": "string", "description": "任务内容"},
+                            "status": {"type": "string", "enum": ["pending", "in_progress", "completed"]}
                         },
-                    },
+                        "required": ["id", "content", "status"]
+                    }
                 }
             },
-            "required": ["todos"],
-        },
+            "required": ["todos"]
+        }
     }
 }
 

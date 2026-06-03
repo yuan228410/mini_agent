@@ -10,11 +10,11 @@ definition = {
     "type": "function",
     "function": {
         "name": "read_image",
-        "description": "读取本地图片文件并转换为 base64 格式。支持 PNG、JPEG、GIF、WebP 等格式，大图自动压缩。",
+        "description": "读取图片转 base64。支持 PNG/JPEG/GIF/WebP/BMP，大图（>500KB）自动压缩，最大 10MB。",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "图片文件路径"},
+                "path": {"type": "string", "description": "图片路径"},
             },
             "required": ["path"],
         },

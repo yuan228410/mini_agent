@@ -7,7 +7,7 @@ from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config
 from ...llm.base import estimate_tokens
 from ...logger import logger
-from .chat import _get_or_create_session, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE
+from .chat import _get_or_create_session, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE, _lead_tool_defs
 
 router = APIRouter()
 
@@ -41,6 +41,64 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
         "history_count": len(messages) - 1 if messages else 0,
         "session_id": session_id,
         "username": username,
+    }
+
+
+@router.get("/config/system-prompt")
+async def get_system_prompt(username: str = Query(default=""), workspace: str = Query(default="")):
+    """获取完整系统提示词（含字符数和 token 估算）"""
+    if not username:
+        return {"error": "缺少 username"}
+    
+    from .chat import _resolve_base, _get_or_create_components
+    from ...context import ContextBuilder
+    from ...skills import SkillLoader
+    from ...config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
+    from ...llm import estimate_tokens
+    
+    ws = workspace or None
+    base = _resolve_base(username, ws)
+    
+    # 获取组件（MemoryStore, SkillLoader 等）
+    comp_key = "default"
+    comp = _get_or_create_components(username, comp_key, base, ws)
+    
+    # 构建完整系统提示词
+    ctx_builder = ContextBuilder(DATA_DIR)
+    _sl = SkillLoader(DATA_DIR / "skills", _SP)
+    project_path = str(base) if base else ""
+    
+    system_prompt = ctx_builder.build(
+        memory_store=comp["store"],
+        skill_loader=_sl,
+        project_path=project_path
+    )
+    
+    chars = len(system_prompt)
+    tokens = estimate_tokens(system_prompt)
+    
+    return {
+        "system_prompt": system_prompt,
+        "chars": chars,
+        "tokens": tokens,
+    }
+
+
+@router.get("/config/tools")
+async def get_tools():
+    """获取工具定义（含字符数和 token 估算）"""
+    tools = _lead_tool_defs()
+    import json
+    tools_json = json.dumps(tools, ensure_ascii=False)
+    chars = len(tools_json)
+    tokens = estimate_tokens(tools_json)
+    tool_names = [t.get("function", {}).get("name", "?") for t in tools]
+    return {
+        "tools": tools,
+        "count": len(tools),
+        "chars": chars,
+        "tokens": tokens,
+        "tool_names": tool_names,
     }
 
 
@@ -334,6 +392,8 @@ async def get_system_prompt(username: str = Query(...), workspace: str = Query(d
     from ...context import ContextBuilder
     from ...skills import SkillLoader
     from ...config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
+    from ...llm import estimate_tokens
+    
     base = _resolve_base(username, workspace or None)
     comp_key = "default"
     comp = _get_or_create_components(username, comp_key, base, workspace or None)
@@ -341,4 +401,38 @@ async def get_system_prompt(username: str = Query(...), workspace: str = Query(d
     _sl = SkillLoader(DATA_DIR / "skills", _SP)
     project_path = str(base) if base else ""
     prompt = ctx_builder.build(memory_store=comp["store"], skill_loader=_sl, project_path=project_path)
-    return {"system_prompt": prompt, "length": len(prompt)}
+    
+    chars = len(prompt)
+    tokens = estimate_tokens(prompt)
+    return {
+        "system_prompt": prompt, 
+        "chars": chars,
+        "tokens": tokens
+    }
+
+
+@router.get("/tools")
+async def get_tools():
+    """获取工具定义"""
+    from ...tools import get_definitions
+    from ...llm import estimate_tokens
+    import json
+    
+    tool_defs = get_definitions()
+    if not tool_defs:
+        return {"tools": [], "count": 0, "chars": 0, "tokens": 0}
+    
+    tool_count = len(tool_defs)
+    tool_json = json.dumps(tool_defs, ensure_ascii=False)
+    chars = len(tool_json)
+    tokens = estimate_tokens(tool_json)
+    
+    tool_names = [d["function"]["name"] for d in tool_defs]
+    
+    return {
+        "tools": tool_defs,
+        "count": tool_count,
+        "chars": chars,
+        "tokens": tokens,
+        "tool_names": tool_names
+    }

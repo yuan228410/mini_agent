@@ -8,22 +8,17 @@ definition = {
     "type": "function",
     "function": {
         "name": "config",
-        "description": "读取或修改 mini-ai 配置。action=read 读取指定路径的配置值；action=write 修改配置并持久化到 config.yaml；action=list 返回配置结构概览；action=reload 热加载配置（无需重启）。修改后需重启生效的项会标注。",
+        "description": "读取或修改配置。action: read/write/list/reload。修改后部分项需重启。",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
                     "enum": ["read", "write", "list", "reload"],
-                    "description": "read=读取配置值, write=修改配置值, list=列出配置结构, reload=热加载配置"
+                    "description": "read/write/list/reload"
                 },
-                "path": {
-                    "type": "string",
-                    "description": "配置路径，用点号分隔，如 'compactor.keep_recent'、'mcp.servers'、'models.deepseek.api_key'"
-                },
-                "value": {
-                    "description": "要设置的新值（write 时必填），支持字符串、数字、布尔、对象、数组"
-                }
+                "path": {"type": "string", "description": "配置路径，如 'models.deepseek.api_key'"},
+                "value": {"description": "要设置的值（write 时必填）"}
             },
             "required": ["action"],
         },

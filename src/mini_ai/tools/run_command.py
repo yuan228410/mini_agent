@@ -7,13 +7,13 @@ definition = {
     "type": "function",
     "function": {
         "name": "run_command",
-        "description": "在终端执行一条 shell 命令并返回输出。支持指定超时和工作目录。",
+        "description": "执行 shell 命令。默认超时 30 秒。",
         "parameters": {
             "type": "object",
             "properties": {
                 "command": {"type": "string", "description": "要执行的 shell 命令"},
                 "timeout": {"type": "integer", "description": "超时秒数，默认 30"},
-                "cwd": {"type": "string", "description": "工作目录，默认当前目录"},
+                "cwd": {"type": "string", "description": "工作目录"},
             },
             "required": ["command"],
         },

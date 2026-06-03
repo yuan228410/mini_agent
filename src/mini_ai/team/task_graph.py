@@ -1,6 +1,6 @@
 """轻量 DAG 调度器 — 任务依赖图 + 状态追踪"""
 from __future__ import annotations
-
+import threading
 from dataclasses import dataclass, field
 
 from .blackboard import Blackboard
@@ -28,52 +28,55 @@ class TaskGraph:
     def __init__(self, blackboard: Blackboard):
         self.nodes: dict[str, TaskNode] = {}
         self.blackboard = blackboard
+        self._lock = threading.Lock()  # 添加线程锁
 
     def add_task(self, node: TaskNode):
-        self.nodes[node.id] = node
-        logger.info(f"[DAG] 注册任务 {node.id} agent={node.agent} depends={node.depends_on}")
+        with self._lock:
+            self.nodes[node.id] = node
+            logger.info(f"[DAG] 注册任务 {node.id} agent={node.agent} depends={node.depends_on}")
 
     def get_ready(self) -> list[TaskNode]:
-        ready = []
-        for node in self.nodes.values():
-            if node.status != "pending":
-                continue
-            
-            # 检查依赖状态
-            deps_done = all(
-                self.nodes[dep].status == "done"
-                for dep in node.depends_on
-                if dep in self.nodes
-            )
-            deps_failed = any(
-                self.nodes[dep].status == "failed"
-                for dep in node.depends_on
-                if dep in self.nodes
-            )
-            
-            # 依赖有失败的情况
-            if deps_failed:
-                if node.fail_on_dep_failure:
-                    # 标记为失败（传播失败）
-                    node.status = "failed"
-                    failed_deps = [dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == "failed"]
-                    node.error = f"依赖任务失败: {', '.join(failed_deps)}"
-                    logger.warning(f"[DAG] {node.id} 因依赖失败而标记失败: {node.error}")
+        with self._lock:
+            ready = []
+            for node in self.nodes.values():
+                if node.status != "pending":
                     continue
-                # 否则继续检查是否可以执行
-            
-            # 依赖未全部完成
-            if not deps_done and not deps_failed:
-                continue
-            
-            # 检查条件
-            if node.condition and not self._evaluate_condition(node):
-                node.status = "skipped"
-                logger.info(f"[DAG] {node.id} 条件不满足，跳过")
-                continue
-            
-            ready.append(node)
-        return ready
+                
+                # 检查依赖状态
+                deps_done = all(
+                    self.nodes[dep].status == "done"
+                    for dep in node.depends_on
+                    if dep in self.nodes
+                )
+                deps_failed = any(
+                    self.nodes[dep].status == "failed"
+                    for dep in node.depends_on
+                    if dep in self.nodes
+                )
+                
+                # 依赖有失败的情况
+                if deps_failed:
+                    if node.fail_on_dep_failure:
+                        # 标记为失败（传播失败）
+                        node.status = "failed"
+                        failed_deps = [dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == "failed"]
+                        node.error = f"依赖任务失败: {', '.join(failed_deps)}"
+                        logger.warning(f"[DAG] {node.id} 因依赖失败而标记失败: {node.error}")
+                        continue
+                    # 否则继续检查是否可以执行
+                
+                # 依赖未全部完成
+                if not deps_done and not deps_failed:
+                    continue
+                
+                # 检查条件
+                if node.condition and not self._evaluate_condition_locked(node):
+                    node.status = "skipped"
+                    logger.info(f"[DAG] {node.id} 条件不满足，跳过")
+                    continue
+                
+                ready.append(node)
+            return ready
 
     @staticmethod
     def _safe_eval(expr: str, ctx: dict) -> bool:
@@ -134,7 +137,8 @@ class TaskGraph:
         tree = ast.parse(expr, mode="eval")
         return bool(_resolve(tree.body))
 
-    def _evaluate_condition(self, node: TaskNode) -> bool:
+    def _evaluate_condition_locked(self, node: TaskNode) -> bool:
+        """在锁内评估条件（内部方法）"""
         ctx = {}
         for dep_id, dep_node in self.nodes.items():
             ctx[dep_id] = {
@@ -149,34 +153,45 @@ class TaskGraph:
             logger.warning(f"[DAG] 条件表达式求值失败 ({node.condition}): {e}")
             return True
 
+    def _evaluate_condition(self, node: TaskNode) -> bool:
+        """评估条件（公开方法，带锁）"""
+        with self._lock:
+            return self._evaluate_condition_locked(node)
+
     def mark_running(self, task_id: str):
-        node = self.nodes.get(task_id)
-        if node:
-            node.status = "running"
-            logger.info(f"[DAG] {task_id} → running")
+        with self._lock:
+            node = self.nodes.get(task_id)
+            if node:
+                node.status = "running"
+                logger.info(f"[DAG] {task_id} → running")
 
     def mark_done(self, task_id: str, result: str):
+        with self._lock:
+            node = self.nodes.get(task_id)
+            if not node:
+                return
+            node.status = "done"
+            node.result = result
+        # blackboard.put 在锁外执行，避免嵌套锁
         node = self.nodes.get(task_id)
-        if not node:
-            return
-        node.status = "done"
-        node.result = result
-        self.blackboard.put(task_id, result, author=node.agent)
-        logger.info(f"[DAG] {task_id} → done (result {len(result)} chars)")
+        if node:
+            self.blackboard.put(task_id, result, author=node.agent)
+            logger.info(f"[DAG] {task_id} → done (result {len(result)} chars)")
 
     def mark_failed(self, task_id: str, error: str):
-        node = self.nodes.get(task_id)
-        if not node:
-            return
-        node.retry_count += 1
-        if node.retry_count < node.max_retry:
-            node.status = "pending"
-            node.error = error
-            logger.warning(f"[DAG] {task_id} 失败，将重试 ({node.retry_count}/{node.max_retry}): {error[:100]}")
-        else:
-            node.status = "failed"
-            node.error = error
-            logger.error(f"[DAG] {task_id} → failed: {error[:100]}")
+        with self._lock:
+            node = self.nodes.get(task_id)
+            if not node:
+                return
+            node.retry_count += 1
+            if node.retry_count < node.max_retry:
+                node.status = "pending"
+                node.error = error
+                logger.warning(f"[DAG] {task_id} 失败，将重试 ({node.retry_count}/{node.max_retry}): {error[:100]}")
+            else:
+                node.status = "failed"
+                node.error = error
+                logger.error(f"[DAG] {task_id} → failed: {error[:100]}")
 
     def is_complete(self) -> bool:
         return all(n.status in ("done", "failed", "skipped") for n in self.nodes.values())

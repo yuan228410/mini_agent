@@ -25,6 +25,23 @@ class CommandHandler:
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
+        return self.handle_commands(user_input, messages)
+    
+    def _get_workspace(self) -> str:
+        """获取当前工作空间名称"""
+        if self.workspace_mgr:
+            # 从 project_path 获取工作空间名称
+            cwd = self.project_path or "."
+            from pathlib import Path
+            ws_name = Path(cwd).name if cwd else "default"
+            # 验证工作空间是否存在
+            ws = self.workspace_mgr.get(ws_name)
+            if ws:
+                return ws.name
+        return "default"
+    
+    def handle_commands(self, user_input: str, messages: list[dict]) -> str | None:
+        """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
         if user_input != "/purge":
             self._purge_pending = False
         if user_input.lower() in ("exit", "quit", "q", "/exit", "/quit", "/q"):
@@ -91,19 +108,6 @@ class CommandHandler:
             self.inject_fn(messages)
             self.disp.info(f"已创建新会话: {self.session_id}")
             return "continue"
-
-    def _get_workspace(self) -> str:
-        """获取当前工作空间名称"""
-        if self.workspace_mgr:
-            # 从 project_path 获取工作空间名称
-            cwd = self.project_path or "."
-            from pathlib import Path
-            ws_name = Path(cwd).name if cwd else "default"
-            # 验证工作空间是否存在
-            ws = self.workspace_mgr.get(ws_name)
-            if ws:
-                return ws.name
-        return "default"
 
         if user_input == "/thinking":
             self.disp.show_thinking()
@@ -253,11 +257,36 @@ class CommandHandler:
             if not self.context_builder:
                 self.disp.error("context_builder 不可用")
                 return "continue"
+            from ..llm import estimate_tokens
             prompt = self.context_builder.build(
                 memory_store=self.store, skill_loader=self.skill_loader,
                 project_path=self.project_path,
             )
-            self.disp.info(f"系统提示词（{len(prompt)} 字符）：\n{prompt}")
+            chars = len(prompt)
+            tokens = estimate_tokens(prompt)
+            self.disp.info(f"系统提示词（{chars} 字符, ~{tokens} tokens）：\n{prompt}")
+            return "continue"
+        
+        if user_input == "/tools":
+            from ..tools import get_definitions
+            from ..llm import estimate_tokens
+            import json
+            
+            tool_defs = get_definitions()
+            if not tool_defs:
+                self.disp.info("暂无可用工具")
+                return "continue"
+            
+            tool_count = len(tool_defs)
+            tool_json = json.dumps(tool_defs, ensure_ascii=False, indent=2)
+            chars = len(tool_json)
+            tokens = estimate_tokens(tool_json)
+            
+            # 打印工具列表
+            tool_names = [d["function"]["name"] for d in tool_defs]
+            self.disp.info(f"工具定义（{tool_count} 个工具, {chars} 字符, ~{tokens} tokens）：")
+            self.disp.info(f"工具列表: {', '.join(tool_names)}\n")
+            self.disp.info(tool_json)
             return "continue"
 
         if user_input == "/genskill":

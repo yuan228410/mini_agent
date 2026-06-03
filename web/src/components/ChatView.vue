@@ -4,7 +4,7 @@ import {
   ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct, isWsConnected,
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, getWorkspaces, exportSession,
-  getSystemPrompt, getTodos,
+  getSystemPrompt, getTodos, getTools,
   type WsEvent, type HistoryMessage, type ImageData,
 } from '../api'
 import MessageItem from './MessageItem.vue'
@@ -937,11 +937,23 @@ async function sendMessage(text: string, images?: ImageFile[]) {
   if (text === '/prompt') {
     try {
       const resp = await getSystemPrompt(props.workspace || undefined)
-      const promptContent = '📋 系统提示词（' + resp.length + ' 字符）：\n\n' + resp.system_prompt
+      const promptContent = '📋 系统提示词（' + resp.chars + ' 字符, ~' + resp.tokens + ' tokens）：\n\n' + resp.system_prompt
       s.messages = [...s.messages, { role: 'assistant', content: promptContent, timestamp: _localTs() }]
       _updateUI(s)
     } catch (e: any) {
       console.error('getSystemPrompt failed', e)
+    }
+    return
+  }
+  if (text === '/tools') {
+    try {
+      const resp = await getTools()
+      const toolNames = resp.tool_names.join(', ')
+      const content = '🔧 工具定义（' + resp.count + ' 个工具, ' + resp.chars + ' 字符, ~' + resp.tokens + ' tokens）：\n\n工具列表：' + toolNames + '\n\n完整定义：\n\n```json\n' + JSON.stringify(resp.tools, null, 2) + '\n```'
+      s.messages = [...s.messages, { role: 'assistant', content: content, timestamp: _localTs() }]
+      _updateUI(s)
+    } catch (e: any) {
+      console.error('getTools failed', e)
     }
     return
   }

@@ -14,6 +14,7 @@ from .base import (
 )
 from ..logger import logger
 from ..exceptions import LLMError
+from .retry import RetryStrategy
 
 
 def _get_thinking(ctx=None):
@@ -202,9 +203,18 @@ def chat(messages, tools=True, ctx=None):
 
     max_retries = TIMEOUTS.get("llm_retries", 3)
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    
+    # 使用智能重试策略
+    strategy = RetryStrategy(
+        max_retries=max_retries,
+        base_delay=retry_delay,
+        max_delay=60.0,
+    )
+    
     t0 = time.monotonic()
     response = None
     last_error = None
+    
     for attempt in range(max_retries + 1):
         try:
             ensure_session_anthropic(ctx)
@@ -212,28 +222,57 @@ def chat(messages, tools=True, ctx=None):
             connect_timeout = TIMEOUTS.get("llm_connect", 30)
             read_timeout = TIMEOUTS.get("llm", 120)
             response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
+            
             if response.status_code >= 400:
                 err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
-                last_error = LLMError(err_msg, status_code=response.status_code)
-                if attempt < max_retries:
-                    delay = retry_delay * (attempt + 1)
-                    logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay}s 后重试")
+                
+                # 尝试解析错误详情
+                retry_after = None
+                try:
+                    error_data = response.json()
+                    if "error" in error_data:
+                        err_detail = error_data["error"]
+                        err_msg = f"HTTP {response.status_code}: {err_detail.get('message', err_msg)}"
+                        # 提取 retry_after
+                        if response.status_code == 429:
+                            retry_after_header = response.headers.get("Retry-After")
+                            if retry_after_header:
+                                try:
+                                    retry_after = float(retry_after_header)
+                                except ValueError:
+                                    pass
+                            if retry_after is None and "retry_after" in err_detail:
+                                retry_after = err_detail["retry_after"]
+                except (ValueError, KeyError):
+                    pass
+                
+                last_error = LLMError(err_msg, status_code=response.status_code, retry_after=retry_after)
+                
+                # 判断是否重试
+                if strategy.should_retry(last_error, attempt):
+                    delay = strategy.get_delay(attempt, last_error)
+                    logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay:.1f}s 后重试")
                     time.sleep(delay)
                     continue
-                logger.error(f"[Anth✗] 请求失败(已重试{max_retries}次): {err_msg}")
-                raise last_error
+                else:
+                    logger.error(f"[Anth✗] 不可重试的错误: {err_msg}")
+                    raise last_error
+            
+            # 成功，跳出重试循环
             break
+            
         except requests.RequestException as e:
             error_msg = str(e)
             if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
                 error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
             last_error = LLMError(error_msg)
-            if attempt < max_retries:
-                delay = retry_delay * (attempt + 1)
-                logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")
+            
+            if strategy.should_retry(last_error, attempt):
+                delay = strategy.get_delay(attempt, last_error)
+                logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {error_msg}，{delay:.1f}s 后重试")
                 time.sleep(delay)
             else:
-                logger.error(f"[Anth✗] 请求异常(已重试{max_retries}次): {error_msg}")
+                logger.error(f"[Anth✗] 请求异常(已重试{attempt}次): {error_msg}")
                 raise last_error
 
     try:
@@ -306,6 +345,14 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     t0 = time.monotonic()
     max_retries = TIMEOUTS.get("llm_retries", 3)
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    
+    # 使用智能重试策略
+    strategy = RetryStrategy(
+        max_retries=max_retries,
+        base_delay=retry_delay,
+        max_delay=60.0,
+    )
+    
     response = None
     last_error = None
     for attempt in range(max_retries + 1):
@@ -323,12 +370,13 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
             if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
                 error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
             last_error = LLMError(error_msg)
-            if attempt < max_retries:
-                delay = retry_delay * (attempt + 1)
-                logger.warning(f"[Anth↻] 流式重试 {attempt+1}/{max_retries}: {error_msg}，{delay}s 后重试")
+            
+            if strategy.should_retry(last_error, attempt):
+                delay = strategy.get_delay(attempt, last_error)
+                logger.warning(f"[Anth↻] 流式重试 {attempt+1}/{max_retries}: {error_msg}，{delay:.1f}s 后重试")
                 time.sleep(delay)
             else:
-                logger.error(f"[Anth✗] 流式请求异常(已重试{max_retries}次): {error_msg}")
+                logger.error(f"[Anth✗] 流式请求异常(已重试{attempt}次): {error_msg}")
                 yield {"type": "error", "error": error_msg}
                 return
 
@@ -430,6 +478,15 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         logger.error(f"[Anth✗] {error_msg}")
         yield {"type": "error", "error": error_msg}
         return
+    except Exception as e:
+        error_msg = f"流式响应处理异常: {e}"
+        logger.error(f"[Anth✗] {error_msg}", exc_info=True)
+        yield {"type": "error", "error": error_msg}
+        return
+    finally:
+        # 确保响应连接被关闭
+        if response:
+            response.close()
 
     us = get_usage()
     prev_comp = us.get("_prev_completion", 0)

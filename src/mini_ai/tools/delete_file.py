@@ -7,13 +7,13 @@ definition = {
     "type": "function",
     "function": {
         "name": "delete_file",
-        "description": "删除文件或空目录。默认只删除文件，recursive=true 可删除非空目录（谨慎使用）。路径不存在时返回错误。",
+        "description": "删除文件或空目录。recursive=true 可删除非空目录。系统关键路径禁止删除。",
         "parameters": {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "要删除的文件或目录路径"},
-                "recursive": {"type": "boolean", "description": "是否递归删除目录及其内容，默认 false"},
-                "missing_ok": {"type": "boolean", "description": "路径不存在时是否静默忽略，默认 false"},
+                "path": {"type": "string", "description": "文件或目录路径"},
+                "recursive": {"type": "boolean", "description": "递归删除目录"},
+                "missing_ok": {"type": "boolean", "description": "路径不存在时静默忽略"},
             },
             "required": ["path"],
         },

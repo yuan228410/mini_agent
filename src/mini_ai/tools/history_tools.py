@@ -111,25 +111,15 @@ _search_def = {
     "type": "function",
     "function": {
         "name": "search_history",
-        "description": (
-            "搜索历史对话记录。支持关键词全文搜索和日期范围过滤。\n\n"
-            "使用建议：\n"
-            "- 查找特定内容（bug/决策）: limit=20-50, compact=true\n"
-            "- 回顾某天工作: limit=100-500, compact=true\n"
-            "- 需要完整工具结果: compact=false\n\n"
-            "返回结果会提示总数，若有遗漏会提示加大 limit。"
-        ),
+        "description": "搜索历史对话。支持关键词和日期过滤。默认压缩模式（compact=true）。",
         "parameters": {
             "type": "object",
             "properties": {
-                "keyword": {"type": "string", "description": "搜索关键词（可选）"},
-                "date_from": {"type": "string", "description": "起始日期，格式 YYYY-MM-DD"},
-                "date_to": {"type": "string", "description": "结束日期，格式 YYYY-MM-DD"},
+                "keyword": {"type": "string", "description": "搜索关键词"},
+                "date_from": {"type": "string", "description": "起始日期 YYYY-MM-DD"},
+                "date_to": {"type": "string", "description": "结束日期 YYYY-MM-DD"},
                 "limit": {"type": "integer", "description": "最大返回条数，默认 20"},
-                "compact": {
-                    "type": "boolean",
-                    "description": "是否压缩返回（过滤工具细节，保留关键信息）。默认 true"
-                },
+                "compact": {"type": "boolean", "description": "压缩返回，默认 true"},
             },
             "required": [],
         },
@@ -199,41 +189,19 @@ _manage_def = {
     "type": "function",
     "function": {
         "name": "manage_history",
-        "description": (
-            "管理历史消息：查看、清理、删除。"
-            "支持：列出消息概览、保留最近N条删除旧消息、按关键词查找并删除匹配消息、彻底删除所有消息。"
-            "重要：confirmed=false 时只预览不删除，必须将预览结果展示给用户并等待用户明确确认后，才能传 confirmed=true 执行。"
-            "绝对不能自行传 confirmed=true，必须由用户确认。"
-        ),
+        "description": "管理历史消息。confirmed=false 只预览，必须用户确认后才能 confirmed=true。",
         "parameters": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
                     "enum": ["list", "keep_recent", "delete_keyword", "delete_all"],
-                    "description": (
-                        "list=列出消息概览，"
-                        "keep_recent=保留最近N条删除其余，"
-                        "delete_keyword=删除包含关键词的消息，"
-                        "delete_all=彻底删除所有消息"
-                    ),
+                    "description": "list/keep_recent/delete_keyword/delete_all",
                 },
-                "keep_count": {
-                    "type": "integer",
-                    "description": "keep_recent 时保留的最近消息条数",
-                },
-                "keyword": {
-                    "type": "string",
-                    "description": "delete_keyword 时匹配的关键词",
-                },
-                "confirmed": {
-                    "type": "boolean",
-                    "description": "用户确认执行删除，默认 false（先预览）",
-                },
-                "batch_size": {
-                    "type": "integer",
-                    "description": "分批删除时每批数量，默认 200",
-                },
+                "keep_count": {"type": "integer", "description": "keep_recent 时保留条数"},
+                "keyword": {"type": "string", "description": "delete_keyword 时匹配关键词"},
+                "confirmed": {"type": "boolean", "description": "用户确认执行"},
+                "batch_size": {"type": "integer", "description": "分批删除每批数量"},
             },
             "required": ["action"],
         },

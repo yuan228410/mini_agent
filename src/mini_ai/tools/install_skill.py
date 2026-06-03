@@ -29,14 +29,14 @@ definition = {
     "type": "function",
     "function": {
         "name": "install_skill",
-        "description": "安装技能到技能目录。支持两种方式：1) source 参数指定压缩包地址（URL 或本地路径，zip/tar.gz/tar.bz2）；2) content 参数直接传入技能内容（Markdown，可含 YAML frontmatter）。安装后可通过 load_skill 加载使用",
+        "description": "安装技能。source（压缩包地址）或 content（Markdown内容）二选一。",
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "技能名称，英文字母和连字符"},
-                "source": {"type": "string", "description": "技能压缩包地址（URL 或本地路径），与 content 二选一"},
-                "content": {"type": "string", "description": "技能内容（Markdown 格式，可含 YAML frontmatter），与 source 二选一"},
-                "level": {"type": "string", "enum": ["global", "user", "workspace"], "description": "安装层级：global（全局）、user（用户级，默认）、workspace（工作空间级）"},
+                "name": {"type": "string", "description": "技能名称"},
+                "source": {"type": "string", "description": "压缩包地址（URL 或本地路径）"},
+                "content": {"type": "string", "description": "技能内容（Markdown）"},
+                "level": {"type": "string", "enum": ["global", "user", "workspace"], "description": "安装层级，默认 user"},
             },
             "required": ["name"],
         },

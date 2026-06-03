@@ -11,16 +11,13 @@ definition = {
     "type": "function",
     "function": {
         "name": "search_files",
-        "description": (
-            "在指定目录中搜索文件内容（类似 grep）。"
-            "支持正则表达式、文件类型过滤、递归搜索。返回匹配行及其文件路径和行号。"
-        ),
+        "description": "搜索文件内容（类似 grep）。支持正则、文件类型过滤。path 必填，最多 50 条结果，超时 15 秒。",
         "parameters": {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "搜索模式（支持正则表达式）"},
+                "pattern": {"type": "string", "description": "搜索模式（支持正则）"},
                 "path": {"type": "string", "description": "搜索目录（必填）"},
-                "include": {"type": "string", "description": "文件名 glob 过滤，如 '*.py'、'*.ts'"},
+                "include": {"type": "string", "description": "文件名过滤，如 '*.py'"},
                 "max_results": {"type": "integer", "description": "最大返回条数，默认 50"},
             },
             "required": ["pattern"],

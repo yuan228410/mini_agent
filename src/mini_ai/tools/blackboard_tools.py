@@ -16,11 +16,11 @@ _write_def = {
     "type": "function",
     "function": {
         "name": "blackboard_write",
-        "description": "向共享黑板写入一条数据。其他 agent 可通过 blackboard_read 读取。适合传递搜索结果、分析结论、代码片段等跨 agent 共享信息。",
+        "description": "向共享黑板写入数据。相同 key 会覆盖。",
         "parameters": {
             "type": "object",
             "properties": {
-                "key": {"type": "string", "description": "数据的唯一标识，建议格式：角色_主题（如 researcher_search_result、coder_backend）"},
+                "key": {"type": "string", "description": "数据标识，建议格式：角色_主题"},
                 "value": {"type": "string", "description": "要存储的内容"},
             },
             "required": ["key", "value"],
@@ -41,7 +41,7 @@ _read_def = {
     "type": "function",
     "function": {
         "name": "blackboard_read",
-        "description": "从共享黑板读取指定 key 的数据。用于获取其他 agent 写入的结果。",
+        "description": "从共享黑板读取数据。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -67,11 +67,11 @@ _list_def = {
     "type": "function",
     "function": {
         "name": "blackboard_list",
-        "description": "列出共享黑板上的所有 key（可按前缀过滤）。",
+        "description": "列出黑板上的所有 key。",
         "parameters": {
             "type": "object",
             "properties": {
-                "prefix": {"type": "string", "description": "可选前缀过滤，默认列出全部"},
+                "prefix": {"type": "string", "description": "前缀过滤"},
             },
         },
     },

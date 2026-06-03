@@ -7,13 +7,13 @@ definition = {
     "type": "function",
     "function": {
         "name": "rename_file",
-        "description": "重命名或移动文件/目录。支持跨设备移动（自动使用 shutil.move），目标已存在时返回错误（除非 force=true）。",
+        "description": "重命名或移动文件/目录。目标已存在需 force=true 才能覆盖。",
         "parameters": {
             "type": "object",
             "properties": {
-                "src": {"type": "string", "description": "原路径（文件或目录）"},
+                "src": {"type": "string", "description": "原路径"},
                 "dst": {"type": "string", "description": "目标路径"},
-                "force": {"type": "boolean", "description": "目标已存在时是否覆盖，默认 false"},
+                "force": {"type": "boolean", "description": "覆盖已存在的目标"},
             },
             "required": ["src", "dst"],
         },

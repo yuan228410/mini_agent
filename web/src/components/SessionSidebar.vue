@@ -155,6 +155,49 @@ function closeContextMenu() {
   contextMenu.value = null
 }
 
+function copySessionId(sid: string) {
+  console.log('[SessionSidebar] copySessionId called, sid:', sid)
+  
+  // 优先使用现代 API
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(sid).then(() => {
+      console.log('[SessionSidebar] 复制成功 (clipboard API):', sid)
+    }).catch((err) => {
+      console.error('[SessionSidebar] clipboard API 失败:', err)
+      // 降级方案
+      fallbackCopy(sid)
+    })
+  } else {
+    // 降级方案
+    fallbackCopy(sid)
+  }
+  contextMenu.value = null
+}
+
+function fallbackCopy(text: string) {
+  console.log('[SessionSidebar] 使用降级方案复制')
+  const input = document.createElement('input')
+  input.value = text
+  input.style.position = 'fixed'
+  input.style.left = '-9999px'
+  document.body.appendChild(input)
+  input.select()
+  input.setSelectionRange(0, text.length)
+  
+  try {
+    const success = document.execCommand('copy')
+    if (success) {
+      console.log('[SessionSidebar] 复制成功 (execCommand):', text)
+    } else {
+      console.error('[SessionSidebar] execCommand 返回 false')
+    }
+  } catch (err) {
+    console.error('[SessionSidebar] execCommand 失败:', err)
+  }
+  
+  document.body.removeChild(input)
+}
+
 const _batchWsName = ref('')
 const batchTargetWs = ref('default')
 
@@ -498,6 +541,7 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
     <Teleport to="body">
       <div v-if="contextMenu" class="ctx-overlay" @click="closeContextMenu" @contextmenu.prevent="closeContextMenu">
         <div class="ctx-menu" :style="{ left: contextMenu.x + 'px', top: contextMenu.y + 'px' }">
+          <div class="ctx-item ctx-info" @click="copySessionId(contextMenu!.sid)">📋 复制 Session ID</div>
           <div class="ctx-item" @click="startEdit(contextMenu!.sid, getAllSessions().find(s => s.session_id === contextMenu!.sid)?.name || '')">重命名</div>
           <div class="ctx-item" @click="doExport(contextMenu!.sid)">导出 MD</div>
           <div class="ctx-item ctx-danger" @click="doDelete(contextMenu!.sid)">删除</div>
@@ -788,6 +832,8 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 .ctx-item { padding: 0.45rem 0.8rem; font-size: 0.85rem; color: var(--fg); cursor: pointer; transition: background 0.1s ease; }
 .ctx-item:hover { background: var(--bg-thinking); }
 .ctx-danger:hover { color: #e55; }
+.ctx-info { color: #888; font-size: 12px; }
+.ctx-info:hover { color: #666; background: #f5f5f5; }
 
 /* Workspace manager */
 .ws-mgr-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 200; animation: fadeIn 0.2s ease; }

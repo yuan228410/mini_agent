@@ -22,12 +22,12 @@ definition = {
     "type": "function",
     "function": {
         "name": "delete_skill",
-        "description": "删除指定技能。可指定删除的层级，如不指定则从最高优先级（workspace）开始查找并删除，找不到则逐级向上（user → global）查找",
+        "description": "删除技能。不指定 level 则从 workspace→user→global 逐级查找。",
         "parameters": {
             "type": "object",
             "properties": {
-                "name": {"type": "string", "description": "要删除的技能名称"},
-                "level": {"type": "string", "enum": ["global", "user", "workspace"], "description": "删除的层级：workspace（工作空间级）、user（用户级）、global（全局级）。不指定则从最高层级开始查找"},
+                "name": {"type": "string", "description": "技能名称"},
+                "level": {"type": "string", "enum": ["global", "user", "workspace"], "description": "删除层级"},
             },
             "required": ["name"],
         },

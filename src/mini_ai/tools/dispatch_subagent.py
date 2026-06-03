@@ -131,6 +131,7 @@ def _download_image_as_data_url(url: str) -> str | None:
     import tempfile
     import time
     from urllib.parse import urlparse
+    import requests
     
     try:
         # 从 URL 推断扩展名
@@ -150,19 +151,18 @@ def _download_image_as_data_url(url: str) -> str | None:
         timestamp = int(time.time() * 1000)
         tmp_path = Path(tempfile.gettempdir()) / f"dispatch_img_{timestamp}{ext}"
         
-        # 下载图片
+        # 下载图片（使用 requests 替代 subprocess）
         logger.info(f"[dispatch_subagent] 下载图片: {url[:60]}...")
         
-        import subprocess
-        result = subprocess.run(
-            ['curl', '-s', '-L', '-o', str(tmp_path), url],
-            capture_output=True,
-            timeout=30
-        )
-        
-        if result.returncode != 0:
-            logger.warning(f"[dispatch_subagent] 图片下载失败: {url}")
+        response = requests.get(url, timeout=30, stream=True)
+        if response.status_code != 200:
+            logger.warning(f"[dispatch_subagent] 图片下载失败: {url} (status={response.status_code})")
             return None
+        
+        # 写入临时文件
+        with open(tmp_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
         
         # 递归调用 _load_image_as_data_url 处理本地文件
         data_url = _load_image_as_data_url(str(tmp_path))
@@ -175,6 +175,9 @@ def _download_image_as_data_url(url: str) -> str | None:
         
         return data_url
         
+    except requests.RequestException as e:
+        logger.warning(f"[dispatch_subagent] 图片下载失败: {url}, {e}")
+        return None
     except Exception as e:
         logger.warning(f"[dispatch_subagent] 图片下载失败: {url}, {e}")
         return None
@@ -261,19 +264,17 @@ _BASE_DEFINITION = {
     "function": {
         "name": "dispatch_subagent",
         "description": (
-            "派遣子代理执行独立任务。适用场景：并行搜索多个信息源、"
-            "独立完成代码修改、分析单一文件。子代理独立运行，完成后返回结果摘要。\n"
-            "可用子代理类型：\n"
-            "{subagent_list}"
+            "派遣子代理执行独立任务。子代理有独立的工具白名单。\n"
+            "可用类型：\n{subagent_list}"
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "type": {"type": "string", "description": "子代理类型"},
-                "task": {"type": "string", "description": "委派给子代理的任务描述"},
+                "task": {"type": "string", "description": "任务描述"},
                 "inputs": {
                     "type": "object",
-                    "description": "可选：前置结果引用，key 为引用名称，value 为前置任务的结果文本。在 task 中用 {key} 引用",
+                    "description": "可选：前置结果引用，在 task 中用 {key} 引用",
                     "additionalProperties": {"type": "string"},
                 },
             },
