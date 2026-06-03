@@ -3,10 +3,11 @@ import asyncio
 import time
 
 class WebDisplay:
-    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = ""):
+    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = "", agent_id: str = ""):
         self.queue = queue
         self.loop = loop
         self.session_id = session_id  # 会话ID，用于前端路由工作流事件
+        self.agent_id = agent_id  # Agent ID，用于前端分组消息
         self._teammate = ""
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
@@ -22,6 +23,9 @@ class WebDisplay:
     def set_teammate(self, name: str):
         self._teammate = name
 
+    def set_agent_id(self, agent_id: str):
+        self.agent_id = agent_id
+
     def _push(self, event: str, data: dict | None = None):
         from mini_ai.llm import get_usage
         usage = get_usage()
@@ -30,8 +34,11 @@ class WebDisplay:
         # 自动注入 session_id（用于前端路由工作流事件到对应会话）
         if self.session_id:
             data["session_id"] = self.session_id
-        data["prompt_tokens"] = usage["prompt_tokens"]
-        data["completion_tokens"] = usage["completion_tokens"]
+        # 自动注入 agent_id（用于前端分组消息）
+        if self.agent_id:
+            data["agent_id"] = self.agent_id
+        data["promptTokens"] = usage["prompt_tokens"]
+        data["completionTokens"] = usage["completion_tokens"]
         self.loop.call_soon_threadsafe(
             lambda: self.queue.put_nowait({"event": event, "data": data})
         )
@@ -93,6 +100,8 @@ class WebDisplay:
         self._push("text", data)
 
     def text_end(self, full_text: str | None = None):
+        # 🔧 修复：先保存 _stream_buf，再清空（避免中断时丢失）
+        saved_buf = self._stream_buf
         if full_text:
             self._stream_buf = ""
             self._streaming = True
@@ -100,9 +109,14 @@ class WebDisplay:
             if self._teammate:
                 data["teammate"] = self._teammate
             self._push("text", data)
+        else:
+            # 如果没有 full_text，说明是中断或异常结束，保留 saved_buf 供上层保存
+            pass
         self._stream_buf = ""
         self._streaming = False
         self._had_thinking = False
+        # 返回保存的内容，供中断时使用
+        return saved_buf
 
     def tool_call_start(self, name: str, args_summary: str, tool_call_id: str = ""):
         self._tool_start_time = time.monotonic()

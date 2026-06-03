@@ -616,10 +616,19 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
                 messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
                 comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
-                # 🔧 关键修复：发送 error 事件后继续流程，确保前端收到 done 事件
-                loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "error", "data": {"error": err_text, "session_id": session_key}}))
                 logger.error(f"[Web] {err_text} sid={comp_key}")
-                # 继续执行，确保 complete 事件被发送
+                # 🔧 不发送 error 事件，直接让 complete 事件携带错误信息，避免前端提前重置状态
+                usage = get_usage()
+                loop.call_soon_threadsafe(lambda: queue.put_nowait({
+                    "event": "complete", 
+                    "data": {
+                        "prompt_tokens": usage["prompt_tokens"], 
+                        "completion_tokens": usage["completion_tokens"],
+                        "error": err_text,
+                        "session_id": session_key
+                    }
+                }))
+                return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
             if msg and msg.get("content") and not any(
                 m.get("role") == "assistant" and m.get("content") == msg["content"]
                 for m in messages[-3:]
@@ -667,6 +676,11 @@ async def create_session(body: dict):
     set_session(cache_key)
     _inject_todos(_SESSIONS[cache_key])
     _update_meta_cache(username, sid, workspace, _SESSIONS[cache_key])
+    
+    # 持久化到数据库，避免缓存淘汰后会话丢失
+    comp = _get_or_create_components(username, sid, base, workspace)
+    comp["history_db"].append(workspace, sid, "system", system_prompt, metadata=json.dumps({"name": "新会话"}))
+    
     return {"session_id": sid}
 
 @router.get("/sessions")
@@ -695,12 +709,18 @@ async def list_sessions(username: str = Query(...), workspace: str | None = Quer
         _META_CACHE[cache_key] = meta
         # 跳过空会话（只有 system 消息，无实际对话）
         sessions.append(meta)
+    # 默认工作空间无会话时，自动创建一个空会话
     if not sessions and (workspace is None or workspace == "default"):
         sid = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
         cache_key = _cache_key(username, workspace, sid)
         system_prompt = _build_system_prompt(username, sid, base, workspace)
-        _SESSIONS[cache_key] = [{"role": "system", "content": system_prompt, "name": "新会话", "timestamp": now_ts()}]
+        _SESSIONS[cache_key] = [{"role": "system", "content": system_prompt, "name": "新会话"}]
         _update_meta_cache(username, sid, workspace, _SESSIONS[cache_key])
+        
+        # 持久化到数据库
+        comp = _get_or_create_components(username, sid, base, workspace)
+        comp["history_db"].append(workspace or "default", sid, "system", system_prompt, metadata=json.dumps({"name": "新会话"}))
+        
         sessions.append(_build_meta(sid, _SESSIONS[cache_key], username, workspace))
         logger.info(f"[session] default 工作空间无会话，自动创建 sid={sid}")
     sessions.sort(key=lambda s: s.get("updated_at", "") or s.get("created_at", ""), reverse=True)
@@ -974,12 +994,17 @@ async def chat_ws_endpoint(ws: WebSocket):
 
                     ws_name = data.get("workspace")
                     if session_id:
+                        # 有 session_id，尝试加载（不自动创建）
                         sid, _ = _get_or_create_session(username, session_id, workspace=ws_name, create=False)
                         if _ is None:
-                            sid, _ = _get_or_create_session(username, session_id, workspace=ws_name)
+                            # 会话不存在，返回错误
+                            await _send({"event": "error", "data": {"error": f"会话 {session_id} 不存在", "session_id": session_id}})
+                            continue
                     elif (ws_name or "default") == "default":
+                        # default 工作空间且无 session_id，自动创建
                         sid, _ = _get_or_create_session(username, session_id, workspace=ws_name)
                     else:
+                        # 非 default 工作空间且无 session_id，返回错误
                         await _send({"event": "error", "data": {"error": "非 default 工作空间请先新建会话"}})
                         continue
                     task_key = _cache_key(username, ws_name, sid)

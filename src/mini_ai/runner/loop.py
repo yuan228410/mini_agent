@@ -67,8 +67,22 @@ def run_tool_loop(
     while state.should_continue():
         # 检查中断
         if abort_event and abort_event.is_set():
-            if display:
-                display.text_end()
+            # 🔧 修复：中断时保存已生成的内容
+            if display and hasattr(display, 'text_end'):
+                partial_content = display.text_end()  # 获取已流式输出的内容
+                if partial_content:
+                    partial_msg = {
+                        "role": "assistant",
+                        "content": partial_content,
+                        "timestamp": now_ts(),
+                    }
+                    messages.append(partial_msg)
+                    if executor.persist_fn:
+                        executor.persist_fn(partial_msg)
+                    logger.info(f"[runner] 中断时保存部分内容: {len(partial_content)} 字符")
+            else:
+                if display:
+                    display.text_end()
             return None, state.spawned_teammate
         
         state.increment_turn()
@@ -79,12 +93,34 @@ def run_tool_loop(
             
             # 检查是否需要中断
             if abort_event and abort_event.is_set():
-                if display:
-                    display.text_end()
+                # 🔧 修复：中断时保存已生成的内容
+                if display and hasattr(display, 'text_end'):
+                    partial_content = display.text_end()  # 获取已流式输出的内容
+                    if partial_content:
+                        partial_msg = {
+                            "role": "assistant",
+                            "content": partial_content,
+                            "timestamp": now_ts(),
+                        }
+                        messages.append(partial_msg)
+                        if executor.persist_fn:
+                            executor.persist_fn(partial_msg)
+                        logger.info(f"[runner] 中断时保存部分内容: {len(partial_content)} 字符")
+                else:
+                    if display:
+                        display.text_end()
                 return None, state.spawned_teammate
             
             # 无工具调用，返回最终响应
             if not msg or "tool_calls" not in msg:
+                # 🔧 修复：如果是中断的消息，保存部分内容
+                if msg and msg.get("interrupted"):
+                    if msg.get("content"):
+                        messages.append(msg)
+                        if executor.persist_fn:
+                            executor.persist_fn(msg)
+                        logger.info(f"[runner] 中断时保存部分内容: {len(msg['content'])} 字符")
+                    return None, state.spawned_teammate
                 executor.finalize_response(msg, messages)
                 return msg, state.spawned_teammate
             

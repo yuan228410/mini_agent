@@ -121,8 +121,19 @@ def _create_workspace_session(
     ws_mgr: WorkspaceManager,
     username: str = "default",
     session_id: str | None = None,
+    force_new_session: bool = False,
 ) -> tuple[SessionContext, list[dict]]:
-    """为指定 workspace 创建完整的会话状态，返回 (session, messages, cmd_handler)。"""
+    """为指定 workspace 创建完整的会话状态，返回 (session, messages, cmd_handler)。
+    
+    Args:
+        ws: 工作空间对象
+        disp: 显示器
+        app_ctx: 应用上下文
+        ws_mgr: 工作空间管理器
+        username: 用户名
+        session_id: 指定的会话ID（None 表示自动选择）
+        force_new_session: 是否强制创建新会话（仅当 session_id=None 时有效）
+    """
     import uuid
     ws_dir = ws.ws_dir
     ws_name = ws.name
@@ -166,20 +177,34 @@ def _create_workspace_session(
     # 先创建 history_db（用于检查会话是否存在）
     history_db = HistoryDBPool.get(username)  # 使用指定用户
     
-    # 生成会话 ID（如果未指定）
-    if not session_id:
-        session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
-        logger.info(f"[会话] 创建新会话: {session_id}")
-        disp.info(f"创建新会话: {session_id}")
-    else:
+    # 会话 ID 决策逻辑
+    if session_id:
         # 指定了会话ID，检查是否存在
         existing = history_db.load_session(ws_name, session_id, limit=1)
         if existing:
             logger.info(f"[会话] 恢复会话: {session_id}")
             disp.info(f"恢复会话: {session_id}")
         else:
-            # 不存在，创建新会话（使用指定的ID）
-            logger.info(f"[会话] 会话 {session_id} 不存在，创建新会话")
+            # 指定的会话不存在，报错退出
+            logger.error(f"[会话] 会话 {session_id} 不存在")
+            disp.error(f"错误：会话 {session_id} 不存在")
+            raise ValueError(f"会话 {session_id} 不存在")
+    elif force_new_session:
+        # 强制创建新会话
+        session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
+        logger.info(f"[会话] 创建新会话: {session_id}")
+        disp.info(f"创建新会话: {session_id}")
+    else:
+        # 未指定会话ID，尝试使用最新会话
+        latest_sid = history_db.get_latest_session(ws_name)
+        if latest_sid:
+            session_id = latest_sid
+            logger.info(f"[会话] 恢复最新会话: {session_id}")
+            disp.info(f"恢复最新会话: {session_id}")
+        else:
+            # 没有任何会话，创建新的
+            session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
+            logger.info(f"[会话] 创建新会话: {session_id}")
             disp.info(f"创建新会话: {session_id}")
     
     # 会话级记忆目录（与 Web 端一致）
@@ -381,7 +406,8 @@ def main():
     session, messages = _create_workspace_session(
         ws, disp, _app_ctx, ws_mgr,
         username=args.user,
-        session_id=None if args.new_session else args.session,
+        session_id=args.session,
+        force_new_session=args.new_session,
     )
 
     # 从 session 解包常用变量

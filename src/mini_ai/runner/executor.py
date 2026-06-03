@@ -115,8 +115,19 @@ class ToolExecutor:
         
         for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
             if abort_event and abort_event.is_set():
-                if self.display:
-                    self.display.text_end()
+                # 🔧 修复：中断时返回已生成的内容（如果有）
+                if self.display and hasattr(self.display, 'text_end'):
+                    partial_content = self.display.text_end()
+                    if partial_content:
+                        # 返回部分消息，让上层决定是否保存
+                        return {
+                            "role": "assistant",
+                            "content": partial_content,
+                            "interrupted": True,
+                        }
+                else:
+                    if self.display:
+                        self.display.text_end()
                 return None
             
             chunk_type = chunk.get("type")

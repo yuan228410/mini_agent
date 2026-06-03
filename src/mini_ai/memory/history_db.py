@@ -731,6 +731,23 @@ class HistoryDB:
             for ws, sid, count, updated_at in rows
         ]
     
+    def get_latest_session(self, workspace: str) -> Optional[str]:
+        """获取指定工作空间最新的会话ID
+        
+        Args:
+            workspace: 工作空间名称
+        
+        Returns:
+            最新的会话ID，如果没有会话则返回 None
+        """
+        with self._lock:
+            self._ensure_conn()
+            row = self._conn.execute(
+                "SELECT session_id FROM messages WHERE workspace=? ORDER BY id DESC LIMIT 1",
+                (workspace,),
+            ).fetchone()
+            return row[0] if row else None
+    
     def get_session_name(self, workspace: str, session_id: str) -> Optional[str]:
         """获取会话名称（从第一条 system 消息的 metadata 中提取）
         
