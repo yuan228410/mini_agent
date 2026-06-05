@@ -595,7 +595,15 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     bus=comp.get("bus"),
                 )
                 _touch_session(session_key)
-                logger.debug(f"[Web] run_tool_loop done key={session_key} msg={'yes' if msg else 'None'} content={len(msg.get('content') or '') if msg else 0}")
+                
+                # 🔧 诊断日志：详细记录 msg 状态
+                if msg:
+                    content_len = len(msg.get("content") or "")
+                    has_tool_calls = bool(msg.get("tool_calls"))
+                    logger.debug(f"[Web] run_tool_loop done key={session_key} msg=exists content={content_len} tool_calls={has_tool_calls}")
+                else:
+                    logger.warning(f"[Web⚠] run_tool_loop done key={session_key} msg=None")
+
 
                 # ── 兜底：run_tool_loop 结束后等待仍在工作的队友 ──
                 # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只处理 loop 退出后到达的消息
@@ -659,13 +667,28 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         if tc_id and tc_id in tool_results_map:
                             tc_copy["_result"] = tool_results_map[tc_id]  # 存储完整结果，不再截断
                         enriched_tcs.append(tc_copy)
-                    am_meta = {}
-                    if am.get("thinking"):
-                        am_meta["thinking"] = am["thinking"]
-                    am_meta["tool_calls"] = enriched_tcs
-                    comp["history_db"].append(workspace or "default", comp_key, "assistant", am.get("content") or "", metadata=json.dumps(am_meta))
-                if not msg or not msg.get("content"):
-                    err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
+                    # 🔧 修复：只在有 content 时才写入历史记录（避免写入空的 assistant 消息）
+                    if am.get("content"):
+                        am_meta = {}
+                        if am.get("thinking"):
+                            am_meta["thinking"] = am["thinking"]
+                        am_meta["tool_calls"] = enriched_tcs
+                        comp["history_db"].append(workspace or "default", comp_key, "assistant", am.get("content"), metadata=json.dumps(am_meta))
+                if not msg or (not msg.get("content") and not msg.get("tool_calls")):
+                    # 🔧 诊断：记录 msg 状态
+                    if msg is None:
+                        err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
+                        logger.error(f"[Web⚠] msg=None, 可能是流式错误或中断")
+                    elif msg.get("interrupted"):
+                        err_text = "⏸ 生成已中断"
+                        logger.info(f"[Web] 用户中断生成 sid={comp_key}")
+                    elif msg.get("error"):
+                        err_text = f"⚠ {msg.get('error')}"
+                        logger.error(f"[Web⚠] LLM 错误: {msg.get('error')}")
+                    else:
+                        err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
+                        logger.error(f"[Web⚠] msg 存在但无 content/tool_calls, msg keys: {list(msg.keys())}")
+                    
                     messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
                     comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
                     logger.error(f"[Web] {err_text} sid={comp_key}")
@@ -709,7 +732,8 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
                     
                 # 🔧 修复：正常流程的消息处理（之前被错误地放在 return 后面）
-                if msg and msg.get("content") and not any(
+                # 🔧 修复：检查 content 是否非空，而不是检查是否存在（空字符串也会通过 msg.get("content") 检查）
+                if msg and msg.get("content") and msg["content"].strip() and not any(
                     m.get("role") == "assistant" and m.get("content") == msg["content"]
                     for m in messages[-3:]
                 ):

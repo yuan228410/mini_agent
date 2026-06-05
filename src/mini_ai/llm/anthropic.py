@@ -527,5 +527,12 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
 
     msg = _anthropic_to_openai_msg(blocks, "")
     elapsed = time.monotonic() - t0
+    
+    # 🔧 诊断日志：记录 blocks 内容，帮助排查"有 tokens 但无 content"的问题
+    if not blocks and output_tokens > 0:
+        logger.warning(f"[Anth⚠] 流式响应异常: output_tokens={output_tokens} 但 blocks 为空")
+    elif blocks:
+        logger.debug(f"[Anth] blocks 数量: {len(blocks)}, 类型: {[b.get('type') for b in blocks]}")
+    
     logger.info(f"[Anth←] (stream) | {elapsed:.1f}s | tok={input_tokens}+{output_tokens}")
     yield {"type": "done", "msg": msg}

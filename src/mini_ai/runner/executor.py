@@ -172,6 +172,13 @@ class ToolExecutor:
                     break
                 elif chunk_type == "done":
                     msg = chunk.get("msg")
+                    # 🔧 诊断日志：记录 msg 内容
+                    if msg:
+                        content_preview = (msg.get("content") or "")[:100]
+                        has_tool_calls = bool(msg.get("tool_calls"))
+                        logger.debug(f"[Executor] done chunk: content={content_preview}, tool_calls={has_tool_calls}")
+                    else:
+                        logger.warning(f"[Executor⚠] done chunk 但 msg 为 None, last_usage={last_usage}")
             
             # 如果成功完成，返回结果
             if stream_error is None:
@@ -209,14 +216,24 @@ class ToolExecutor:
                 if self.display:
                     self.display.text_end()
                     self.display.tool_result("error", f"⚠ LLM 错误: {stream_error}", elapsed=0)
-                return None
+                # 返回带错误标记的消息
+                return {
+                    "role": "assistant",
+                    "content": None,
+                    "error": stream_error,
+                }
         
         # 所有重试都失败
         logger.error(f"[LLM✗] 流式错误(已重试{max_retries}次): {last_error}")
         if self.display:
             self.display.text_end()
             self.display.tool_result("error", f"⚠ LLM 错误: {last_error}", elapsed=0)
-        return None
+        # 返回带错误标记的消息
+        return {
+            "role": "assistant",
+            "content": None,
+            "error": str(last_error),
+        }
     
     def execute_tools(
         self,
