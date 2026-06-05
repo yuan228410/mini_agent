@@ -681,6 +681,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
       {
         const m = s.messages[s.messages.length - 1]
         if (m) m.streaming = false
+        _updateUI(s)
       }
       break
     case 'mode_change':
@@ -733,6 +734,16 @@ function _processEvent(s: SessionState, event: WsEvent) {
           }
         }
       }
+      break
+    case 'info':
+      // 显示系统提示信息（如压缩结果）
+      s.messages.push({
+        role: 'assistant',
+        content: `ℹ️ ${event.data.message || '系统提示'}`,
+        timestamp: _localTs(),
+        streaming: false
+      })
+      _updateUI(s)
       break
     case 'error':
       s._currentContent += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`

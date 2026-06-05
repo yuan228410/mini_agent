@@ -1128,9 +1128,12 @@ async def chat_ws_endpoint(ws: WebSocket):
                             after = len([m for m in messages if m["role"] != "system"])
                             
                             await _send({"event": "info", "data": {"message": f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条）", "session_id": sid}})
+                            # 🔧 修复：发送 done 事件结束流式状态
+                            await _send({"event": "done", "data": {"session_id": sid}})
                         except Exception as e:
                             logger.error(f"[Web] /compact 失败: {e}", exc_info=True)
                             await _send({"event": "error", "data": {"error": f"压缩失败: {str(e)}"}})
+                            await _send({"event": "done", "data": {"session_id": sid}})
                         
                         continue
                     
