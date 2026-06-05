@@ -1,9 +1,11 @@
 """聊天接口 — WebSocket 模式，多用户，HistoryDB 持久化，多会话并行"""
 import asyncio
+import atexit
 import json
 import threading
 import uuid
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -23,6 +25,14 @@ router = APIRouter()
 
 _sessions_lock = threading.RLock()
 
+# 线程池配置（限制并发数）
+_MAX_CONCURRENT_SESSIONS = 10  # 最大并发会话数
+_executor = ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_SESSIONS, thread_name_prefix="chat-")
+_concurrent_semaphore = threading.Semaphore(_MAX_CONCURRENT_SESSIONS)
+
+# 注册进程退出时的清理函数
+atexit.register(lambda: _executor.shutdown(wait=True, cancel_futures=False))
+
 # 三层缓存 key = f"{username}:{workspace}:{sid}"
 # 所有缓存 dict 统一使用此 key 格式，与存储路径对齐
 
@@ -41,6 +51,7 @@ _META_CACHE: dict[str, dict] = {}
 _SESSION_COMPONENTS: dict[str, dict] = {}
 _SESSION_PLAN_MODE: dict[str, bool] = {}
 _TEAM_COMPONENTS: dict[str, dict] = {}
+_SESSION_REFS: dict[str, int] = {}  # 引用计数，防止淘汰正在使用的会话
 
 _MAX_CACHED_SESSIONS = 20  # 降低缓存上限，减少资源占用
 
@@ -63,9 +74,21 @@ def _touch_session(cache_key: str):
     with _sessions_lock:  # 整个淘汰操作加锁，避免并发修改
         _SESSION_ACCESS[cache_key] = time.monotonic()
         if len(_SESSION_ACCESS) > _MAX_CACHED_SESSIONS:
-            # 淘汰最老的 5 个会话
-            oldest = sorted(_SESSION_ACCESS, key=_SESSION_ACCESS.get)[:len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5]
-            for k in oldest:
+            # 淘汰最老的 5 个会话（跳过正在使用的）
+            candidates = [(k, _SESSION_ACCESS.get(k, 0)) for k in list(_SESSION_ACCESS.keys())]
+            candidates.sort(key=lambda x: x[1])  # 按访问时间排序
+            
+            evicted = 0
+            for k, _ in candidates:
+                if evicted >= len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5:
+                    break
+                # 跳过正在使用的会话（引用计数 > 0）
+                if _SESSION_REFS.get(k, 0) > 0:
+                    continue
+                # 跳过正在生成的会话
+                if _SESSION_STATUS.get(k) == "generating":
+                    continue
+                    
                 comp = _SESSION_COMPONENTS.pop(k, None)
                 if comp:
                     _cleanup_session_components(comp)
@@ -75,7 +98,12 @@ def _touch_session(cache_key: str):
                 _SESSION_MODELS.pop(k, None)
                 _SESSION_LOCKS.pop(k, None)
                 _SESSION_ACCESS.pop(k, None)
-            logger.info(f"[Web] 淘汰 {len(oldest)} 个非活跃会话缓存，当前缓存数: {len(_SESSION_ACCESS)}")
+                _SESSION_REFS.pop(k, None)
+                _SESSION_ABORTS.pop(k, None)  # 清理 abort event
+                evicted += 1
+            
+            if evicted > 0:
+                logger.info(f"[Web] 淘汰 {evicted} 个非活跃会话缓存，当前缓存数: {len(_SESSION_ACCESS)}")
 
 def _ws_key(username: str, workspace: str | None) -> str:
     return f"{username}:{workspace or 'default'}"
@@ -235,13 +263,15 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
     
     # 创建团队组件（也在锁内）
     wk = _ws_key(username, workspace)
-    if wk not in _TEAM_COMPONENTS and ws_dir:
-        from ...team import MessageBus, TeammateManager, Blackboard
-        team_dir = ws_dir / ".team"
-        bus = MessageBus(team_dir / "inbox")
-        team_mgr = TeammateManager(team_dir=team_dir, bus=bus, project_dir=ws_dir)
-        bb = Blackboard(persist_path=team_dir / "blackboard.json")
-        _TEAM_COMPONENTS[wk] = {"bus": bus, "team_mgr": team_mgr, "blackboard": bb}
+    if ws_dir:
+        # 再次检查，因为可能在等待锁期间被其他线程创建
+        if wk not in _TEAM_COMPONENTS:
+            from ...team import MessageBus, TeammateManager, Blackboard
+            team_dir = ws_dir / ".team"
+            bus = MessageBus(team_dir / "inbox")
+            team_mgr = TeammateManager(team_dir=team_dir, bus=bus, project_dir=ws_dir)
+            bb = Blackboard(persist_path=team_dir / "blackboard.json")
+            _TEAM_COMPONENTS[wk] = {"bus": bus, "team_mgr": team_mgr, "blackboard": bb}
     
     team_comp = _TEAM_COMPONENTS.get(wk, {})
     components["bus"] = team_comp.get("bus")
@@ -411,6 +441,9 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             if len(existing) >= 1:
                 # 从 meta.json 恢复模型选择（覆盖内存，因为可能跨进程）
                 _restore_session_model(base, sid, cache_key)
+                # 增加引用计数
+                _SESSION_REFS[cache_key] = _SESSION_REFS.get(cache_key, 0) + 1
+                _touch_session(cache_key)  # 在锁内调用
                 return sid, existing
 
         # 尝试从数据库加载
@@ -424,6 +457,9 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
             _SESSIONS[cache_key] = loaded
             _update_meta_cache(username, sid, workspace, loaded)
             _restore_session_model(base, sid, cache_key)
+            # 增加引用计数
+            _SESSION_REFS[cache_key] = _SESSION_REFS.get(cache_key, 0) + 1
+            _touch_session(cache_key)  # 在锁内调用
             return sid, loaded
 
         # 不存在且不允许创建
@@ -438,9 +474,11 @@ def _get_or_create_session(username: str, session_id: str | None, base: Path | N
         prompt = _build_system_prompt(username, sid, base, workspace)
         _SESSIONS[cache_key] = [{"role": "system", "content": prompt, "name": "新会话", "timestamp": now_ts()}]
         _update_meta_cache(username, sid, workspace, _SESSIONS[cache_key])
-    logger.debug(f"[perf] _get_or_create_session sid={sid} ws={workspace} create={create} time={time.time()-_t0:.3f}s")
-    _touch_session(cache_key)
-    return sid, _SESSIONS[cache_key]
+        # 增加引用计数
+        _SESSION_REFS[cache_key] = _SESSION_REFS.get(cache_key, 0) + 1
+        _touch_session(cache_key)  # 在锁内调用
+        logger.debug(f"[perf] _get_or_create_session sid={sid} ws={workspace} create={create} time={time.time()-_t0:.3f}s")
+        return sid, _SESSIONS[cache_key]
 
 def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          messages: list[dict], tools: list[dict] | None = None,
@@ -449,134 +487,159 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                          session_key: str = "",
                          username: str = "",
                          workspace: str | None = None) -> tuple:
-    # 设置 session_id 到 contextvars（用于日志跟踪）
-    from ...logger import set_session_id
-    sid = session_key.split(":")[-1] if ":" in session_key else session_key
-    set_session_id(sid)
+    # 获取信号量（限制并发）
+    acquired = _concurrent_semaphore.acquire(timeout=30.0)
+    if not acquired:
+        logger.error(f"[Web] 获取并发信号量超时 session_key={session_key}")
+        loop.call_soon_threadsafe(lambda: queue.put_nowait({
+            "event": "error",
+            "data": {"error": "服务器繁忙，请稍后重试", "session_id": session_key}
+        }))
+        return None, {}
     
-    with session_lock:
-        _SESSION_STATUS[session_key] = "generating"
-        logger.debug(f"[Web] _run_tool_loop_sync start key={session_key} workspace={workspace}")
-        try:
-            from ...tools.update_todos import set_session
-            set_session(session_key)
+    try:
+        # 设置 session_id 到 contextvars（用于日志跟踪）
+        from ...logger import set_session_id
+        sid = session_key.split(":")[-1] if ":" in session_key else session_key
+        set_session_id(sid)
+        
+        with session_lock:
+            with _sessions_lock:
+                _SESSION_STATUS[session_key] = "generating"
+            logger.debug(f"[Web] _run_tool_loop_sync start key={session_key} workspace={workspace}")
+            try:
+                from ...tools.update_todos import set_session
+                set_session(session_key)
 
-            base = _resolve_base(username, workspace)
-            # session_key = f"{username}:{workspace}:{sid}", 取最后一段为 sid
-            comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
-            comp = _get_or_create_components(username, comp_key, base, workspace)
-            register_memory_tools(comp["store"])
-            register_history_tools(comp["history_db"], workspace or "default")
-            register(comp["skill_loader"])
-            if comp.get("project_path"):
-                from ...tools import set_project_path
-                set_project_path(comp["project_path"])
-            if comp.get("bus") and comp.get("team_mgr"):
-                register_team(comp["bus"], comp["team_mgr"])
-            if comp.get("blackboard"):
-                workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
-                register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
+                base = _resolve_base(username, workspace)
+                # session_key = f"{username}:{workspace}:{sid}", 取最后一段为 sid
+                comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
+                comp = _get_or_create_components(username, comp_key, base, workspace)
+                register_memory_tools(comp["store"])
+                register_history_tools(comp["history_db"], workspace or "default")
+                register(comp["skill_loader"])
+                if comp.get("project_path"):
+                    from ...tools import set_project_path
+                    set_project_path(comp["project_path"])
+                if comp.get("bus") and comp.get("team_mgr"):
+                    register_team(comp["bus"], comp["team_mgr"])
+                if comp.get("blackboard"):
+                    workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
+                    register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
 
-            if tools is None:
-                tools = _lead_tool_defs()
+                if tools is None:
+                    tools = _lead_tool_defs()
 
-            if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
-                messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
+                if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
+                    messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 
-            disp = WebDisplay(queue, loop, session_id=comp_key)
-            # 注册 display 到全局 registry，供 workflow 等工具使用
-            from ...tools import _registry
-            _registry.register_display(disp)
-            
-            if comp.get("team_mgr"):
-                comp["team_mgr"].set_display(disp)
-            plan_mode = _SESSION_PLAN_MODE.get(session_key, False)
-            if plan_mode:
-                tools = []
-            cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
-            ctx = RequestContext(model_config=cfg, display=disp)
-
-            user_msgs = [m for m in messages if m["role"] == "user"]
-            if user_msgs:
-                last_user = user_msgs[-1]
-                user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
-                comp["history_db"].append(workspace or "default", comp_key, "user", last_user.get("content", ""), metadata=json.dumps(user_meta) if user_meta else "")
-
-            if len(user_msgs) == 1 and messages[0].get("name", "") in ("", "新会话"):
-                # 处理多模态消息（content 可能是 list）
-                first_content = user_msgs[0].get("content", "")
-                if isinstance(first_content, list):
-                    text_parts = [p.get("text", "") for p in first_content if isinstance(p, dict) and p.get("type") == "text"]
-                    auto_name = " ".join(text_parts)[:50]
-                else:
-                    auto_name = first_content[:50]
+                disp = WebDisplay(queue, loop, session_id=comp_key)
+                # 注册 display 到全局 registry，供 workflow 等工具使用
+                from ...tools import _registry
+                _registry.register_display(disp)
                 
-                if auto_name:
-                    messages[0]["name"] = auto_name
-                    _save_session_name(base, comp_key, auto_name)
+                if comp.get("team_mgr"):
+                    comp["team_mgr"].set_display(disp)
+                with _sessions_lock:
+                    plan_mode = _SESSION_PLAN_MODE.get(session_key, False)
+                
+                if plan_mode:
+                    tools = []
+                cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+                ctx = RequestContext(model_config=cfg, display=disp)
 
-            reset_usage()
-            logger.debug(f"[Web] run_tool_loop start key={session_key} plan={plan_mode} tools={len(tools)}")
-            _deferred_assistant = []
+                user_msgs = [m for m in messages if m["role"] == "user"]
+                if user_msgs:
+                    last_user = user_msgs[-1]
+                    user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
+                    comp["history_db"].append(workspace or "default", comp_key, "user", last_user.get("content", ""), metadata=json.dumps(user_meta) if user_meta else "")
 
-            def _persist(m):
-                if m["role"] == "tool":
-                    comp["history_db"].append(workspace or "default", comp_key, "tool", m.get("content", ""), metadata=json.dumps({"name": m.get("name", ""), "tool_call_id": m.get("tool_call_id", "")}))
-                elif m["role"] == "assistant":
-                    if m.get("tool_calls"):
-                        _deferred_assistant.append(m)
+                if len(user_msgs) == 1 and messages[0].get("name", "") in ("", "新会话"):
+                    # 处理多模态消息（content 可能是 list）
+                    first_content = user_msgs[0].get("content", "")
+                    if isinstance(first_content, list):
+                        text_parts = [p.get("text", "") for p in first_content if isinstance(p, dict) and p.get("type") == "text"]
+                        auto_name = " ".join(text_parts)[:50]
                     else:
-                        asst_meta = {}
-                        if m.get("thinking"):
-                            asst_meta["thinking"] = m["thinking"]
-                        comp["history_db"].append(workspace or "default", comp_key, "assistant", m.get("content", ""), metadata=json.dumps(asst_meta) if asst_meta else "")
+                        auto_name = first_content[:50]
+                    
+                    if auto_name:
+                        messages[0]["name"] = auto_name
+                        _save_session_name(base, comp_key, auto_name)
 
-            msg, _ = run_tool_loop(
-                messages, tools,
-                streaming=STREAMING,
-                display=disp,
-                inject_fn=_inject_todos,
-                abort_event=abort_event,
-                max_turns=max_turns,
-                ctx=ctx,
-                persist_fn=_persist,
-                bus=comp.get("bus"),
-            )
-            _touch_session(session_key)
-            logger.debug(f"[Web] run_tool_loop done key={session_key} msg={'yes' if msg else 'None'} content={len(msg.get('content') or '') if msg else 0}")
+                reset_usage()
+                logger.debug(f"[Web] run_tool_loop start key={session_key} plan={plan_mode} tools={len(tools)}")
+                _deferred_assistant = []
 
-            # ── 兜底：run_tool_loop 结束后等待仍在工作的队友 ──
-            # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只处理 loop 退出后到达的消息
-            bus = comp.get("bus")
-            team_mgr = comp.get("team_mgr")
-            if bus and team_mgr:
-                from ...config import TIMEOUTS
+                def _persist(m):
+                    if m["role"] == "tool":
+                        comp["history_db"].append(workspace or "default", comp_key, "tool", m.get("content", ""), metadata=json.dumps({"name": m.get("name", ""), "tool_call_id": m.get("tool_call_id", "")}))
+                    elif m["role"] == "assistant":
+                        if m.get("tool_calls"):
+                            _deferred_assistant.append(m)
+                        else:
+                            asst_meta = {}
+                            if m.get("thinking"):
+                                asst_meta["thinking"] = m["thinking"]
+                            comp["history_db"].append(workspace or "default", comp_key, "assistant", m.get("content", ""), metadata=json.dumps(asst_meta) if asst_meta else "")
 
-                def _inject_inbox(inbox_msgs, label="兜底"):
-                    from ...team.loop import format_inbox_messages
-                    inbox_text = format_inbox_messages(inbox_msgs)
-                    if not inbox_text:
-                        return False
-                    messages.append({"role": "user", "content": inbox_text, "timestamp": now_ts()})
-                    messages.append({"role": "user", "content": "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。", "timestamp": now_ts()})
-                    comp["history_db"].append(workspace or "default", comp_key, "user", inbox_text)
-                    logger.info(f"[Web-Team] {label}回禀注入，继续 run_tool_loop")
-                    return True
+                msg, _ = run_tool_loop(
+                    messages, tools,
+                    streaming=STREAMING,
+                    display=disp,
+                    inject_fn=_inject_todos,
+                    abort_event=abort_event,
+                    max_turns=max_turns,
+                    ctx=ctx,
+                    persist_fn=_persist,
+                    bus=comp.get("bus"),
+                )
+                _touch_session(session_key)
+                logger.debug(f"[Web] run_tool_loop done key={session_key} msg={'yes' if msg else 'None'} content={len(msg.get('content') or '') if msg else 0}")
 
-                lead_wait = TIMEOUTS.get("lead_wait", 300)
-                poll_interval = TIMEOUTS.get("lead_poll_interval", 5)
-                waited = 0
-                while waited < lead_wait:
-                    if abort_event and abort_event.is_set():
-                        break
-                    with team_mgr.lock:
-                        has_working = any(m.get("status") == "working" for m in team_mgr.config.get("members", []))
-                    if not has_working:
-                        break
-                    time.sleep(poll_interval)
-                    waited += poll_interval
-                    inbox = bus.read_inbox("lead")
-                    if inbox and _inject_inbox(inbox):
+                # ── 兜底：run_tool_loop 结束后等待仍在工作的队友 ──
+                # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只处理 loop 退出后到达的消息
+                bus = comp.get("bus")
+                team_mgr = comp.get("team_mgr")
+                if bus and team_mgr:
+                    from ...config import TIMEOUTS
+
+                    def _inject_inbox(inbox_msgs, label="兜底"):
+                        from ...team.loop import format_inbox_messages
+                        inbox_text = format_inbox_messages(inbox_msgs)
+                        if not inbox_text:
+                            return False
+                        messages.append({"role": "user", "content": inbox_text, "timestamp": now_ts()})
+                        messages.append({"role": "user", "content": "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。", "timestamp": now_ts()})
+                        comp["history_db"].append(workspace or "default", comp_key, "user", inbox_text)
+                        logger.info(f"[Web-Team] {label}回禀注入，继续 run_tool_loop")
+                        return True
+
+                    lead_wait = TIMEOUTS.get("lead_wait", 300)
+                    poll_interval = TIMEOUTS.get("lead_poll_interval", 5)
+                    waited = 0
+                    while waited < lead_wait:
+                        if abort_event and abort_event.is_set():
+                            break
+                        with team_mgr.lock:
+                            has_working = any(m.get("status") == "working" for m in team_mgr.config.get("members", []))
+                        if not has_working:
+                            break
+                        time.sleep(poll_interval)
+                        waited += poll_interval
+                        inbox = bus.read_inbox("lead")
+                        if inbox and _inject_inbox(inbox):
+                            msg, _ = run_tool_loop(
+                                messages, tools,
+                                streaming=STREAMING, display=disp,
+                                inject_fn=_inject_todos, abort_event=abort_event,
+                                max_turns=max_turns, ctx=ctx, persist_fn=_persist,
+                                bus=bus,
+                            )
+                            logger.info("[Web-Team] 兜底回禀处理后 run_tool_loop done")
+                            waited = 0
+                    final_inbox = bus.read_inbox("lead")
+                    if final_inbox and _inject_inbox(final_inbox, label="最终"):
                         msg, _ = run_tool_loop(
                             messages, tools,
                             streaming=STREAMING, display=disp,
@@ -584,79 +647,105 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                             max_turns=max_turns, ctx=ctx, persist_fn=_persist,
                             bus=bus,
                         )
-                        logger.info("[Web-Team] 兜底回禀处理后 run_tool_loop done")
-                        waited = 0
-                final_inbox = bus.read_inbox("lead")
-                if final_inbox and _inject_inbox(final_inbox, label="最终"):
-                    msg, _ = run_tool_loop(
-                        messages, tools,
-                        streaming=STREAMING, display=disp,
-                        inject_fn=_inject_todos, abort_event=abort_event,
-                        max_turns=max_turns, ctx=ctx, persist_fn=_persist,
-                        bus=bus,
-                    )
-            else:
-                logger.debug(f"[Web-Team] 无 Team 组件，跳过回禀等待")
+                else:
+                    logger.debug(f"[Web-Team] 无 Team 组件，跳过回禀等待")
 
-            tool_results_map = {m.get("tool_call_id", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
-            for am in _deferred_assistant:
-                enriched_tcs = []
-                for tc in am.get("tool_calls", []):
-                    tc_copy = {k: v for k, v in tc.items()}
-                    tc_id = tc.get("id", "")
-                    if tc_id and tc_id in tool_results_map:
-                        tc_copy["_result"] = tool_results_map[tc_id]  # 存储完整结果，不再截断
-                    enriched_tcs.append(tc_copy)
-                am_meta = {}
-                if am.get("thinking"):
-                    am_meta["thinking"] = am["thinking"]
-                am_meta["tool_calls"] = enriched_tcs
-                comp["history_db"].append(workspace or "default", comp_key, "assistant", am.get("content") or "", metadata=json.dumps(am_meta))
-            if not msg or not msg.get("content"):
-                err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
-                messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
-                comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
-                logger.error(f"[Web] {err_text} sid={comp_key}")
-                # 🔧 不发送 error 事件，直接让 complete 事件携带错误信息，避免前端提前重置状态
-                usage = get_usage()
-                loop.call_soon_threadsafe(lambda: queue.put_nowait({
-                    "event": "complete", 
-                    "data": {
-                        "prompt_tokens": usage["prompt_tokens"], 
-                        "completion_tokens": usage["completion_tokens"],
-                        "error": err_text,
-                        "session_id": session_key
+                tool_results_map = {m.get("tool_call_id", ""): m.get("content", "") for m in messages if m.get("role") == "tool"}
+                for am in _deferred_assistant:
+                    enriched_tcs = []
+                    for tc in am.get("tool_calls", []):
+                        tc_copy = {k: v for k, v in tc.items()}
+                        tc_id = tc.get("id", "")
+                        if tc_id and tc_id in tool_results_map:
+                            tc_copy["_result"] = tool_results_map[tc_id]  # 存储完整结果，不再截断
+                        enriched_tcs.append(tc_copy)
+                    am_meta = {}
+                    if am.get("thinking"):
+                        am_meta["thinking"] = am["thinking"]
+                    am_meta["tool_calls"] = enriched_tcs
+                    comp["history_db"].append(workspace or "default", comp_key, "assistant", am.get("content") or "", metadata=json.dumps(am_meta))
+                if not msg or not msg.get("content"):
+                    err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
+                    messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
+                    comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
+                    logger.error(f"[Web] {err_text} sid={comp_key}")
+                    
+                    # 收集错误上下文
+                    error_context = {
+                        "session_id": session_key,
+                        "workspace": workspace,
+                        "message_count": len(messages),
+                        "last_user_message": None,
+                        "last_tool_calls": [],
                     }
-                }))
+                    
+                    # 获取最近的用户消息
+                    for m in reversed(messages[-5:]):
+                        if m.get("role") == "user":
+                            error_context["last_user_message"] = m.get("content", "")[:200]
+                            break
+                    
+                    # 获取最近的工具调用
+                    for m in reversed(messages[-10:]):
+                        if m.get("role") == "assistant" and m.get("tool_calls"):
+                            error_context["last_tool_calls"] = [
+                                {"name": tc.get("function", {}).get("name"), "id": tc.get("id")}
+                                for tc in m["tool_calls"][:3]
+                            ]
+                            break
+                    
+                    # 🔧 不发送 error 事件，直接让 complete 事件携带错误信息和上下文
+                    usage = get_usage()
+                    loop.call_soon_threadsafe(lambda et=err_text, ec=error_context: queue.put_nowait({
+                        "event": "complete", 
+                        "data": {
+                            "prompt_tokens": usage["prompt_tokens"], 
+                            "completion_tokens": usage["completion_tokens"],
+                            "error": et,
+                            "error_context": ec,
+                            "session_id": session_key
+                        }
+                    }))
+                    return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
+                    
+                # 🔧 修复：正常流程的消息处理（之前被错误地放在 return 后面）
+                if msg and msg.get("content") and not any(
+                    m.get("role") == "assistant" and m.get("content") == msg["content"]
+                    for m in messages[-3:]
+                ):
+                    if plan_mode:
+                        if PLAN.get("approval", True):
+                            msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
+                        else:
+                            with _sessions_lock:
+                                _SESSION_PLAN_MODE[session_key] = False
+                            msg["content"] += "\n\n⚡ 已自动切换到执行模式，开始执行..."
+                    asst_ts = now_ts()
+                    messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts})
+
+                usage = get_usage()
+                if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
+                    logger.info(f"[Web] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
+                    messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx, inject_fn=_inject_todos)
+                    logger.info(f"[Web] 压缩完成: messages={len(messages)}")
+                    # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
+                    messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
+
+                loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
-            if msg and msg.get("content") and not any(
-                m.get("role") == "assistant" and m.get("content") == msg["content"]
-                for m in messages[-3:]
-            ):
-                if plan_mode:
-                    if PLAN.get("approval", True):
-                        msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
-                    else:
-                        _SESSION_PLAN_MODE[session_key] = False
-                        msg["content"] += "\n\n⚡ 已自动切换到执行模式，开始执行..."
-                asst_ts = now_ts()
-                messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts})
-
-            usage = get_usage()
-            if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
-                logger.info(f"[Web] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
-                messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx, inject_fn=_inject_todos)
-                logger.info(f"[Web] 压缩完成: messages={len(messages)}")
-                # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
-                messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
-
-            loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
-            return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
-        finally:
-            _SESSION_STATUS[session_key] = "idle"
-            # 清理 session_id
-            from ...logger import set_session_id
-            set_session_id(None)
+            finally:
+                with _sessions_lock:
+                    _SESSION_STATUS[session_key] = "idle"
+                    # 减少引用计数
+                    refs = _SESSION_REFS.get(session_key, 0)
+                    if refs > 0:
+                        _SESSION_REFS[session_key] = refs - 1
+                # 清理 session_id
+                from ...logger import set_session_id
+                set_session_id(None)
+    finally:
+        # 释放并发信号量
+        _concurrent_semaphore.release()
 
 # ── Session CRUD ──
 
@@ -699,14 +788,19 @@ async def list_sessions(username: str = Query(...), workspace: str | None = Quer
             continue
         sid = d.name
         cache_key = _cache_key(username, workspace, sid)
-        cached = _META_CACHE.get(cache_key)
+        with _sessions_lock:
+            cached = _META_CACHE.get(cache_key)
+            if cached:
+                # 复制一份，避免修改缓存
+                cached = dict(cached)
+                cached["status"] = _SESSION_STATUS.get(cache_key, "idle")
         if cached:
-            cached["status"] = _SESSION_STATUS.get(cache_key, "idle")
             sessions.append(cached)
             continue
         msgs = _load_from_db(username, sid, base, workspace) or []
         meta = _build_meta(sid, msgs, username, workspace)
-        _META_CACHE[cache_key] = meta
+        with _sessions_lock:
+            _META_CACHE[cache_key] = meta
         # 跳过空会话（只有 system 消息，无实际对话）
         sessions.append(meta)
     # 默认工作空间无会话时，自动创建一个空会话
@@ -714,7 +808,8 @@ async def list_sessions(username: str = Query(...), workspace: str | None = Quer
         sid = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + str(uuid.uuid4())[:8]
         cache_key = _cache_key(username, workspace, sid)
         system_prompt = _build_system_prompt(username, sid, base, workspace)
-        _SESSIONS[cache_key] = [{"role": "system", "content": system_prompt, "name": "新会话"}]
+        with _sessions_lock:
+            _SESSIONS[cache_key] = [{"role": "system", "content": system_prompt, "name": "新会话"}]
         _update_meta_cache(username, sid, workspace, _SESSIONS[cache_key])
         
         # 持久化到数据库
@@ -751,7 +846,8 @@ async def delete_session(body: dict):
     # 先清 HistoryDB，再删目录
     try:
         base = _resolve_base(username, ws)
-        comp = _SESSION_COMPONENTS.get(cache_key)
+        with _sessions_lock:
+            comp = _SESSION_COMPONENTS.get(cache_key)
         if comp:
             comp["history_db"].delete_session(ws or "default", session_id)
             # 不再关闭 history_db，因为现在是统一连接池
@@ -765,10 +861,14 @@ async def delete_session(body: dict):
         _SESSION_MODELS.pop(cache_key, None)
         _SESSION_LOCKS.pop(cache_key, None)
         _SESSION_ACCESS.pop(cache_key, None)
+        _SESSION_REFS.pop(cache_key, None)
+        _SESSION_ABORTS.pop(cache_key, None)
     wk = _ws_key(username, ws)
-    remaining = sum(1 for k in _SESSIONS if k.startswith(f"{username}:{ws or 'default'}:") and k != cache_key)
+    with _sessions_lock:
+        remaining = sum(1 for k in _SESSIONS if k.startswith(f"{username}:{ws or 'default'}:") and k != cache_key)
     if remaining == 0:
-        team_comp = _TEAM_COMPONENTS.get(wk)
+        with _sessions_lock:
+            team_comp = _TEAM_COMPONENTS.get(wk)
         if team_comp:
             team_mgr = team_comp.get("team_mgr")
             if team_mgr:
@@ -882,14 +982,14 @@ async def chat_ws_endpoint(ws: WebSocket):
         messages.append(user_msg)
         _get_or_create_components(username, sid, base, ws_name)
 
-        queue: asyncio.Queue = asyncio.Queue()
+        queue: asyncio.Queue = asyncio.Queue(maxsize=1000)  # 添加队列上限，防止内存溢出
         loop = asyncio.get_event_loop()
         abort_event = threading.Event()
         with _sessions_lock:
             _SESSION_ABORTS[session_key] = abort_event
+            model_name = _SESSION_MODELS.get(session_key)
         _ws_abort_keys.append(session_key)
 
-        model_name = _SESSION_MODELS.get(session_key)
         s_lock = _get_session_lock(username, ws_name, sid)
         from ...config import RUNNER
         max_turns_web = RUNNER.get("max_turns", 20)
@@ -932,9 +1032,9 @@ async def chat_ws_endpoint(ws: WebSocket):
 
         usage = complete_usage
 
-        _LAST_USAGE[session_key] = usage
-
-        _SESSION_ABORTS.pop(session_key, None)
+        with _sessions_lock:
+            _LAST_USAGE[session_key] = usage
+            _SESSION_ABORTS.pop(session_key, None)
         _update_meta_cache(username, sid, ws_name, messages)
 
         if not aborted:
@@ -967,6 +1067,11 @@ async def chat_ws_endpoint(ws: WebSocket):
                             _ws_username = u
                         continue
 
+                    # 处理心跳 ping
+                    if msg_type == "ping":
+                        await _send({"event": "pong", "data": {}})
+                        continue
+
                     if not _ws_username:
                         await _send({"event": "error", "data": {"error": "请先发送 login 消息"}})
                         continue
@@ -988,6 +1093,36 @@ async def chat_ws_endpoint(ws: WebSocket):
                     username = _ws_username
                     session_id = data.get("session_id")
                     images = data.get("images")  # 获取图片数据
+                    
+                    # 处理 /compact 命令
+                    if user_message == "/compact":
+                        ws_name = data.get("workspace")
+                        if not session_id:
+                            await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                            continue
+                        
+                        sid, messages = _get_or_create_session(username, session_id, workspace=ws_name, create=False)
+                        if messages is None:
+                            await _send({"event": "error", "data": {"error": f"会话 {session_id} 不存在"}})
+                            continue
+                        
+                        comp = _get_or_create_components(username, sid, _resolve_base(username, ws_name), ws_name)
+                        non_system = [m for m in messages if m["role"] != "system"]
+                        
+                        if len(non_system) <= comp["compactor"].keep_recent:
+                            await _send({"event": "info", "data": {"message": f"消息数({len(non_system)})未超过保留阈值({comp['compactor'].keep_recent})，无需压缩", "session_id": sid}})
+                            continue
+                        
+                        before = len(non_system)
+                        from ...llm import chat
+                        # 🔧 注意：ctx=None 是安全的，compactor 内部对 ctx=None 有处理
+                        # 如果压缩过程需要调用 LLM，会使用默认配置
+                        messages[:] = comp["compactor"].compact(chat, messages, ctx=None, inject_fn=_inject_todos)
+                        after = len([m for m in messages if m["role"] != "system"])
+                        
+                        await _send({"event": "info", "data": {"message": f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条）", "session_id": sid}})
+                        continue
+                    
                     if not user_message and not images:
                         await _send({"event": "error", "data": {"error": "消息不能为空"}})
                         continue

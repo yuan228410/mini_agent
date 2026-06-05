@@ -34,38 +34,6 @@ BATCH_SUMMARY_PROMPT = """对以下各轮 Agent 执行过程分别进行简洁�
 各轮执行过程：
 {all_rounds_text}"""
 
-_CHITCHAT_KEYWORDS = frozenset([
-    "你好", "谢谢", "嗯", "哈哈", "ok", "好的", "再见", "hello", "hi", "thanks",
-    "thank you", "bye", "嗯嗯", "哦", "啊", "呢", "吧", "了解", "明白",
-    "good", "nice", "cool", "great", "👍", "🙏",
-])
-
-def _is_chitchat_round(rnd: dict) -> bool:
-    user_content = (rnd["user_msg"].get("content") or "").strip()
-    execution = rnd["execution"]
-
-    if len(user_content) > 30:
-        return False
-
-    has_tool_calls = any(msg.get("tool_calls") for msg in execution)
-    if has_tool_calls:
-        return False
-
-    assistant_content = ""
-    for msg in execution:
-        if msg.get("role") == "assistant":
-            assistant_content += msg.get("content") or ""
-    if len(assistant_content) > 100:
-        return False
-
-    if any(kw in user_content.lower() for kw in _CHITCHAT_KEYWORDS):
-        return True
-
-    if len(user_content) < 10 and not execution:
-        return True
-
-    return False
-
 # ═══════════════════════════════════════════
 # SummaryWriter — 摘要文件 I/O
 # ═══════════════════════════════════════════
@@ -209,42 +177,49 @@ class Compactor:
         new_messages = [messages[0]]
         round_summaries = []
         new_round_summaries = []
-        skipped_chitchat = 0
         batch_candidates = []
 
+        # 🔧 关键说明：
+        # old_rounds = rounds[:len(rounds) - keep_rounds]，即 rounds 的前 N 个元素
+        # 因此 old_rounds[i] 对应 rounds[i]，global_idx = i 是正确的
+        # 无论首次压缩还是增量压缩，这个关系都成立
+        old_round_start_idx = 0
+        
         for i, rnd in enumerate(old_rounds):
-            if _is_chitchat_round(rnd):
-                skipped_chitchat += 1
-                logger.debug(f"[压缩] 第{i+1}轮为闲聊，跳过")
-                continue
+            global_idx = old_round_start_idx + i  # 全局轮次索引（在 rounds 中的位置）
+            
+            # 🔧 修复：不再跳过闲聊轮次，所有轮次一视同仁
             new_messages.append(rnd["user_msg"])
             execution = rnd["execution"]
             if not execution:
                 continue
 
-            if incremental and i in self._cached_summaries:
-                summary = self._cached_summaries[i]
-                logger.debug(f"[压缩] 第{i+1}轮命中缓存摘要")
+            if incremental and global_idx in self._cached_summaries:
+                summary = self._cached_summaries[global_idx]
+                logger.debug(f"[压缩] 第{global_idx+1}轮命中缓存摘要")
+                # 🔧 修复：用元数据标记摘要消息，而非伪装成普通 user 消息
                 new_messages.append({
                     "role": "user",
-                    "content": f"[第{i+1}轮执行摘要]\n{summary}",
+                    "content": f"[第{global_idx+1}轮执行摘要]\n{summary}",
+                    "_is_summary": True,  # 标记为摘要，避免被误判为用户输入
                 })
                 continue
 
             exec_text = self._messages_to_text(execution)
             if len(exec_text) < 100:
-                logger.debug(f"[压缩] 第{i+1}轮执行过程过短({len(exec_text)}字)，直接保留")
+                logger.debug(f"[压缩] 第{global_idx+1}轮执行过程过短({len(exec_text)}字)，直接保留")
                 new_messages.append({
                     "role": "user",
-                    "content": f"[第{i+1}轮执行摘要]\n{exec_text}",
+                    "content": f"[第{global_idx+1}轮执行摘要]\n{exec_text}",
+                    "_is_summary": True,
                 })
-                summary_entry = f"第{i+1}轮: {exec_text[:200]}"
+                summary_entry = f"第{global_idx+1}轮: {exec_text[:200]}"
                 round_summaries.append(summary_entry)
                 new_round_summaries.append(summary_entry)
-                self._cached_summaries[i] = exec_text
+                self._cached_summaries[global_idx] = exec_text
                 continue
 
-            batch_candidates.append((i, rnd, execution, exec_text))
+            batch_candidates.append((global_idx, rnd, execution, exec_text))
 
         if batch_candidates:
             logger.info(f"[压缩→] 批量摘要: {len(batch_candidates)} 轮待摘要")
@@ -261,9 +236,6 @@ class Compactor:
                     new_round_summaries.append(summary_entry)
                     self._cached_summaries[round_idx] = summary
 
-        if skipped_chitchat > 0:
-            logger.info(f"[压缩] 跳过 {skipped_chitchat} 轮闲聊")
-
         for rnd in recent_rounds:
             new_messages.append(rnd["user_msg"])
             new_messages.extend(rnd["execution"])
@@ -276,10 +248,15 @@ class Compactor:
             self._summary_writer.write(new_round_summaries)
 
         # 追踪状态
-        self._last_round_count = len(old_rounds)
+        self._last_round_count = len(rounds)  # 记录总轮次数
+        
+        # 🔧 缓存清理说明：
+        # 只保留 old_rounds 范围内的摘要缓存（索引 0 到 len(old_rounds)-1）
+        # recent_rounds 会被完整保留到消息列表，不需要摘要缓存
+        # 清理条件：k < len(old_rounds) 确保只保留有效范围的缓存
         self._cached_summaries = {
             k: v for k, v in self._cached_summaries.items()
-            if k < self._last_round_count
+            if k < len(old_rounds)
         }
         if len(self._cached_summaries) > self.max_cached_summaries:
             sorted_keys = sorted(self._cached_summaries.keys())
@@ -313,7 +290,11 @@ class Compactor:
         current_execution = []
 
         for msg in non_system:
-            if msg["role"] == "user" and not (msg.get("content") or "").startswith("[第"):
+            # 🔧 修复：用元数据 _is_summary 判断摘要消息，而非依赖内容
+            is_user = msg["role"] == "user"
+            is_summary = msg.get("_is_summary", False)
+            
+            if is_user and not is_summary:
                 if current_user is not None:
                     rounds.append({"user_msg": current_user, "execution": current_execution})
                 current_user = msg

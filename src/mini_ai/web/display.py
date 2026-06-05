@@ -1,6 +1,11 @@
 """Web 端 Display 适配器 — 将事件推入 WebSocket 队列（线程安全）"""
 import asyncio
 import time
+import threading
+
+# 全局事件序号计数器（每个会话独立）
+_EVENT_SEQS: dict[str, int] = {}
+_EVENT_SEQS_LOCK = threading.Lock()
 
 class WebDisplay:
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = "", agent_id: str = ""):
@@ -39,6 +44,14 @@ class WebDisplay:
             data["agent_id"] = self.agent_id
         data["promptTokens"] = usage["prompt_tokens"]
         data["completionTokens"] = usage["completion_tokens"]
+        
+        # 添加事件序号（用于前端检测消息丢失）
+        if self.session_id:
+            with _EVENT_SEQS_LOCK:
+                seq = _EVENT_SEQS.get(self.session_id, 0) + 1
+                _EVENT_SEQS[self.session_id] = seq
+                data["seq"] = seq
+        
         self.loop.call_soon_threadsafe(
             lambda: self.queue.put_nowait({"event": event, "data": data})
         )

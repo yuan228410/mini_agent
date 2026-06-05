@@ -33,6 +33,10 @@ interface SessionState {
   _teammateBuffers: Map<string, { content: string; thinking: string }>
   // 会话级别工作流状态
   workflowState?: WorkflowState
+  // 事件序号（用于检测消息丢失）
+  _lastSeq: number
+  // 事件去重
+  _seenEvents: Set<string>
 }
 
 // 工作流状态定义
@@ -118,7 +122,9 @@ function _state(sid: string): SessionState {
       _currentThinking: '',
       draftText: '',
       _teammateBuffers: new Map(),
-      workflowState: { status: 'idle', tasks: {} }
+      workflowState: { status: 'idle', tasks: {} },
+      _lastSeq: 0,
+      _seenEvents: new Set()
     })
   }
   return _states.get(key)!
@@ -410,20 +416,48 @@ async function handleWsEvent(event: WsEvent) {
   const sid = event.data?.session_id || activeSessionId.value
   const s = _state(sid)
 
+  // 检测事件序号缺口（消息丢失检测）
+  const seq = event.data?.seq
+  if (seq !== undefined) {
+    const expectedSeq = s._lastSeq + 1
+    if (seq > expectedSeq) {
+      console.warn(`[mini-ai] 检测到事件丢失: expected=${expectedSeq}, got=${seq}, gap=${seq - expectedSeq}`)
+    }
+    s._lastSeq = seq
+  }
+
+  // 事件去重（使用 event_id 或 seq+event 组合）
+  const eventId = event.data?.event_id || (seq !== undefined ? `${seq}:${event.event}` : null)
+  if (eventId && s._seenEvents.has(eventId)) {
+    console.log(`[mini-ai] 跳过重复事件: ${eventId}`)
+    return
+  }
+  if (eventId) {
+    s._seenEvents.add(eventId)
+    // 限制去重集合大小，避免内存泄漏（简单清空，避免 Set 无序问题）
+    if (s._seenEvents.size > 1000) {
+      s._seenEvents.clear()
+    }
+  }
+
   _processEvent(s, event)
   _lastWsEventTime = Date.now()
 
   const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error' || event.event === 'complete'
 
+  // 🔧 简化：终端事件时，直接重置会话状态
   if (isTerminal) {
     s.isStreaming = false
-    // 🔧 修复：无论当前会话是否活跃，都检查并重置 isStreaming（避免状态残留）
-    const currentActiveKey = _cacheKey(activeSessionId.value, props.workspace)
-    const eventKey = _cacheKey(sid, props.workspace)
-    if (eventKey === currentActiveKey) {
+    s._currentContent = ''
+    s._currentThinking = ''
+    
+    // 如果是当前活跃会话，重置全局 isStreaming
+    if (sid === activeSessionId.value) {
       isStreaming.value = false
       console.log(`[mini-ai] terminal event reset isStreaming: sid=${sid} event=${event.event}`)
     }
+    
+    emit('status-change', sid, 'idle')
   }
 
   if (sid === activeSessionId.value) {
@@ -450,12 +484,6 @@ async function handleWsEvent(event: WsEvent) {
       }
     }
     _scheduleScroll()
-  }
-
-  if (isTerminal) {
-    s._currentContent = ''
-    s._currentThinking = ''
-    emit('status-change', sid, 'idle')
   }
 }
 

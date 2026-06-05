@@ -15,6 +15,7 @@ from .error_handler import ErrorHandler
 from ..logger import logger
 from ..config import RUNNER
 from ..utils import now_ts
+from ..llm.base import estimate_messages_tokens
 
 _CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.88)
 
@@ -149,8 +150,15 @@ def run_tool_loop(
             if bus:
                 _inject_teammate_reports(bus, messages)
             
-            # 上下文压缩检查
-            if context_length:
+            # 上下文压缩检查（提前预警）- 每 5 轮检查一次，减少性能开销
+            if context_length and turn % 5 == 0:
+                estimated_tokens = estimate_messages_tokens(messages)
+                threshold = int(context_length * context_usage_limit)
+                warning_threshold = int(threshold * 0.9)  # 90% 时预警
+                
+                if estimated_tokens > warning_threshold:
+                    logger.warning(f"[runner] 上下文接近阈值: {estimated_tokens}/{threshold} tokens ({estimated_tokens/threshold*100:.1f}%)")
+                
                 if _check_context_usage(messages, context_length, context_usage_limit, ctx):
                     # 上下文超限，退出循环
                     logger.info("[runner] 上下文超限，退出循环")

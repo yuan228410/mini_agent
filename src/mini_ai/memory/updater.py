@@ -12,7 +12,12 @@ COMPACT_PROMPT = """根据对话轮次摘要，更新长期记忆和用户画像
 
 <updated_memory>
 如果产生了值得长期记住的信息（目标、决策、偏好、项目背景），更新长期记忆。
-先写保留的旧记忆，再写新增内容。无需更新则写"(无需更新)"。
+
+**重要**：
+1. 必须先完整保留旧记忆的所有内容
+2. 然后在末尾追加新增内容
+3. 格式：[旧记忆内容]\n\n## 新增 [日期]\n[新增内容]
+4. 如果只是补充信息，无需更新则写"(无需更新)"
 </updated_memory>
 
 <updated_user>
@@ -92,7 +97,32 @@ class MemoryUpdater:
             logger.debug("[记忆更新] 无情景更新")
         if new_memory and new_memory != "(无需更新)":
             logger.info(f"[记忆更新] 写入长期记忆: {len(new_memory)} 字")
-            self.memory.write_memory(new_memory)
+            # 🔧 修复：改为追加模式，而非完全覆盖
+            existing_memory = self.memory.read_memory()
+            if existing_memory and existing_memory.strip() != "# 长期记忆":
+                # 🔧 改进：使用行级比较，避免子串匹配误判
+                # 计算旧记忆和新记忆的行交集比例，判断 LLM 是否保留了旧记忆
+                old_lines = set(line.strip() for line in existing_memory.strip().split('\n') if line.strip() and not line.startswith('#'))
+                new_lines = set(line.strip() for line in new_memory.strip().split('\n') if line.strip() and not line.startswith('#'))
+                
+                # 计算保留比例
+                retention_ratio = len(old_lines & new_lines) / len(old_lines) if old_lines else 1.0
+                
+                # 🔧 阈值说明：50% 是保守阈值
+                # - 如果 LLM 大幅改写但保留核心语义，可能低于 50% 导致手动追加（重复）
+                # - 这是保守策略：宁可重复不可丢失
+                # - 可根据实际效果调整阈值（如 0.3 或 0.7）
+                if retention_ratio > 0.5:
+                    logger.debug(f"[记忆更新] LLM 保留了 {retention_ratio*100:.1f}% 的旧记忆，直接写入")
+                    self.memory.write_memory(new_memory)
+                else:
+                    # LLM 未保留旧记忆，手动追加
+                    combined = f"{existing_memory.rstrip()}\n\n{new_memory.strip()}\n"
+                    logger.warning(f"[记忆更新] LLM 仅保留 {retention_ratio*100:.1f}% 旧记忆，手动追加（旧:{len(existing_memory)}字 + 新:{len(new_memory)}字）")
+                    self.memory.write_memory(combined)
+            else:
+                # 无旧记忆，直接写入
+                self.memory.write_memory(new_memory)
         else:
             logger.debug("[记忆更新] 无长期记忆更新")
         if new_user and new_user != "(无需更新)":

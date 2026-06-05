@@ -912,7 +912,9 @@ class HistoryDBPool:
     _instance = None
     _lock = threading.Lock()
     _pools: dict[str, HistoryDB] = {}  # username -> HistoryDB
+    _access_time: dict[str, float] = {}  # username -> last access time
     _async_write_default = False  # 默认关闭异步写入
+    _max_connections = 100  # 最大连接数上限
     
     @classmethod
     def set_async_write_default(cls, enabled: bool):
@@ -923,6 +925,22 @@ class HistoryDBPool:
         """
         cls._async_write_default = enabled
         logger.info(f"[HistoryDBPool] 异步写入默认设置: {enabled}")
+    
+    @classmethod
+    def _evict_if_needed(cls):
+        """如果连接数超过上限，淘汰最久未使用的连接"""
+        if len(cls._pools) >= cls._max_connections:
+            # 淘汰最久未使用的 10 个连接
+            sorted_users = sorted(cls._access_time.items(), key=lambda x: x[1])
+            evict_count = min(10, len(sorted_users))
+            for username, _ in sorted_users[:evict_count]:
+                try:
+                    cls._pools[username].close()
+                    del cls._pools[username]
+                    del cls._access_time[username]
+                    logger.info(f"[HistoryDBPool] 淘汰连接: username={username}")
+                except Exception as e:
+                    logger.warning(f"[HistoryDBPool] 淘汰连接失败: username={username}, error={e}")
     
     @classmethod
     def get(cls, username: str, async_write: bool | None = None) -> HistoryDB:
@@ -943,7 +961,14 @@ class HistoryDBPool:
             async_write = cls._async_write_default
         
         with cls._lock:
+            # 更新访问时间
+            import time
+            cls._access_time[username] = time.time()
+            
             if username not in cls._pools:
+                # 检查是否需要淘汰
+                cls._evict_if_needed()
+                
                 from ..config import user_data_dir
                 db_path = user_data_dir(username) / "history.db"
                 cls._pools[username] = HistoryDB(db_path, async_write=async_write)
@@ -961,6 +986,7 @@ class HistoryDBPool:
             if username in cls._pools:
                 cls._pools[username].close()
                 del cls._pools[username]
+                cls._access_time.pop(username, None)
                 logger.debug(f"[HistoryDBPool] 关闭连接: username={username}")
     
     @classmethod
@@ -973,6 +999,7 @@ class HistoryDBPool:
                 except Exception as e:
                     logger.warning(f"[HistoryDBPool] 关闭连接失败: username={username}, error={e}")
             cls._pools.clear()
+            cls._access_time.clear()
             logger.info("[HistoryDBPool] 已关闭所有连接")
     
     @classmethod
@@ -981,5 +1008,6 @@ class HistoryDBPool:
         with cls._lock:
             return {
                 "total_connections": len(cls._pools),
+                "max_connections": cls._max_connections,
                 "users": list(cls._pools.keys())
             }

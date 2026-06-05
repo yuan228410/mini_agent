@@ -132,9 +132,51 @@ let _wsReconnectAttempts = 0
 let _wsReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let _wsManuallyClosed = false
 
+// 心跳配置
+const _WS_HEARTBEAT_INTERVAL = 30000  // 30秒
+const _WS_HEARTBEAT_TIMEOUT = 10000   // 10秒超时
+let _wsHeartbeatTimer: ReturnType<typeof setTimeout> | null = null
+let _wsHeartbeatTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+let _wsLastPongTime = 0
+
 function _wsUrl(): string {
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
   return `${proto}//${location.host}/api/chat/ws`
+}
+
+function _startHeartbeat() {
+  _stopHeartbeat()
+  _wsLastPongTime = Date.now()
+  
+  _wsHeartbeatTimer = setInterval(() => {
+    if (!_ws || _ws.readyState !== WebSocket.OPEN) {
+      _stopHeartbeat()
+      return
+    }
+    
+    // 发送 ping
+    _ws.send(JSON.stringify({ type: 'ping' }))
+    
+    // 设置超时检测
+    _wsHeartbeatTimeoutTimer = setTimeout(() => {
+      const elapsed = Date.now() - _wsLastPongTime
+      if (elapsed > _WS_HEARTBEAT_TIMEOUT) {
+        console.warn(`[WS] 心跳超时 (${elapsed}ms)，关闭连接`)
+        _ws?.close(1000, 'heartbeat_timeout')
+      }
+    }, _WS_HEARTBEAT_TIMEOUT)
+  }, _WS_HEARTBEAT_INTERVAL)
+}
+
+function _stopHeartbeat() {
+  if (_wsHeartbeatTimer) {
+    clearInterval(_wsHeartbeatTimer)
+    _wsHeartbeatTimer = null
+  }
+  if (_wsHeartbeatTimeoutTimer) {
+    clearTimeout(_wsHeartbeatTimeoutTimer)
+    _wsHeartbeatTimeoutTimer = null
+  }
 }
 
 let _wsGeneration = 0
@@ -175,6 +217,9 @@ export async function ensureWs(): Promise<boolean> {
       const u = getUsername()
       if (u) ws.send(JSON.stringify({ type: 'login', username: u }))
       
+      // 启动心跳
+      _startHeartbeat()
+      
       // 通知前端连接已恢复
       for (const handler of _eventHandlers) {
         if (isReconnect) {
@@ -191,6 +236,17 @@ export async function ensureWs(): Promise<boolean> {
       if (gen !== _wsGeneration) return
       try {
         const evt = JSON.parse(e.data)
+        
+        // 处理 pong 响应
+        if (evt.event === 'pong') {
+          _wsLastPongTime = Date.now()
+          if (_wsHeartbeatTimeoutTimer) {
+            clearTimeout(_wsHeartbeatTimeoutTimer)
+            _wsHeartbeatTimeoutTimer = null
+          }
+          return
+        }
+        
         for (const handler of _eventHandlers) {
           handler(evt)
         }
@@ -200,12 +256,14 @@ export async function ensureWs(): Promise<boolean> {
     ws.onerror = () => {
       clearTimeout(timer)
       _wsConnected = false
+      _stopHeartbeat()
       resolve(false)
     }
 
     ws.onclose = (event) => {
       clearTimeout(timer)
       _wsConnected = false
+      _stopHeartbeat()
       if (gen === _wsGeneration) _ws = null
       
       // 通知前端连接已断开
@@ -293,6 +351,9 @@ export function sendAct(sessionId?: string) {
 
 export function closeWs() {
   _wsManuallyClosed = true
+  
+  // 停止心跳
+  _stopHeartbeat()
   
   // 取消重连定时器
   if (_wsReconnectTimer) {
