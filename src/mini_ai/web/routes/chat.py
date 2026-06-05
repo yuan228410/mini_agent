@@ -1114,13 +1114,24 @@ async def chat_ws_endpoint(ws: WebSocket):
                             continue
                         
                         before = len(non_system)
-                        from ...llm import chat
-                        # 🔧 注意：ctx=None 是安全的，compactor 内部对 ctx=None 有处理
-                        # 如果压缩过程需要调用 LLM，会使用默认配置
-                        messages[:] = comp["compactor"].compact(chat, messages, ctx=None, inject_fn=_inject_todos)
-                        after = len([m for m in messages if m["role"] != "system"])
                         
-                        await _send({"event": "info", "data": {"message": f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条）", "session_id": sid}})
+                        # 🔧 修复：获取用户选择的模型，创建正确的 ctx
+                        session_key = _cache_key(username, ws_name, sid)
+                        model_name = _SESSION_MODELS.get(session_key)
+                        cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+                        ctx = RequestContext(model_config=cfg, display=None)
+                        
+                        # 🔧 修复：添加错误处理，避免异常导致连接断开
+                        try:
+                            from ...llm import chat
+                            messages[:] = comp["compactor"].compact(chat, messages, ctx=ctx, inject_fn=_inject_todos)
+                            after = len([m for m in messages if m["role"] != "system"])
+                            
+                            await _send({"event": "info", "data": {"message": f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条）", "session_id": sid}})
+                        except Exception as e:
+                            logger.error(f"[Web] /compact 失败: {e}", exc_info=True)
+                            await _send({"event": "error", "data": {"error": f"压缩失败: {str(e)}"}})
+                        
                         continue
                     
                     if not user_message and not images:
