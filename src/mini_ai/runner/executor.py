@@ -101,77 +101,122 @@ class ToolExecutor:
         ctx: Any,
         abort_event: threading.Event | None,
     ) -> dict | None:
-        """流式调用 LLM"""
+        """流式调用 LLM（支持自动重试）"""
         from ..llm import chat_stream as llm_chat_stream, get_model, get_usage
+        from ..llm.retry import RetryStrategy
+        from ..config import TIMEOUTS
+        import time
         
-        # 调用开始
-        model = get_model(ctx)
-        if self.display and hasattr(self.display, 'llm_round_start'):
-            self.display.llm_round_start(model)
+        # 初始化重试策略（与 LLM 层保持一致）
+        max_retries = TIMEOUTS.get("llm_retries", 3)
+        retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+        strategy = RetryStrategy(
+            max_retries=max_retries,
+            base_delay=retry_delay,
+            max_delay=60.0,
+        )
         
-        msg = None
-        thinking_seen = False
-        last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
-        
-        for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
-            if abort_event and abort_event.is_set():
-                # 🔧 修复：中断时返回已生成的内容（如果有）
-                if self.display and hasattr(self.display, 'text_end'):
-                    partial_content = self.display.text_end()
-                    if partial_content:
-                        # 返回部分消息，让上层决定是否保存
-                        return {
-                            "role": "assistant",
-                            "content": partial_content,
-                            "interrupted": True,
-                        }
-                else:
+        last_error = None
+        for attempt in range(max_retries + 1):
+            # 调用开始
+            model = get_model(ctx)
+            if self.display and hasattr(self.display, 'llm_round_start'):
+                self.display.llm_round_start(model)
+            
+            msg = None
+            thinking_seen = False
+            last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            stream_error = None
+            
+            for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
+                if abort_event and abort_event.is_set():
+                    # 🔧 修复：中断时返回已生成的内容（如果有）
+                    if self.display and hasattr(self.display, 'text_end'):
+                        partial_content = self.display.text_end()
+                        if partial_content:
+                            # 返回部分消息，让上层决定是否保存
+                            return {
+                                "role": "assistant",
+                                "content": partial_content,
+                                "interrupted": True,
+                            }
+                    else:
+                        if self.display:
+                            self.display.text_end()
+                    return None
+                
+                chunk_type = chunk.get("type")
+                
+                if chunk_type == "thinking_start":
                     if self.display:
-                        self.display.text_end()
-                return None
+                        self.display.thinking_start()
+                    thinking_seen = True
+                elif chunk_type == "thinking":
+                    if self.display:
+                        self.display.thinking_chunk(chunk.get("content", ""))
+                elif chunk_type == "thinking_end":
+                    if self.display:
+                        self.display.thinking_end()
+                    thinking_seen = False
+                elif chunk_type == "text":
+                    if self.display:
+                        self.display.text_chunk(chunk.get("content", ""))
+                elif chunk_type == "usage":
+                    # 捕获 usage 信息
+                    last_usage["prompt_tokens"] = chunk.get("prompt_tokens", 0)
+                    last_usage["completion_tokens"] = chunk.get("completion_tokens", 0)
+                elif chunk_type == "error":
+                    stream_error = chunk.get("error")
+                    logger.error(f"[LLM✗] 流式错误: {stream_error}")
+                    # 不立即返回，等重试逻辑处理
+                    break
+                elif chunk_type == "done":
+                    msg = chunk.get("msg")
             
-            chunk_type = chunk.get("type")
-            
-            if chunk_type == "thinking_start":
-                if self.display:
-                    self.display.thinking_start()
-                thinking_seen = True
-            elif chunk_type == "thinking":
-                if self.display:
-                    self.display.thinking_chunk(chunk.get("content", ""))
-            elif chunk_type == "thinking_end":
-                if self.display:
+            # 如果成功完成，返回结果
+            if stream_error is None:
+                if thinking_seen and self.display:
                     self.display.thinking_end()
-                thinking_seen = False
-            elif chunk_type == "text":
-                if self.display:
-                    self.display.text_chunk(chunk.get("content", ""))
-            elif chunk_type == "usage":
-                # 捕获 usage 信息
-                last_usage["prompt_tokens"] = chunk.get("prompt_tokens", 0)
-                last_usage["completion_tokens"] = chunk.get("completion_tokens", 0)
-            elif chunk_type == "error":
-                logger.error(f"[LLM✗] 流式错误: {chunk.get('error')}")
+                
+                # 调用结束
+                if self.display and hasattr(self.display, 'llm_round_end'):
+                    usage = get_usage()
+                    self.display.llm_round_end(
+                        prompt_tokens=usage.get("prompt_tokens", last_usage["prompt_tokens"]),
+                        completion_tokens=usage.get("completion_tokens", last_usage["completion_tokens"]),
+                        model=model
+                    )
+                
+                return msg
+            
+            # 流式错误，尝试重试
+            from ..exceptions import LLMError
+            last_error = LLMError(stream_error)
+            
+            if strategy.should_retry(last_error, attempt):
+                delay = strategy.get_delay(attempt, last_error)
+                logger.warning(f"[LLM↻] 流式重试 {attempt+1}/{max_retries}: {stream_error}，{delay:.1f}s 后重试")
+                
+                # 结束当前显示
                 if self.display:
                     self.display.text_end()
-                    self.display.tool_result("error", f"⚠ LLM 错误: {chunk.get('error')}", elapsed=0)
+                
+                time.sleep(delay)
+                # 继续下一次循环（重试）
+            else:
+                # 不可重试或达到最大重试次数
+                logger.error(f"[LLM✗] 流式错误(已重试{attempt}次): {stream_error}")
+                if self.display:
+                    self.display.text_end()
+                    self.display.tool_result("error", f"⚠ LLM 错误: {stream_error}", elapsed=0)
                 return None
-            elif chunk_type == "done":
-                msg = chunk.get("msg")
         
-        if thinking_seen and self.display:
-            self.display.thinking_end()
-        
-        # 调用结束
-        if self.display and hasattr(self.display, 'llm_round_end'):
-            usage = get_usage()
-            self.display.llm_round_end(
-                prompt_tokens=usage.get("prompt_tokens", last_usage["prompt_tokens"]),
-                completion_tokens=usage.get("completion_tokens", last_usage["completion_tokens"]),
-                model=model
-            )
-        
-        return msg
+        # 所有重试都失败
+        logger.error(f"[LLM✗] 流式错误(已重试{max_retries}次): {last_error}")
+        if self.display:
+            self.display.text_end()
+            self.display.tool_result("error", f"⚠ LLM 错误: {last_error}", elapsed=0)
+        return None
     
     def execute_tools(
         self,

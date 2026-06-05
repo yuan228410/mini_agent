@@ -136,8 +136,9 @@ logging:
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `llm` | `120` | LLM API 请求超时（秒） |
-| `llm_retries` | `3` | LLM 请求失败重试次数（429/5xx/超时） |
-| `llm_retry_delay` | `2` | 重试间隔（秒，递增延迟：2s/4s/6s） |
+| `llm_connect` | `30` | LLM API 连接超时（秒） |
+| `llm_retries` | `3` | LLM 请求失败重试次数（timeout/connection/rate limit/429/5xx） |
+| `llm_retry_delay` | `2` | 重试基础延迟（秒），指数退避：2s → 4s → 8s |
 | `teammate_recv` | `5` | 队友等待 inbox 超时（秒） |
 | `lead_wait` | `1800` | lead 等待队友回禀上限（秒） |
 | `lead_poll_interval` | `2` | lead 轮询 inbox 间隔（秒） |

@@ -283,9 +283,15 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
             break
         except requests.RequestException as e:
             error_msg = str(e)
+            status_code = 0
+            # 提取 HTTP 状态码
+            if isinstance(e, requests.HTTPError) and e.response is not None:
+                status_code = e.response.status_code
+            
             if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
                 error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
-            last_error = LLMError(error_msg)
+            
+            last_error = LLMError(error_msg, status_code=status_code)
             
             if strategy.should_retry(last_error, attempt):
                 delay = strategy.get_delay(attempt, last_error)

@@ -55,7 +55,7 @@ models:
 |------|------|
 | `requests.Session()` 长连接 | 复用 HTTP 连接，避免每次 TLS 握手 |
 | `tools` 参数三态 | `True`=全部工具，`list[dict]`=指定列表，`False`=无工具 |
-| 失败重试 | `llm_retries` 次，递增延迟 × attempt |
+| 失败重试 | `llm_retries` 次，指数退避（2s → 4s → 8s），支持 timeout/connection/rate limit/429/5xx 等错误 |
 | token 估算 | API 未返回 usage 时按内容 CJK-aware 估算（CJK 1:1，其他 4:1），见 `llm/base.py` `estimate_tokens()` |
 | `RequestContext` | 每请求独立 model_config/display/http_session，多用户并发隔离 |
 
@@ -83,6 +83,7 @@ Runner 模块拆分为四个职责清晰的子模块：
 **关键机制：**
 
 - **流式/非流式统一** — 同一路径处理两种模式
+- **自动重试** — 流式/非流式均支持自动重试（timeout/connection/rate limit/429/5xx），指数退避
 - **abort 中断** — 每轮检查 `abort_event.is_set()`，支持 Web 端中断
 - **上下文安全阀** — `prompt_tokens > context_length × 88%` 提前退出
 - **错误熔断** — 连续 3 次工具 Error → 提前退出，避免空循环
