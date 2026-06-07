@@ -137,12 +137,15 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
         elif btype == "text":
             text_parts.append(block.get("text", ""))
         elif btype == "tool_use":
+            input_data = block.get("input", {})
+            # 🔧 诊断：记录转换过程
+            logger.debug(f"[Anth→OpenAI] tool_use: name={block.get('name')}, input={input_data}")
             tool_calls.append({
                 "id": block.get("id", ""),
                 "type": "function",
                 "function": {
                     "name": block.get("name", ""),
-                    "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
+                    "arguments": json.dumps(input_data, ensure_ascii=False),
                 },
             })
 
@@ -474,11 +477,22 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
                     if current_block:
                         if current_block.get("type") == "thinking":
                             yield {"type": "thinking_end"}
-                        if current_block.get("type") == "tool_use" and current_block.get("input_json"):
-                            try:
-                                current_block["input"] = json.loads(current_block["input_json"])
-                            except (ValueError, json.JSONDecodeError):
-                                pass
+                        if current_block.get("type") == "tool_use":
+                            # 🔧 诊断：记录原始 input_json
+                            input_json = current_block.get("input_json", "")
+                            logger.debug(f"[Anth] tool_use block: name={current_block.get('name')}, input_json={input_json[:500] if input_json else '<empty>'}")
+                            
+                            if input_json:
+                                try:
+                                    current_block["input"] = json.loads(input_json)
+                                    logger.debug(f"[Anth] tool_use input 解析成功: {current_block['input']}")
+                                except (ValueError, json.JSONDecodeError) as e:
+                                    logger.warning(f"[Anth⚠] tool_use input_json 解析失败: {e}, input_json={input_json[:200]}")
+                                    current_block["input"] = {}
+                            else:
+                                # input_json 为空，设置默认空对象
+                                logger.warning(f"[Anth⚠] tool_use 缺少 input_json, tool_name={current_block.get('name')}")
+                                current_block["input"] = {}
                         blocks.append(current_block)
                         current_block = None
 

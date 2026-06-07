@@ -160,6 +160,12 @@ class ToolRegistry:
             output = self.dispatch(name, args)
             # 写入缓存
             cache.set(name, args, output)
+            # 🔧 新增：打印工具执行结果摘要
+            if output:
+                output_preview = output[:200] if len(output) > 200 else output
+                logger.info(f"[工具←] {name} len={len(output)} preview={output_preview}")
+            else:
+                logger.info(f"[工具←] {name} len=0 output=None")
         except Exception as e:
             # 使用异常体系生成详细错误信息
             from ..exceptions import MiniAIError, ToolError
@@ -228,6 +234,12 @@ class ToolRegistry:
                     display.tool_result(name, result, elapsed, tc["id"])
                 # 写入缓存并通知等待线程
                 cache.mark_done(name, args, result)
+                # 🔧 新增：打印工具执行结果摘要
+                if result:
+                    result_preview = result[:200] if len(result) > 200 else result
+                    logger.info(f"[并行←] {name} len={len(result)} preview={result_preview}")
+                else:
+                    logger.info(f"[并行←] {name} len=0 output=None")
                 return tc["id"], result
             except Exception as e:
                 # 使用异常体系生成详细错误信息

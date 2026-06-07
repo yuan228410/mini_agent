@@ -151,7 +151,7 @@ def run_tool_loop(
                 _inject_teammate_reports(bus, messages)
             
             # 上下文压缩检查（提前预警）- 每 5 轮检查一次，减少性能开销
-            if context_length and turn % 5 == 0:
+            if context_length and state.turn % 5 == 0:
                 estimated_tokens = estimate_messages_tokens(messages)
                 threshold = int(context_length * context_usage_limit)
                 warning_threshold = int(threshold * 0.9)  # 90% 时预警

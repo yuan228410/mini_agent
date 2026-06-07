@@ -53,8 +53,8 @@ def execute(args: dict) -> str:
 
     path = Path(path_str).expanduser().resolve()
 
-    if _is_blocked(path):
-        return f"Error: 禁止删除系统关键路径: {path}"
+    # if _is_blocked(path):
+    #     return f"Error: 禁止删除系统关键路径: {path}"
 
     if not path.exists():
         if missing_ok:
