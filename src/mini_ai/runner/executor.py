@@ -185,18 +185,25 @@ class ToolExecutor:
                 if thinking_seen and self.display:
                     self.display.thinking_end()
                 
-                # 调用结束
-                if self.display and hasattr(self.display, 'llm_round_end'):
-                    usage = get_usage()
-                    self.display.llm_round_end(
-                        prompt_tokens=usage.get("prompt_tokens", last_usage["prompt_tokens"]),
-                        completion_tokens=usage.get("completion_tokens", last_usage["completion_tokens"]),
-                        model=model
-                    )
-                
-                return msg
+                # 🔧 修复：检查是否收到有效响应
+                if msg is None and last_usage["completion_tokens"] == 0:
+                    # 没有收到任何内容，可能是网络问题
+                    stream_error = "流式响应为空（可能因网络中断或服务端错误）"
+                    logger.warning(f"[LLM⚠] {stream_error}, attempt={attempt}")
+                    # 继续重试逻辑
+                else:
+                    # 调用结束
+                    if self.display and hasattr(self.display, 'llm_round_end'):
+                        usage = get_usage()
+                        self.display.llm_round_end(
+                            prompt_tokens=usage.get("prompt_tokens", last_usage["prompt_tokens"]),
+                            completion_tokens=usage.get("completion_tokens", last_usage["completion_tokens"]),
+                            model=model
+                        )
+                    
+                    return msg
             
-            # 流式错误，尝试重试
+            # 流式错误或无响应，尝试重试
             from ..exceptions import LLMError
             last_error = LLMError(stream_error)
             

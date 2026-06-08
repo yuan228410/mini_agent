@@ -122,6 +122,13 @@ def run_tool_loop(
                             executor.persist_fn(msg)
                         logger.info(f"[runner] 中断时保存部分内容: {len(msg['content'])} 字符")
                     return None, state.spawned_teammate
+                
+                # 🔧 修复：如果是错误消息，记录错误但不立即退出
+                if msg and msg.get("error"):
+                    logger.error(f"[runner] LLM 返回错误: {msg.get('error')}")
+                    # 不返回 None，而是返回带错误的消息，让上层处理
+                    return msg, state.spawned_teammate
+                
                 executor.finalize_response(msg, messages)
                 return msg, state.spawned_teammate
             

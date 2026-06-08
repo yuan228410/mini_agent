@@ -159,6 +159,8 @@ function _load(sid: string) {
       if (last && last.streaming) last.streaming = false
       s.isStreaming = false
       console.log(`[mini-ai] 会话 ${sid} 流式状态已过期，自动清理`)
+      // 🔧 修复：通知 SessionSidebar 更新状态
+      emit('status-change', sid, 'idle')
     }
     
     draftText.value = s.draftText
@@ -681,6 +683,25 @@ function _processEvent(s: SessionState, event: WsEvent) {
       {
         const m = s.messages[s.messages.length - 1]
         if (m) m.streaming = false
+        
+        // 🔧 修复：检查 complete 事件中的错误信息
+        if (event.data?.error) {
+          console.error('[complete] LLM 返回错误:', event.data.error)
+          // 如果最后一条消息是 assistant 且内容为空，添加错误提示
+          if (m && m.role === 'assistant' && (!m.content || !m.content.trim())) {
+            m.content = event.data.error
+            _updateUI(s)
+          } else if (!m || m.role !== 'assistant') {
+            // 如果没有 assistant 消息，添加一条新的
+            s.messages.push({
+              role: 'assistant',
+              content: event.data.error,
+              timestamp: new Date().toISOString()
+            })
+            _updateUI(s)
+          }
+        }
+        
         _updateUI(s)
       }
       break
@@ -1097,6 +1118,8 @@ async function switchToSession(sid: string, ws?: string) {
   if (loadedS.isStreaming) {
     _startStreamingWatchdog(sid)
     console.log(`[mini-ai] switchToSession: sid=${sid} isStreaming=true, watchdog started`)
+    // 🔧 修复：通知 SessionSidebar 更新状态为 generating
+    emit('status-change', sid, 'generating')
   }
   await fetchConfig()
   
