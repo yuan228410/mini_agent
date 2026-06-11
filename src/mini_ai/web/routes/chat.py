@@ -29,6 +29,14 @@ _MAX_CONCURRENT_SESSIONS = 10  # 最大并发会话数
 _executor = ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_SESSIONS, thread_name_prefix="chat-")
 _concurrent_semaphore = threading.Semaphore(_MAX_CONCURRENT_SESSIONS)
 
+def _safe_queue_put(queue, item):
+    """Queue.put_nowait 的安全版本，QueueFull 时静默丢弃（前端 watchdog 兜底）"""
+    try:
+        queue.put_nowait(item)
+    except Exception:
+        pass
+
+
 def abort_all_sessions():
     """设置所有活跃会话的 abort_event，让 run_tool_loop 尽快退出"""
     with _sessions_lock:
@@ -494,7 +502,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
     acquired = _concurrent_semaphore.acquire(timeout=30.0)
     if not acquired:
         logger.error(f"[Web] 获取并发信号量超时 session_key={session_key}")
-        loop.call_soon_threadsafe(lambda: queue.put_nowait({
+        loop.call_soon_threadsafe(lambda: _safe_queue_put(queue, {
             "event": "error",
             "data": {"error": "服务器繁忙，请稍后重试", "session_id": session_key}
         }))
@@ -728,7 +736,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     
                     # 🔧 不发送 error 事件，直接让 complete 事件携带错误信息和上下文
                     usage = get_usage()
-                    loop.call_soon_threadsafe(lambda et=err_text, ec=error_context: queue.put_nowait({
+                    loop.call_soon_threadsafe(lambda et=err_text, ec=error_context: _safe_queue_put(queue, {
                         "event": "complete", 
                         "data": {
                             "prompt_tokens": usage["prompt_tokens"], 
@@ -765,12 +773,12 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         messages[:] = pruned
                         logger.info(f"[Web] 裁剪后已低于阈值，跳过压缩: messages={len(messages)}")
                     else:
-                        messages[:] = comp["compactor"].compact(llm_chat, pruned, ctx=ctx, inject_fn=_inject_todos)
+                        messages[:] = comp["compactor"].compact(llm_chat, pruned, ctx=ctx)
                         logger.info(f"[Web] 压缩完成: messages={len(messages)}")
                     # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
                     messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 
-                loop.call_soon_threadsafe(lambda: queue.put_nowait({"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
+                loop.call_soon_threadsafe(lambda: _safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
             finally:
                 with _sessions_lock:
@@ -783,6 +791,10 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 from ...logger import set_session_id
                 set_session_id(None)
     finally:
+        # 防御性重置状态（防止异常路径残留 generating）
+        with _sessions_lock:
+            if _SESSION_STATUS.get(session_key) == "generating":
+                _SESSION_STATUS[session_key] = "idle"
         # 释放并发信号量
         _concurrent_semaphore.release()
 
@@ -1038,6 +1050,7 @@ async def chat_ws_endpoint(ws: WebSocket):
 
         complete_usage = {"prompt_tokens": 0, "completion_tokens": 0}
         aborted = False
+        got_terminal = False  # 是否已收到终端事件（complete/done/aborted）
         try:
             while True:
                 if abort_event.is_set():
@@ -1052,6 +1065,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         logger.debug(f'[Web] terminal event from queue sid={sid} event={event["event"]}')
                     await _send(event)
                     if event["event"] in ("done", "aborted", "complete"):
+                        got_terminal = True
                         break
                 except asyncio.TimeoutError:
                     if future.done():
@@ -1076,7 +1090,8 @@ async def chat_ws_endpoint(ws: WebSocket):
             _SESSION_ABORTS.pop(session_key, None)
         _update_meta_cache(username, sid, ws_name, messages)
 
-        if not aborted:
+        if not aborted and not got_terminal:
+            # 只在未从 queue 收到终端事件时发 done（避免 complete + done 双事件）
             logger.debug(f"[Web] sending done sid={sid} usage={usage}")
             await _send({
                 "event": "done",
@@ -1163,7 +1178,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         # 🔧 修复：添加错误处理，避免异常导致连接断开
                         try:
                             from ...llm import chat
-                            messages[:] = comp["compactor"].compact(chat, messages, ctx=ctx, inject_fn=_inject_todos)
+                            messages[:] = comp["compactor"].compact(chat, messages, ctx=ctx)
                             after = len([m for m in messages if m["role"] != "system"])
                             
                             await _send({"event": "info", "data": {"message": f"压缩完成：{before} → {after} 条消息（摘要 {before - after} 条）", "session_id": sid}})

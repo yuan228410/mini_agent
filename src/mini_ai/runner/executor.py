@@ -74,7 +74,13 @@ class ToolExecutor:
         if self.display and hasattr(self.display, 'llm_round_start'):
             self.display.llm_round_start(model)
         
-        msg = llm_chat(messages, tools=tools, ctx=ctx)
+        try:
+            msg = llm_chat(messages, tools=tools, ctx=ctx)
+        except Exception as e:
+            # 非流式溢出时 LLM 抛 LLMError，需要先清理 display 状态
+            if self.display:
+                self.display.text_end()
+            raise
         
         # 调用结束
         if self.display and hasattr(self.display, 'llm_round_end'):
@@ -230,6 +236,7 @@ class ToolExecutor:
                     "role": "assistant",
                     "content": None,
                     "error": stream_error,
+                    "is_context_overflow": stream_overflow,
                 }
         
         # 所有重试都失败
@@ -242,6 +249,7 @@ class ToolExecutor:
             "role": "assistant",
             "content": None,
             "error": str(last_error),
+            "is_context_overflow": stream_overflow,
         }
     
     def execute_tools(

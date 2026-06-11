@@ -588,7 +588,7 @@ def main():
                     messages[:] = pruned
                     logger.info(f"[CLI] 裁剪后已低于阈值，跳过压缩: messages={len(messages)}")
                 else:
-                    messages[:] = compactor.compact(chat, pruned, ctx=cmd.ctx, inject_fn=_inject_todos)
+                    messages[:] = compactor.compact(chat, pruned, ctx=cmd.ctx)
                     logger.info(f"[CLI] 压缩完成: messages={len(messages)}")
 
         except KeyboardInterrupt:

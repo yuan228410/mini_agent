@@ -289,6 +289,7 @@ async function initSession(ws?: string) {
 }
 
 async function preloadAllSessions(ws?: string) {
+  // 只预加载当前工作空间的会话历史，其他工作空间懒加载（避免 N×M 次 API 请求）
   console.time('[perf] preloadAllSessions')
   try {
     const resp = await getSessions(ws || undefined)
@@ -298,16 +299,6 @@ async function preloadAllSessions(ws?: string) {
       const key = _cacheKey(s.session_id, ws)
       if (_states.has(key) && _states.get(key)!.messages.length > 0) continue
       restoreHistory(s.session_id, ws).catch(() => {})
-    }
-    const resp2 = await getWorkspaces()
-    for (const w of resp2.workspaces || []) {
-      if (w.name === ws) continue
-      const resp3 = await getSessions(w.name)
-      for (const s of resp3.sessions || []) {
-        const key = _cacheKey(s.session_id, w.name)
-        if (_states.has(key) && _states.get(key)!.messages.length > 0) continue
-        restoreHistory(s.session_id, w.name).catch(() => {})
-      }
     }
   } catch {}
   console.timeEnd('[perf] preloadAllSessions')
@@ -412,6 +403,8 @@ async function handleWsEvent(event: WsEvent) {
     })
     isStreaming.value = false
     emit('status-change', activeSessionId.value, 'idle')
+    // 重连后主动刷新配置，确保上下文 token 数与后端一致
+    fetchConfig().catch(() => {})
     return
   }
   

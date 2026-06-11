@@ -25,7 +25,12 @@ class ContextPruner:
 
     @staticmethod
     def prune(messages: list[dict], opts: PruneOptions | None = None) -> list[dict]:
-        """裁剪消息历史中的工具结果，返回新列表"""
+        """裁剪消息历史中的工具结果，返回新列表
+
+        增量优化：已裁剪的消息通过 _pruned 标记跳过，避免重复遍历。
+        - _pruned="hard"：已硬裁剪（内容最短），任何参数都跳过
+        - _pruned="soft"：已软裁剪，同级或更宽松参数跳过
+        """
         if opts is None:
             opts = PruneOptions()
 
@@ -44,11 +49,26 @@ class ContextPruner:
         result: list[dict] = []
         hard_pruned = 0
         soft_pruned = 0
+        skipped = 0  # 增量跳过计数
 
         for i, msg in enumerate(messages):
             role = msg.get("role")
 
             if role == "tool":
+                # 增量优化：已硬裁剪 → 跳过（内容已最短）
+                if msg.get("_pruned") == "hard":
+                    result.append(msg)
+                    skipped += 1
+                    continue
+
+                # 增量优化：已软裁剪且当前参数不比上次更激进 → 跳过
+                if msg.get("_pruned") == "soft":
+                    prev_level = msg.get("_prune_level", 0)
+                    if opts.hard_prune_after >= prev_level:
+                        result.append(msg)
+                        skipped += 1
+                        continue
+
                 # 找前方最近的 assistant 消息的 depth
                 nearest_depth = 0
                 for j in range(i - 1, -1, -1):
@@ -71,6 +91,7 @@ class ContextPruner:
                     hard_pruned += 1
                     pruned = dict(msg)
                     pruned["content"] = "[tool result pruned]"
+                    pruned["_pruned"] = "hard"
                     result.append(pruned)
                     continue
 
@@ -79,6 +100,8 @@ class ContextPruner:
                     soft_pruned += 1
                     pruned = dict(msg)
                     pruned["content"] = _soft_prune(content, opts.soft_prune_lines)
+                    pruned["_pruned"] = "soft"
+                    pruned["_prune_level"] = opts.hard_prune_after
                     result.append(pruned)
                     continue
 
@@ -89,7 +112,9 @@ class ContextPruner:
                 result.append(msg)
 
         if hard_pruned or soft_pruned:
-            logger.info(f"[context_pruner] 裁剪完成: hard={hard_pruned}, soft={soft_pruned}, msgs={len(messages)}→{len(result)}")
+            logger.info(f"[context_pruner] 裁剪完成: hard={hard_pruned}, soft={soft_pruned}, skipped={skipped}, msgs={len(messages)}→{len(result)}")
+        elif skipped:
+            logger.debug(f"[context_pruner] 增量跳过: {skipped} 条已裁剪")
         else:
             logger.debug(f"[context_pruner] 无需裁剪: msgs={len(messages)}")
 

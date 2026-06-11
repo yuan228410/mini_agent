@@ -69,7 +69,9 @@ def chat(messages, tools=True, ctx=None):
     if get_api_mode(ctx) == "anthropic":
         from .anthropic import chat as anth_chat
         return anth_chat(messages, tools, ctx=ctx)
-    payload = {"model": get_model(ctx), "messages": messages}
+    from .base import _strip_internal_fields
+    clean_msgs = _strip_internal_fields(messages)
+    payload = {"model": get_model(ctx), "messages": clean_msgs}
     _apply_model_params(payload, ctx)
     tool_names = _attach_tools(payload, tools)
 
@@ -222,7 +224,9 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         from .anthropic import chat_stream as anth_stream
         yield from anth_stream(messages, tools, ctx=ctx)
         return
-    payload = {"model": get_model(ctx), "messages": messages, "stream": True, "stream_options": {"include_usage": True}}
+    from .base import _strip_internal_fields
+    clean_msgs = _strip_internal_fields(messages)
+    payload = {"model": get_model(ctx), "messages": clean_msgs, "stream": True, "stream_options": {"include_usage": True}}
     _apply_model_params(payload, ctx)
     tool_names = _attach_tools(payload, tools)
 

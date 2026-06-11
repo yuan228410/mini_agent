@@ -177,8 +177,10 @@ def _apply_model_params(payload: dict, ctx=None):
 def chat(messages, tools=True, ctx=None):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
     from ..tools import get_definitions
+    from .base import _strip_internal_fields
 
-    system_text, ant_msgs = _openai_to_anthropic(messages)
+    clean_msgs = _strip_internal_fields(messages)
+    system_text, ant_msgs = _openai_to_anthropic(clean_msgs)
 
     max_tokens = get_max_tokens(ctx) or 4096
     payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": max_tokens}
@@ -324,8 +326,10 @@ def chat(messages, tools=True, ctx=None):
 def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
     from ..tools import get_definitions
+    from .base import _strip_internal_fields
 
-    system_text, ant_msgs = _openai_to_anthropic(messages)
+    clean_msgs = _strip_internal_fields(messages)
+    system_text, ant_msgs = _openai_to_anthropic(clean_msgs)
 
     max_tokens = get_max_tokens(ctx) or 4096
     payload = {"model": get_model(ctx), "messages": ant_msgs, "max_tokens": max_tokens, "stream": True}

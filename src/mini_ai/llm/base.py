@@ -45,22 +45,38 @@ def get_reasoning_effort(ctx=None):
     return get_config(ctx).get("reasoning_effort")
 
 
-def estimate_tokens(text: str) -> int:
-    cjk = 0
-    other = 0
-    for ch in text:
-        cp = ord(ch)
-        if (0x4E00 <= cp <= 0x9FFF or 0x3400 <= cp <= 0x4DBF or
-            0x20000 <= cp <= 0x2A6DF or 0xF900 <= cp <= 0xFAFF or
-            0x3000 <= cp <= 0x303F or 0x3040 <= cp <= 0x309F or
-            0x30A0 <= cp <= 0x30FF or 0xAC00 <= cp <= 0xD7AF):
-            cjk += 1
-        else:
-            other += 1
-    return int(cjk / 1.0 + other / 4.0)
+# 内部标记字段（prune 增量裁剪用），不发给 LLM API
+_INTERNAL_FIELDS = frozenset(("_pruned", "_prune_level", "_is_summary"))
 
+def _strip_internal_fields(messages: list[dict]) -> list[dict]:
+    """剥离内部标记字段，返回清理后的消息列表（不修改原列表）"""
+    needs_strip = False
+    for m in messages:
+        if _INTERNAL_FIELDS & m.keys():
+            needs_strip = True
+            break
+    if not needs_strip:
+        return messages
+    return [{k: v for k, v in m.items() if k not in _INTERNAL_FIELDS} for m in messages]
+
+
+def estimate_tokens(text: str) -> int:
+    # 字节长度近似：CJK 3 字节 ≈ 1 token，ASCII 1 字节 ≈ 0.33 token
+    # bytes // 3 对 CJK 精确，对 ASCII 高估 ~33%（阈值判断偏保守，安全）
+    return max(1, len(text.encode('utf-8')) // 3)
+
+
+# estimate_messages_tokens 缓存：key = (id, len, last_msg_hash)
+_ESTIMATE_CACHE: dict[tuple, int] = {}
+_ESTIMATE_CACHE_MAX = 10
 
 def estimate_messages_tokens(messages: list[dict]) -> int:
+    # 缓存 key：消息列表 id + 长度 + 尾消息 id（检测 append/替换）
+    cache_key = (id(messages), len(messages), id(messages[-1]) if messages else 0)
+    cached = _ESTIMATE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
     total = 0
     for msg in messages:
         content = msg.get("content") or ""
@@ -79,6 +95,13 @@ def estimate_messages_tokens(messages: list[dict]) -> int:
                 if args:
                     total += estimate_tokens(args)
         total += 4
+
+    # LRU 淘汰
+    if len(_ESTIMATE_CACHE) >= _ESTIMATE_CACHE_MAX:
+        oldest = next(iter(_ESTIMATE_CACHE))
+        del _ESTIMATE_CACHE[oldest]
+    _ESTIMATE_CACHE[cache_key] = total
+
     return total
 
 

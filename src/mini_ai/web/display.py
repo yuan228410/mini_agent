@@ -52,9 +52,14 @@ class WebDisplay:
                 _EVENT_SEQS[self.session_id] = seq
                 data["seq"] = seq
         
-        self.loop.call_soon_threadsafe(
-            lambda: self.queue.put_nowait({"event": event, "data": data})
-        )
+        def _safe_put():
+            try:
+                self.queue.put_nowait({"event": event, "data": data})
+            except Exception:
+                # QueueFull 或队列关闭，丢弃事件（前端 watchdog 会兜底重置状态）
+                pass
+
+        self.loop.call_soon_threadsafe(_safe_put)
 
     def llm_round_start(self, model: str = ""):
         """LLM 调用开始"""
