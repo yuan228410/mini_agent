@@ -502,10 +502,10 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
     acquired = _concurrent_semaphore.acquire(timeout=30.0)
     if not acquired:
         logger.error(f"[Web] 获取并发信号量超时 session_key={session_key}")
-        loop.call_soon_threadsafe(lambda: _safe_queue_put(queue, {
+        _safe_queue_put(queue, {
             "event": "error",
             "data": {"error": "服务器繁忙，请稍后重试", "session_id": session_key}
-        }))
+        })
         return None, {}
     
     try:
@@ -734,18 +734,18 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                             ]
                             break
                     
-                    # 🔧 不发送 error 事件，直接让 complete 事件携带错误信息和上下文
+                    # 🔧 直接 put 到 queue（线程安全），确保 WS loop 能 drain 到
                     usage = get_usage()
-                    loop.call_soon_threadsafe(lambda et=err_text, ec=error_context: _safe_queue_put(queue, {
+                    _safe_queue_put(queue, {
                         "event": "complete", 
                         "data": {
                             "prompt_tokens": usage["prompt_tokens"], 
                             "completion_tokens": usage["completion_tokens"],
-                            "error": et,
-                            "error_context": ec,
+                            "error": err_text,
+                            "error_context": error_context,
                             "session_id": session_key
                         }
-                    }))
+                    })
                     return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
                     
                 # 🔧 修复：正常流程的消息处理（之前被错误地放在 return 后面）
@@ -778,7 +778,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
                     messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 
-                loop.call_soon_threadsafe(lambda: _safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}))
+                _safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}})
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
             finally:
                 with _sessions_lock:
@@ -1069,7 +1069,24 @@ async def chat_ws_endpoint(ws: WebSocket):
                         break
                 except asyncio.TimeoutError:
                     if future.done():
-                        logger.debug(f"[Web] future.done() timeout exit sid={sid}")
+                        # Drain remaining queue items before exiting
+                        # (call_soon_threadsafe events may not have been processed yet)
+                        for _ in range(10):
+                            try:
+                                event = queue.get_nowait()
+                                event["data"]["session_id"] = sid
+                                if event["event"] == "complete" and "prompt_tokens" in event["data"]:
+                                    complete_usage = {"prompt_tokens": event["data"]["prompt_tokens"], "completion_tokens": event["data"].get("completion_tokens", 0)}
+                                if event["event"] in ("done", "aborted", "error", "complete"):
+                                    logger.debug(f'[Web] drained terminal event sid={sid} event={event["event"]}')
+                                await _send(event)
+                                if event["event"] in ("done", "aborted", "complete"):
+                                    got_terminal = True
+                                    break
+                            except asyncio.QueueEmpty:
+                                break
+                        else:
+                            logger.debug(f"[Web] future.done() drain exhausted sid={sid}")
                         break
         except Exception as e:
             logger.error(f"[Web] WS chat task error: {e}", exc_info=True)

@@ -677,15 +677,15 @@ function _processEvent(s: SessionState, event: WsEvent) {
         const m = s.messages[s.messages.length - 1]
         if (m) m.streaming = false
         
-        // 🔧 修复：检查 complete 事件中的错误信息
+        // 🔧 complete 事件携带错误：始终显示，追加到已有内容
         if (event.data?.error) {
           console.error('[complete] LLM 返回错误:', event.data.error)
-          // 如果最后一条消息是 assistant 且内容为空，添加错误提示
-          if (m && m.role === 'assistant' && (!m.content || !m.content.trim())) {
-            m.content = event.data.error
+          if (m && m.role === 'assistant') {
+            // 有 assistant 消息：追加错误提示（可能已有部分流式内容）
+            m.content = (m.content ? m.content + '\n\n' : '') + event.data.error
             _updateUI(s)
-          } else if (!m || m.role !== 'assistant') {
-            // 如果没有 assistant 消息，添加一条新的
+          } else {
+            // 无 assistant 消息：新增一条
             s.messages.push({
               role: 'assistant',
               content: event.data.error,

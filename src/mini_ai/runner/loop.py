@@ -205,15 +205,19 @@ def run_tool_loop(
     return _force_summary(messages, ctx, display, bus, state)
 
 def _has_recent_tool_error(messages: list[dict]) -> bool:
-    """检查最近是否有工具错误（仅匹配明确的错误前缀，避免误判正常工具结果中的 ⚠ 符号）"""
+    """检查最近是否有工具错误（匹配明确的错误模式，避免误判正常工具结果中的 ⚠ 符号）"""
     tool_msgs = [m for m in messages[-5:] if m.get("role") == "tool"]
     if not tool_msgs:
         return False
     
     # 检查最后一条工具消息是否为错误
     last_msg = tool_msgs[-1].get("content", "")
-    # 精确匹配：Error: 前缀 或 ⚠ 工具执行失败 前缀
-    return last_msg.startswith("Error:") or last_msg.startswith("⚠ 工具执行失败")
+    if last_msg.startswith("Error:"):
+        return True
+    # ⚠ 后跟错误关键词（失败/错误/不存在/无权限/不支持/缺少）
+    if last_msg.startswith("⚠ ") and any(kw in last_msg[:20] for kw in ("失败", "错误", "不存在", "无权限", "不支持", "缺少")):
+        return True
+    return False
 
 def _force_summary(messages: list[dict], ctx, display, bus, state: LoopState) -> tuple[dict | None, bool]:
     """强制生成总结
