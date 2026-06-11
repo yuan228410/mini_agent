@@ -35,10 +35,6 @@ async def lifespan(app: FastAPI):
     from .routes.chat import abort_all_sessions
     abort_all_sessions()
 
-    # 关闭线程池（cancel_futures 让阻塞的 run_tool_loop 线程尽快退出）
-    from .routes.chat import _executor
-    _executor.shutdown(wait=False, cancel_futures=True)
-
     # 关闭历史数据库连接池
     HistoryDBPool.close_all()
 

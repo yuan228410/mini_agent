@@ -1,6 +1,5 @@
 """聊天接口 — WebSocket 模式，多用户，HistoryDB 持久化，多会话并行"""
 import asyncio
-import atexit
 import json
 import threading
 import uuid
@@ -36,9 +35,6 @@ def abort_all_sessions():
         for key, evt in _SESSION_ABORTS.items():
             evt.set()
     logger.info(f"[Web] abort_all_sessions: 已中止 {len(_SESSION_ABORTS)} 个会话")
-
-# 注册进程退出时的清理函数
-atexit.register(lambda: _executor.shutdown(wait=False, cancel_futures=True))
 
 # 三层缓存 key = f"{username}:{workspace}:{sid}"
 # 所有缓存 dict 统一使用此 key 格式，与存储路径对齐
