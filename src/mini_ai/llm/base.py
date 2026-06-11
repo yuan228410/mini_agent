@@ -42,19 +42,42 @@ def get_reasoning_effort(ctx=None):
     return get_config(ctx).get("reasoning_effort")
 
 
-# 内部标记字段（prune 增量裁剪用），不发给 LLM API
-_INTERNAL_FIELDS = frozenset(("_pruned", "_prune_level", "_is_summary"))
+# 内部标记字段（prune 增量裁剪用 + thinking 仅供前端显示），不发给 LLM API
+_INTERNAL_FIELDS = frozenset(("_pruned", "_prune_level", "_is_summary", "thinking"))
 
 def _strip_internal_fields(messages: list[dict]) -> list[dict]:
-    """剥离内部标记字段，返回清理后的消息列表（不修改原列表）"""
+    """剥离内部标记字段，返回清理后的消息列表（不修改原列表）
+
+    清理内容：
+    - _pruned / _prune_level / _is_summary：裁剪增量标记
+    - thinking：思考过程（仅供前端显示，LLM 不需要，每轮省 ~165-660 token）
+    - tool_calls[]. _result：工具执行结果缓存（已通过 tool 消息传给 LLM，重复浪费 token）
+    """
     needs_strip = False
     for m in messages:
         if _INTERNAL_FIELDS & m.keys():
             needs_strip = True
             break
+        # 检查 tool_calls 中是否有 _result
+        tcs = m.get("tool_calls")
+        if tcs and any(tc.get("_result") is not None for tc in tcs if isinstance(tc, dict)):
+            needs_strip = True
+            break
     if not needs_strip:
         return messages
-    return [{k: v for k, v in m.items() if k not in _INTERNAL_FIELDS} for m in messages]
+    result = []
+    for m in messages:
+        d = {k: v for k, v in m.items() if k not in _INTERNAL_FIELDS}
+        tcs = d.get("tool_calls")
+        if tcs:
+            has_result = any(isinstance(tc, dict) and tc.get("_result") is not None for tc in tcs)
+            if has_result:
+                d["tool_calls"] = [
+                    {k: v for k, v in tc.items() if k != "_result"} if isinstance(tc, dict) and "_result" in tc else tc
+                    for tc in tcs
+                ]
+        result.append(d)
+    return result
 
 
 def estimate_tokens(text: str) -> int:
