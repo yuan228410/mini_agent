@@ -2,7 +2,6 @@
 import time
 import random
 from typing import Callable, Any
-from functools import wraps
 
 from ..exceptions import LLMError
 from ..logger import logger
@@ -123,75 +122,3 @@ class RetryStrategy:
             delay = delay * (0.5 + random.random())
         
         return delay
-
-
-def with_retry(
-    strategy: RetryStrategy | None = None,
-    on_retry: Callable[[Exception, int, float], None] | None = None,
-):
-    """重试装饰器
-    
-    Args:
-        strategy: 重试策略（None 则使用默认）
-        on_retry: 重试回调函数 (error, attempt, delay)
-    
-    Returns:
-        装饰器函数
-    
-    Example:
-        @with_retry(RetryStrategy(max_retries=3))
-        def call_llm():
-            ...
-    """
-    if strategy is None:
-        strategy = RetryStrategy()
-    
-    def decorator(func: Callable) -> Callable:
-        @wraps(func)
-        def wrapper(*args, **kwargs) -> Any:
-            last_error = None
-            
-            for attempt in range(strategy.max_retries + 1):
-                try:
-                    return func(*args, **kwargs)
-                except Exception as e:
-                    last_error = e
-                    
-                    if not strategy.should_retry(e, attempt):
-                        raise
-                    
-                    delay = strategy.get_delay(attempt, e)
-                    
-                    if on_retry:
-                        on_retry(e, attempt, delay)
-                    else:
-                        logger.warning(
-                            f"[重试] {func.__name__} 第 {attempt + 1}/{strategy.max_retries} 次: {e}，"
-                            f"{delay:.1f}s 后重试"
-                        )
-                    
-                    time.sleep(delay)
-            
-            # 所有重试都失败
-            raise last_error
-        
-        return wrapper
-    return decorator
-
-
-# 预定义策略
-DEFAULT_STRATEGY = RetryStrategy()
-
-# 保守策略（更多重试，更长延迟）
-CONSERVATIVE_STRATEGY = RetryStrategy(
-    max_retries=5,
-    base_delay=2.0,
-    max_delay=120.0,
-)
-
-# 激进策略（快速失败）
-AGGRESSIVE_STRATEGY = RetryStrategy(
-    max_retries=2,
-    base_delay=0.5,
-    max_delay=10.0,
-)

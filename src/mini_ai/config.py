@@ -96,7 +96,7 @@ class ConfigWatcher:
         watcher.stop()
     """
     
-    def __init__(self, config_path: Path, callback: Callable[[], None], interval: float = 1.0):
+    def __init__(self, config_path: Path, callback: Callable[[], None], interval: float = 5.0):
         """
         Args:
             config_path: 配置文件路径

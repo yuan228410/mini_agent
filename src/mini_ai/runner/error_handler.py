@@ -66,8 +66,6 @@ class ErrorHandler:
     ) -> dict[str, Any] | None:
         """处理 MiniAI 异常"""
         from ..exceptions import ToolError, LLMError, ConfigError
-        from datetime import datetime, timezone, timedelta
-        
         _ts = now_ts()
         
         if isinstance(error, ConfigError):
@@ -93,9 +91,9 @@ class ErrorHandler:
                 "timestamp": _ts,
             }
         
+        # TODO: 工具模块尚未接入异常体系，ToolError 从未被 raise
+        # 当工具模块统一抛 ToolError 后，此分支才会生效
         if isinstance(error, ToolError):
-            # 工具错误（注意：正常情况下不会走这个分支，因为异常在 executor.execute_tools 内部被处理）
-            # 但保留此分支以防万一
             state.record_error()
             
             if state.consecutive_errors >= self.max_consecutive_errors:
@@ -126,8 +124,6 @@ class ErrorHandler:
         state: LoopState
     ) -> dict[str, Any] | None:
         """处理未知异常"""
-        from datetime import datetime, timezone, timedelta
-
         _ts = now_ts()
 
         logger.error(f"[ErrorHandler] 未处理异常: {error}", exc_info=True)

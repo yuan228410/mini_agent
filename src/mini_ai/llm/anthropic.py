@@ -9,7 +9,7 @@ from ..config import TIMEOUTS, THINKING as _GLOBAL_THINKING
 from .base import (
     get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
-    get_usage, update_usage, get_session, ensure_session_anthropic,
+    get_usage, get_session, ensure_session_anthropic,
     estimate_tokens, estimate_messages_tokens, detect_context_overflow,
 )
 from ..logger import logger

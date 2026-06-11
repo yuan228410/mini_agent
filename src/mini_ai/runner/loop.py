@@ -201,6 +201,9 @@ def run_tool_loop(
             if error_handler.should_terminate(e):
                 return None, state.spawned_teammate
     
+
+            # 非终止性异常（如 429 限流），继续循环让 LLM 重试
+            continue
     # 达到最大轮次
     return _force_summary(messages, ctx, display, bus, state)
 
@@ -337,7 +340,15 @@ def _check_context_usage(messages: list[dict], context_length: int, limit: float
         messages[:] = new_messages
         after_tokens = estimate_messages_tokens(messages)
         logger.info(f"[runner/compact] 压缩完成: tokens {estimated} -> {after_tokens}")
-        return after_tokens > threshold
+        if after_tokens <= threshold:
+            return False
+        # compact 后仍超限，尝试 force_compact 渐进恢复
+        logger.warning("[runner/compact] compact 后仍超限，尝试 force_compact")
+        if compactor.force_compact(llm_chat, messages, ctx):
+            after_tokens = estimate_messages_tokens(messages)
+            logger.info(f"[runner/compact] force_compact 后 tokens={after_tokens}")
+            return after_tokens > threshold
+        return True
     except Exception as e:
         logger.error(f"[runner/compact] 压缩异常: {e}", exc_info=True)
         return True

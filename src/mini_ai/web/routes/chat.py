@@ -13,7 +13,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from ...config import DATA_DIR, MODEL_CONFIG, STREAMING, COMPACTOR, WEB, PLAN, RequestContext, get_model_config, user_data_dir
 from ...llm import get_usage, reset_usage, chat as llm_chat
 from ...runner import run_tool_loop
-from ...tools import get_definitions, register_memory_tools, register_history_tools, register
+from ...tools import get_definitions, register_memory_tools, register_history_tools, register, inject_todos as _inject_todos
 from ...logger import logger
 from ...tools import register_team, register_blackboard
 from ...config import PACKAGE_DIR
@@ -155,15 +155,6 @@ def _resolve_base(username: str, workspace: str | None) -> Path:
             base.mkdir(parents=True, exist_ok=True)
             return base
     raise ValueError(f"工作空间 '{workspace}' 不存在")
-
-def _inject_todos(messages: list[dict]):
-    from ...tools import render_todos
-    todos_text = render_todos()
-    base = messages[0]["content"]
-    marker = "\n\n## 当前任务计划"
-    if marker in base:
-        base = base[: base.index(marker)]
-    messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 def _get_session_lock(username: str, workspace: str | None, sid: str) -> threading.Lock:
     key = _cache_key(username, workspace, sid)

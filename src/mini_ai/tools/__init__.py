@@ -349,3 +349,9 @@ def handle_tool_calls(msg: dict, messages: list[dict], display=None, persist_fn=
 
 def render_todos() -> str:
     return _registry.render_todos()
+
+
+def inject_todos(messages: list[dict]):
+    """将当前任务计划注入 system prompt 的尾部（供 main.py 和 chat.py 共用）"""
+    from .update_todos import inject_todos as _impl
+    _impl(messages)

@@ -127,3 +127,14 @@ def execute(args: dict) -> str:
 def cleanup_session(sid: str):
     with _stores_lock:
         _stores.pop(sid, None)
+
+
+def inject_todos(messages: list[dict]):
+    """将当前任务计划注入 system prompt 的尾部（供 main.py 和 chat.py 共用）"""
+    from . import render_todos
+    todos_text = render_todos()
+    base = messages[0]["content"]
+    marker = "\n\n## 当前任务计划"
+    if marker in base:
+        base = base[:base.index(marker)]
+    messages[0]["content"] = base + f"{marker}\n\n{todos_text}"

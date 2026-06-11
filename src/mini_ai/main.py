@@ -19,6 +19,7 @@ from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
 from .tools import (get_definitions, register, register_subagents, register_team,
+                   inject_todos as _inject_todos,
                     register_display, register_blackboard, register_memory_tools,
                     register_history_tools, render_todos, set_project_path)
 from .workspace import WorkspaceManager
@@ -84,14 +85,6 @@ def _lead_tool_defs(ctx: AppContext) -> list[dict]:
         ]
     return ctx.lead_tools_cache
 
-
-def _inject_todos(messages: list[dict]):
-    todos_text = render_todos()
-    base = messages[0]["content"]
-    marker = "\n\n## 当前任务计划"
-    if marker in base:
-        base = base[:base.index(marker)]
-    messages[0]["content"] = base + f"{marker}\n\n{todos_text}"
 
 
 # ═══════════════════════════════════════════

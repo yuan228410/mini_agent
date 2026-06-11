@@ -26,9 +26,6 @@ def get_api_mode(ctx=None):
     return get_config(ctx).get("api_mode", "openai")
 
 
-def get_context_length(ctx=None):
-    return get_config(ctx).get("context_length", 256000)
-
 def get_temperature(ctx=None):
     return get_config(ctx).get("temperature")
 
@@ -71,8 +68,11 @@ _ESTIMATE_CACHE: dict[tuple, int] = {}
 _ESTIMATE_CACHE_MAX = 10
 
 def estimate_messages_tokens(messages: list[dict]) -> int:
-    # 缓存 key：消息列表 id + 长度 + 尾消息 id（检测 append/替换）
-    cache_key = (id(messages), len(messages), id(messages[-1]) if messages else 0)
+    # 缓存 key：消息列表 id + 长度 + 首尾消息 id（检测原地替换 messages[:]=new）
+    # 首尾 id 同时变化才能确认内容已变，避免 messages[:]=pruned 后缓存误命中
+    cache_key = (id(messages), len(messages),
+                 id(messages[0]) if messages else 0,
+                 id(messages[-1]) if messages else 0)
     cached = _ESTIMATE_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -116,11 +116,6 @@ def get_usage() -> dict:
     return _local.last_usage
 
 
-def update_usage(prompt_tokens: int = 0, completion_tokens: int = 0):
-    usage = get_usage()
-    usage["prompt_tokens"] += prompt_tokens
-    usage["completion_tokens"] += completion_tokens
-
 
 def reset_usage():
     _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -141,28 +136,16 @@ def ensure_session_openai(ctx=None):
     cfg = get_config(ctx)
     sess = get_session(ctx)
     key = cfg["api_key"]
-    mode = get_api_mode(ctx)
 
-    if mode == "anthropic":
-        if sess.headers.get("x-api-key") != key:
-            sess.headers.update({
-                "x-api-key": key,
-                "anthropic-version": "2023-06-01",
-                "Content-Type": "application/json",
-            })
-            custom_headers = cfg.get("headers", {})
-            if custom_headers:
-                sess.headers.update(custom_headers)
-    else:
-        auth_value = f"Bearer {key}"
-        if sess.headers.get("Authorization") != auth_value:
-            sess.headers.update({
-                "Authorization": auth_value,
-                "Content-Type": "application/json",
-            })
-            custom_headers = cfg.get("headers", {})
-            if custom_headers:
-                sess.headers.update(custom_headers)
+    auth_value = f"Bearer {key}"
+    if sess.headers.get("Authorization") != auth_value:
+        sess.headers.update({
+            "Authorization": auth_value,
+            "Content-Type": "application/json",
+        })
+        custom_headers = cfg.get("headers", {})
+        if custom_headers:
+            sess.headers.update(custom_headers)
 
 
 def ensure_session_anthropic(ctx=None):

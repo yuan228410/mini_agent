@@ -8,7 +8,7 @@ from ..config import TIMEOUTS
 from .base import (
     get_config, get_api_url, get_api_key, get_model, get_api_mode,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
-    get_usage, update_usage, get_session, ensure_session_openai, detect_context_overflow,
+    get_usage, get_session, ensure_session_openai, detect_context_overflow,
     estimate_tokens, estimate_messages_tokens,
 )
 from ..logger import logger
@@ -16,7 +16,6 @@ from ..tools import get_definitions
 from ..exceptions import LLMError
 from .retry import RetryStrategy
 
-_get_usage = get_usage
 
 
 def _msg_summary(m: dict) -> str:
