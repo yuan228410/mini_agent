@@ -156,6 +156,10 @@ logging:
 | `max_summary_sections` | `50` | 压缩摘要文件保留的最大段落数，超过时截断旧段落 |
 | `context_limit` | `50` | 加载到 LLM 上下文的消息条数 |
 
+**工具结果裁剪（ContextPruner）**：压缩前自动执行三级裁剪（保护区/软裁剪/硬裁剪），参数由 `force_compact` 各级内部指定，无需额外配置。日常压缩使用 L0 级默认参数（`hard_prune_after=10, max_tool_result_chars=2000, soft_prune_lines=5`）。
+
+**上下文溢出恢复（force_compact）**：API 返回 400 + 溢出关键词时，按 L0→L4 五级渐进加码裁剪+压缩，每级安全线为 `context_length × 70%`，最多调用 3 次 LLM 做摘要。溢出恢复最多重试 3 次。
+
 ### teammate
 
 | 参数 | 默认值 | 说明 |

@@ -86,6 +86,8 @@ Runner 模块拆分为四个职责清晰的子模块：
 - **自动重试** — 流式/非流式均支持自动重试（timeout/connection/rate limit/429/5xx），指数退避
 - **abort 中断** — 每轮检查 `abort_event.is_set()`，支持 Web 端中断
 - **上下文安全阀** — `prompt_tokens > context_length × 88%` 提前退出
+- **上下文溢出恢复** — API 返回 400 + 溢出关键词时，`force_compact()` 渐进恢复（L0→L4 逐级加码裁剪+压缩），成功后重试当前轮次（最多 3 次）
+- **工具结果裁剪** — `ContextPruner.prune()` 三级策略（保护区/软裁剪/硬裁剪），压缩前零开销减少 prompt token
 - **错误熔断** — 连续 3 次工具 Error → 提前退出，避免空循环
 - **轮次上限** — `max_turns`（默认 20）强制退出
 - **实时持久化** — `persist_fn(msg)` 回调，每条消息生成即写入

@@ -26,6 +26,7 @@ class LoopState:
     max_turns: int = 20
     consecutive_errors: int = 0
     spawned_teammate: bool = False
+    overflow_retries: int = 0
     messages: list[dict] = field(default_factory=list)
     
     def should_continue(self) -> bool:
@@ -61,5 +62,6 @@ class LoopState:
             "max_turns": self.max_turns,
             "consecutive_errors": self.consecutive_errors,
             "spawned_teammate": self.spawned_teammate,
+            "overflow_retries": self.overflow_retries,
             "message_count": len(self.messages),
         }

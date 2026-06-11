@@ -155,3 +155,14 @@ def ensure_session_anthropic(ctx=None):
         custom_headers = cfg.get("headers", {})
         if custom_headers:
             sess.headers.update(custom_headers)
+
+# ── Context overflow detection ──
+
+_OVERFLOW_KEYWORDS = ("context_length", "prompt is too long", "request too large", "input is too long")
+
+def detect_context_overflow(status: int, body: str) -> bool:
+    """检测 API 返回是否为上下文溢出错误（status==400 且 body 含关键词）"""
+    if status != 400:
+        return False
+    lower = body.lower()
+    return any(kw in lower for kw in _OVERFLOW_KEYWORDS)

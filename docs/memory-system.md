@@ -83,6 +83,7 @@ workspace/MEMORY.md (工作空间级，最高优先级)
 
 - **API 返回值**：`prompt_tokens > context_length × context_usage_threshold`（默认 0.8）
 - **本地预估**：CJK 字符按 1:1、其他字符按 4:1 估算 token（`estimate_messages_tokens`），超阈值提前预防，应对 API 不返回 usage 的情况
+- **API 上下文溢出**：API 返回 HTTP 400 且 body 含 `context_length`/`prompt is too long`/`request too large`/`input is too long` 等关键词时，自动识别为上下文溢出，触发 `force_compact` 渐进恢复
 
 ## 压缩策略
 
@@ -95,6 +96,50 @@ workspace/MEMORY.md (工作空间级，最高优先级)
 5. **预压缩机制** — token 使用率超过 `context_usage_threshold × early_compact_ratio`（默认 0.8×0.85=0.68）时提前压缩，避免突发超限
 6. **批量摘要** — 待压缩轮次按每批 ≤12000 字符分批，每批独立调用 LLM 摘要，分批结果合入同一轮次映射
 5. **压缩后结构**：`system → user1 → summary1 → user2 → summary2 → ... → 最近完整轮次`
+
+## 工具结果裁剪 (ContextPruner)
+
+压缩前自动执行三级策略裁剪旧工具结果，减少 prompt token（纯本地操作，零 LLM 开销）：
+
+| 级别 | 条件 | 处理 |
+|------|------|------|
+| **保护区** | 最近 N 轮 assistant 消息（`protect_recent=3`） | 完整保留 |
+| **软裁剪** | 旧轮次且工具结果 > `max_tool_result_chars` | 保留首尾 `soft_prune_lines` 行 + 省略号 |
+| **硬裁剪** | 超过 `hard_prune_after` 轮的旧结果 | 替换为 `[tool result pruned]` |
+
+**软裁剪规则**：
+- 行数 > keep_lines×2 → 保留前 N 行 + `... (M lines omitted) ...` + 后 N 行
+- 行数不多但字符超长 → 保留前 keep_lines×80 字符 + 省略 + 后 keep_lines×80 字符
+
+## 上下文溢出检测 + force_compact 渐进恢复
+
+当 API 返回 400 错误且 body 包含上下文溢出关键词时，不简单重试，而是触发渐进式恢复：
+
+```
+API 400 + "context_length"
+  → LLMError(is_context_overflow=True)
+  → runner loop 检测 → _recover_from_overflow()
+  → compactor.force_compact(llm_chat, messages, ctx)
+    → L0: prune(10,2000,5) → 估算 → compact(默认) → 估算
+    → L1: prune(5,1000,4)  → 估算 → compact(keep//2) → 估算
+    → L2: prune(3,600,3)   → 估算 → compact(keep//4) → 估算
+    → L3: prune(0,400,3)   → 估算 → compact(3) → 估算
+    → L4: prune(0,200,2)   → 估算 → compact(1) → 估算
+  → 成功: messages 已替换, continue 重试 LLM（最多 3 次）
+  → 失败: 返回错误给用户
+```
+
+**5 级渐进参数**（对标 my_agent）：
+
+| 级别 | hard_prune_after | max_tool_result_chars | soft_prune_lines | keep_recent |
+|------|------------------|-----------------------|------------------|-------------|
+| L0   | 10               | 2000                  | 5                | 默认        |
+| L1   | 5                | 1000                  | 4                | 默认//2     |
+| L2   | 3                | 600                   | 3                | 默认//4     |
+| L3   | 0                | 400                   | 3                | 3           |
+| L4   | 0                | 200                   | 2                | 1           |
+
+每级两步：① 裁剪（零开销）→ 估算 → 若低于安全线(70%) 则返回成功；② compact（调 LLM 摘要）→ 估算 → 若低于安全线则返回成功。compact 调用异常时 catch 并继续下一级，不崩溃。
 
 ## 压缩产出
 

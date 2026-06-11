@@ -597,6 +597,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     persist_fn=_persist,
                     bus=comp.get("bus"),
                     context_length=cfg.get("context_length", 256000),
+                    compactor=comp.get("compactor"),
                 )
                 _touch_session(session_key)
                 
@@ -648,6 +649,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                                 max_turns=max_turns, ctx=ctx, persist_fn=_persist,
                                 bus=bus,
                                 context_length=cfg.get("context_length", 256000),
+                                compactor=comp.get("compactor"),
                             )
                             logger.info("[Web-Team] 兜底回禀处理后 run_tool_loop done")
                             waited = 0
@@ -660,6 +662,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                             max_turns=max_turns, ctx=ctx, persist_fn=_persist,
                             bus=bus,
                             context_length=cfg.get("context_length", 256000),
+                            compactor=comp.get("compactor"),
                         )
                 else:
                     logger.debug(f"[Web-Team] 无 Team 组件，跳过回禀等待")
@@ -756,8 +759,14 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 usage = get_usage()
                 if comp["compactor"].should_compact(usage["prompt_tokens"]) or comp["compactor"].should_compact_local(messages):
                     logger.info(f"[Web] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
-                    messages[:] = comp["compactor"].compact(llm_chat, messages, ctx=ctx, inject_fn=_inject_todos)
-                    logger.info(f"[Web] 压缩完成: messages={len(messages)}")
+                    # 先裁剪工具结果（零开销）
+                    pruned = ContextPruner.prune(messages, PruneOptions())
+                    if estimate_messages_tokens(pruned) < int(cfg.get("context_length", 256000) * 0.8):
+                        messages[:] = pruned
+                        logger.info(f"[Web] 裁剪后已低于阈值，跳过压缩: messages={len(messages)}")
+                    else:
+                        messages[:] = comp["compactor"].compact(llm_chat, pruned, ctx=ctx, inject_fn=_inject_todos)
+                        logger.info(f"[Web] 压缩完成: messages={len(messages)}")
                     # 防御性重建 system prompt（compact 内部已做，但保留此行为保障 components 重建场景）
                     messages[0]["content"] = _build_system_prompt(username, comp_key, base, workspace)
 

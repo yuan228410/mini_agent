@@ -90,6 +90,7 @@ class LLMError(MiniAIError):
         model: str = "",
         status_code: int = 0,
         retry_after: float | None = None,
+        is_context_overflow: bool = False,
         **context: Any
     ):
         super().__init__(
@@ -104,8 +105,11 @@ class LLMError(MiniAIError):
         self.model = model
         self.status_code = status_code
         self.retry_after = retry_after
+        self.is_context_overflow = is_context_overflow
     
     def to_user_message(self) -> str:
+        if self.is_context_overflow:
+            return "⚠ 上下文超限，正在压缩恢复"
         if self.status_code == 429:
             return "⚠ 请求过于频繁，请稍后重试"
         if self.status_code >= 500:

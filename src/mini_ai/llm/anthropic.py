@@ -10,7 +10,7 @@ from .base import (
     get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, update_usage, get_session, ensure_session_anthropic,
-    estimate_tokens, estimate_messages_tokens,
+    estimate_tokens, estimate_messages_tokens, detect_context_overflow,
 )
 from ..logger import logger
 from ..exceptions import LLMError
@@ -249,7 +249,13 @@ def chat(messages, tools=True, ctx=None):
                 except (ValueError, KeyError):
                     pass
                 
-                last_error = LLMError(err_msg, status_code=response.status_code, retry_after=retry_after)
+                _is_overflow = detect_context_overflow(response.status_code, response.text[:500])
+                last_error = LLMError(err_msg, status_code=response.status_code, retry_after=retry_after, is_context_overflow=_is_overflow)
+                
+                # 上下文溢出：不重试，直接抛出让上层走 force_compact 路径
+                if _is_overflow:
+                    logger.warning(f"[Anth✗] 上下文溢出: {err_msg}")
+                    raise last_error
                 
                 # 判断是否重试
                 if strategy.should_retry(last_error, attempt):
@@ -390,6 +396,20 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
                 error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
             
             last_error = LLMError(error_msg, status_code=status_code, retry_after=retry_after)
+            
+            # 上下文溢出检测（流式路径）
+            if status_code > 0:
+                _body = ""
+                if isinstance(e, requests.HTTPError) and e.response is not None:
+                    try:
+                        _body = e.response.text[:500]
+                    except Exception:
+                        pass
+                _is_overflow = detect_context_overflow(status_code, _body)
+                if _is_overflow:
+                    logger.warning(f"[Anth✗] 流式上下文溢出: {error_msg}")
+                    yield {"type": "error", "error": error_msg, "is_context_overflow": True}
+                    return
             
             if strategy.should_retry(last_error, attempt):
                 delay = strategy.get_delay(attempt, last_error)

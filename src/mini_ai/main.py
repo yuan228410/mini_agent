@@ -256,6 +256,7 @@ def _create_workspace_session(
             ctx=ctx,
             bus=app_ctx.bus,
             context_length=MODEL_CONFIG.get("context_length", 256000),
+            compactor=compactor,
         )
         return msg
 
@@ -523,6 +524,7 @@ def main():
                 persist_fn=_persist,
                 bus=bus,
                 context_length=MODEL_CONFIG.get("context_length", 256000),
+                compactor=compactor,
             )
             _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)  # 异常时跳过，避免写入不完整消息
 
@@ -543,6 +545,7 @@ def main():
                         persist_fn=_persist,
                         bus=bus,
                         context_length=MODEL_CONFIG.get("context_length", 256000),
+                        compactor=compactor,
                     )
                     _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)
                     if msg2 and msg2.get("content"):
@@ -579,8 +582,14 @@ def main():
             if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
                 logger.info(f"[CLI] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
                 from .llm import chat
-                messages = compactor.compact(chat, messages, ctx=cmd.ctx, inject_fn=_inject_todos)
-                logger.info(f"[CLI] 压缩完成: messages={len(messages)}")
+                # 先裁剪工具结果（零开销）
+                pruned = ContextPruner.prune(messages, PruneOptions())
+                if estimate_messages_tokens(pruned) < int(MODEL_CONFIG.get("context_length", 256000) * 0.8):
+                    messages[:] = pruned
+                    logger.info(f"[CLI] 裁剪后已低于阈值，跳过压缩: messages={len(messages)}")
+                else:
+                    messages[:] = compactor.compact(chat, pruned, ctx=cmd.ctx, inject_fn=_inject_todos)
+                    logger.info(f"[CLI] 压缩完成: messages={len(messages)}")
 
         except KeyboardInterrupt:
             disp.info("⚠ 已中断")

@@ -18,6 +18,7 @@ from ..utils import now_ts
 from ..llm.base import estimate_messages_tokens
 
 _CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.88)
+MAX_OVERFLOW_RETRIES = 3
 
 def run_tool_loop(
     messages: list[dict],
@@ -33,6 +34,7 @@ def run_tool_loop(
     context_usage_limit: float = _CONTEXT_USAGE_LIMIT,
     ctx=None,
     bus=None,
+    compactor=None,
 ) -> tuple[dict | None, bool]:
     """统一工具循环
     
@@ -49,6 +51,7 @@ def run_tool_loop(
         context_usage_limit: 上下文使用率阈值
         ctx: 请求上下文
         bus: 消息总线
+        compactor: Compactor 实例（用于上下文溢出恢复和日常压缩）
     
     Returns:
         (final_msg, spawned_teammate)
@@ -123,10 +126,16 @@ def run_tool_loop(
                         logger.info(f"[runner] 中断时保存部分内容: {len(msg['content'])} 字符")
                     return None, state.spawned_teammate
                 
-                # 🔧 修复：如果是错误消息，记录错误但不立即退出
+                # 🔧 修复：如果是错误消息，检查是否为上下文溢出
                 if msg and msg.get("error"):
+                    # 上下文溢出：尝试 force_compact 恢复
+                    if msg.get("is_context_overflow"):
+                        logger.warning(f"[runner] 流式路径检测到上下文溢出: {msg.get('error', '')[:100]}")
+                    if msg.get("is_context_overflow") and compactor:
+                        if _recover_from_overflow(messages, compactor, ctx, state):
+                            continue
+                        logger.error("[runner] 上下文溢出恢复失败")
                     logger.error(f"[runner] LLM 返回错误: {msg.get('error')}")
-                    # 不返回 None，而是返回带错误的消息，让上层处理
                     return msg, state.spawned_teammate
                 
                 executor.finalize_response(msg, messages)
@@ -166,14 +175,25 @@ def run_tool_loop(
                 if estimated_tokens > warning_threshold:
                     logger.warning(f"[runner] 上下文接近阈值: {estimated_tokens}/{threshold} tokens ({estimated_tokens/threshold*100:.1f}%)")
                 
-                if _check_context_usage(messages, context_length, context_usage_limit, ctx):
-                    # 上下文超限，退出循环
+                if _check_context_usage(messages, context_length, context_usage_limit, ctx, compactor):
+                    # 上下文超限（压缩后仍超限才走这条路径）
                     logger.info("[runner] 上下文超限，退出循环")
                     if display:
                         display.text_end()
                     return None, state.spawned_teammate
         
         except Exception as e:
+            # 上下文溢出：尝试 force_compact 恢复后重试
+            from ..exceptions import LLMError
+            if isinstance(e, LLMError) and getattr(e, 'is_context_overflow', False):
+                logger.warning(f"[runner] 非流式路径检测到上下文溢出: {str(e)[:100]}")
+                if compactor and _recover_from_overflow(messages, compactor, ctx, state):
+                    continue
+                logger.error("[runner] 上下文溢出恢复失败")
+                if display:
+                    display.text_end()
+                return {"role": "assistant", "content": "⚠ 上下文超限，压缩恢复失败，请缩减对话或新建会话"}, state.spawned_teammate
+            
             user_msg = error_handler.handle(e, state)
             if user_msg:
                 messages.append(user_msg)
@@ -276,28 +296,76 @@ def _inject_teammate_reports(bus, messages: list[dict], with_instruction: bool =
         
         logger.info("[runner] 注入队友回禀")
 
-def _check_context_usage(messages: list[dict], context_length: int, limit: float, ctx) -> bool:
-    """检查上下文使用率
+def _check_context_usage(messages: list[dict], context_length: int, limit: float, ctx, compactor=None) -> bool:
+    """检查上下文使用率，超限时触发裁剪+压缩
     
     Returns:
-        True 表示上下文超限需要退出循环
+        True 表示上下文超限且压缩后仍超限，需要退出循环
+        False 表示未超限或压缩成功，继续循环
     """
-    from ..llm import get_usage
-    from ..memory import Compactor
+    estimated = estimate_messages_tokens(messages)
+    threshold = int(context_length * limit)
     
-    usage = get_usage()
-    prompt_tokens = usage.get("prompt_tokens", 0) if usage else 0
-    usage_ratio = prompt_tokens / context_length if context_length else 0
-    if usage_ratio > limit:
-        logger.info(f"[runner] 上下文使用率 {usage_ratio:.1%} > {limit:.1%}，触发压缩")
-        compactor = Compactor(context_length=context_length)
-        compactor.compact(messages, ctx=ctx)
-        # 压缩后继续循环，LLM 可以基于压缩后的上下文继续工作
-        # 注意：压缩会保留关键信息，不会丢失对话上下文
+    if estimated <= threshold:
         return False
-    return False
+    
+    logger.info(f"[runner/compact] 上下文使用 {estimated} > {threshold} tokens，触发压缩")
+    
+    # 先裁剪工具结果（零开销），裁剪后可能已够用
+    # ContextPruner.prune 返回新列表，不修改原 messages
+    from ..memory.context_pruner import ContextPruner, PruneOptions
+    pruned = ContextPruner.prune(messages, PruneOptions())
+    pruned_tokens = estimate_messages_tokens(pruned)
+    
+    if pruned_tokens < threshold:
+        messages[:] = pruned
+        logger.info(f"[runner/compact] 裁剪后 tokens={pruned_tokens}，已低于阈值，跳过压缩")
+        return False
+    
+    # 需要压缩
+    if compactor is None:
+        logger.warning("[runner/compact] 无 compactor，无法压缩，退出循环")
+        return True
+    
+    from ..llm import chat as llm_chat
+    try:
+        new_messages = compactor.compact(llm_chat, pruned, ctx=ctx)
+        messages[:] = new_messages
+        after_tokens = estimate_messages_tokens(messages)
+        logger.info(f"[runner/compact] 压缩完成: tokens {estimated} -> {after_tokens}")
+        return after_tokens > threshold
+    except Exception as e:
+        logger.error(f"[runner/compact] 压缩异常: {e}", exc_info=True)
+        return True
 
-def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abort_event: threading.Event | None = None, tool_names: list[str] | None = None, context_length: int = 128000) -> str | None:
+
+def _recover_from_overflow(messages: list[dict], compactor, ctx, state: LoopState) -> bool:
+    """上下文溢出恢复：force_compact 后可重试
+    
+    Returns:
+        True = 恢复成功，可 continue 重试
+        False = 恢复失败
+    """
+    if state.overflow_retries >= MAX_OVERFLOW_RETRIES:
+        logger.warning(f"[runner] 上下文溢出恢复已达上限 {MAX_OVERFLOW_RETRIES} 次")
+        return False
+    
+    state.overflow_retries += 1
+    logger.info(f"[runner] 上下文溢出恢复 {state.overflow_retries}/{MAX_OVERFLOW_RETRIES}")
+    
+    from ..llm import chat as llm_chat
+    try:
+        ok = compactor.force_compact(llm_chat, messages, ctx)
+        if ok:
+            logger.info(f"[runner] 上下文溢出恢复成功: messages={len(messages)}, tokens={estimate_messages_tokens(messages)}")
+            return True
+        logger.warning("[runner] force_compact 所有级别耗尽")
+        return False
+    except Exception as e:
+        logger.error(f"[runner] force_compact 异常: {e}", exc_info=True)
+        return False
+
+def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abort_event: threading.Event | None = None, tool_names: list[str] | None = None, context_length: int = 128000, compactor=None) -> str | None:
     """轻量 agent 循环
     
     Args:
@@ -308,6 +376,7 @@ def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abo
         abort_event: 中断事件
         tool_names: 工具白名单（None 表示全部工具）
         context_length: 上下文长度限制（默认 128k）
+        compactor: Compactor 实例
 
     Returns:
         最终响应文本
@@ -320,7 +389,7 @@ def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abo
             tools = [d for d in get_definitions() if d.get("function", {}).get("name") in tool_names]
         else:
             tools = get_definitions()
-        msg, _ = run_tool_loop(messages, tools, max_turns=max_turns, ctx=ctx, bus=bus, abort_event=abort_event, context_length=context_length)
+        msg, _ = run_tool_loop(messages, tools, max_turns=max_turns, ctx=ctx, bus=bus, abort_event=abort_event, context_length=context_length, compactor=compactor)
     except Exception as e:
         logger.error(f"[run_agent] 异常: {e}", exc_info=True)
         # 将异常转换为错误消息返回，让调用方知道发生了什么

@@ -17,6 +17,7 @@ from .store import MemoryStore
 from ._utils import extract_tag as _extract
 from .updater import MemoryUpdater
 from ..llm.base import estimate_messages_tokens
+from .context_pruner import ContextPruner, PruneOptions
 
 BATCH_SUMMARY_PROMPT = """对以下各轮 Agent 执行过程分别进行简洁总结（每轮150字内）。
 
@@ -156,7 +157,7 @@ class Compactor:
 
     # ── 主压缩流程 ──
 
-    def compact(self, chat_fn, messages: list[dict], ctx=None, inject_fn=None) -> list[dict]:
+    def compact(self, chat_fn, messages: list[dict], ctx=None, inject_fn=None, keep_recent_override: int | None = None) -> list[dict]:
         non_system = [m for m in messages if m["role"] != "system"]
 
         rounds = self._split_rounds(non_system)
@@ -167,7 +168,11 @@ class Compactor:
 
         logger.info(f"[压缩→] 开始: {len(messages)} 条消息, {len(rounds)} 轮, 阈值 hard={self._hard_threshold()} soft={self._soft_threshold()}")
 
-        keep_rounds = self._determine_keep_rounds(rounds)
+        if keep_recent_override is not None:
+            keep_rounds = min(keep_recent_override, len(rounds))
+            logger.info(f"[压缩→] keep_recent_override={keep_recent_override}, keep_rounds={keep_rounds}")
+        else:
+            keep_rounds = self._determine_keep_rounds(rounds)
         old_rounds = rounds[:len(rounds) - keep_rounds]
         recent_rounds = rounds[len(rounds) - keep_rounds:]
 
@@ -399,3 +404,83 @@ class Compactor:
             elif isinstance(content, list):
                 parts.append(f"[{role}] (结构化内容)")
         return "\n".join(parts)
+
+    # ── 渐进式恢复 ──
+
+    def force_compact(self, chat_fn, messages: list[dict], ctx=None, max_compact_calls: int = 3) -> bool:
+        """上下文溢出后的渐进式恢复
+
+        5 级逐步加码裁剪+压缩，每级先裁剪工具结果（零开销），
+        再判断是否需要调 LLM 做摘要压缩。
+
+        Returns:
+            True = 恢复成功，messages 已替换，可重试 LLM
+            False = 所有级别耗尽，仍超限
+        """
+        safe_threshold = int(self.context_length * 0.7)
+
+        # 5 级渐进参数（对标 my_agent）
+        # (hard_prune_after, max_tool_result_chars, soft_prune_lines, keep_recent_override, name)
+        # keep_recent_override: None=逐级减半, >0=强制值
+        levels = [
+            (10, 2000, 5, None,           "L0"),  # 默认裁剪 + 强制压缩
+            (5,  1000, 4, None,           "L1"),  # 加码裁剪
+            (3,   600, 3, None,           "L2"),  # 激进裁剪
+            (0,   400, 3, 3,              "L3"),  # 全量裁剪 + keep_recent=3
+            (0,   200, 2, 1,              "L4"),  # 最激进裁剪 + keep_recent=1
+        ]
+
+        compact_call_count = 0
+
+        for i, (hard_after, max_chars, soft_lines, keep, name) in enumerate(levels):
+            logger.info(f"[force_compact] {name} 开始, messages={len(messages)}, tokens={estimate_messages_tokens(messages)}")
+
+            # 第一步：裁剪工具结果（纯本地，零开销）
+            opts = PruneOptions(
+                protect_recent=3,
+                hard_prune_after=hard_after,
+                max_tool_result_chars=max_chars,
+                soft_prune_lines=soft_lines,
+            )
+            pruned = ContextPruner.prune(messages, opts)
+            estimated = estimate_messages_tokens(pruned)
+
+            logger.info(f"[force_compact] {name} 裁剪后估算 tokens={estimated}, 安全线={safe_threshold}")
+
+            if estimated < safe_threshold:
+                messages[:] = pruned
+                logger.info(f"[force_compact] {name} 仅裁剪即足够")
+                return True
+
+            # 第二步：压缩（需调 LLM 生成摘要，成本高）
+            if compact_call_count >= max_compact_calls:
+                logger.warning(f"[force_compact] {name} 已达 max_compact_calls={max_compact_calls}，跳过压缩")
+                messages[:] = pruned
+                continue
+
+            try:
+                # L0-L2: keep=None，使用 keep_recent 逐级减半
+                # L3-L4: keep=3/1，强制保留更少轮次
+                keep_override = keep if keep is not None else max(self.keep_recent // (2 ** i), 2)
+                new_msgs = self.compact(chat_fn, pruned, ctx=ctx, keep_recent_override=keep_override)
+                compact_call_count += 1
+                estimated = estimate_messages_tokens(new_msgs)
+
+                logger.info(f"[force_compact] {name} 压缩后({compact_call_count}/{max_compact_calls}), msgs={len(new_msgs)}, tokens={estimated}")
+
+                if estimated < safe_threshold:
+                    messages[:] = new_msgs
+                    logger.info(f"[force_compact] {name} 恢复成功")
+                    return True
+
+                # 仍超限，用压缩后的结果继续下一级
+                messages[:] = new_msgs
+
+            except Exception as e:
+                logger.warning(f"[force_compact] {name} 压缩异常: {e}")
+                messages[:] = pruned
+
+            logger.info(f"[force_compact] {name} 仍超限，升级到下一级")
+
+        logger.error("[force_compact] 所有级别耗尽，上下文仍超限")
+        return False

@@ -127,6 +127,7 @@ class ToolExecutor:
             thinking_seen = False
             last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
             stream_error = None
+            stream_overflow = False
             
             for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
                 if abort_event and abort_event.is_set():
@@ -167,6 +168,7 @@ class ToolExecutor:
                     last_usage["completion_tokens"] = chunk.get("completion_tokens", 0)
                 elif chunk_type == "error":
                     stream_error = chunk.get("error")
+                    stream_overflow = chunk.get("is_context_overflow", False)
                     logger.error(f"[LLM✗] 流式错误: {stream_error}")
                     # 不立即返回，等重试逻辑处理
                     break
