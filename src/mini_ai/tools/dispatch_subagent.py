@@ -375,7 +375,7 @@ def execute(args: dict, abort_event: threading.Event | None = None) -> str:
         ctx = RequestContext(model_config=model_config)
 
     try:
-        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event)
+        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event, context_length=MODEL_CONFIG.get("context_length", 256000))
         logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
         return result or f"[{spec['name']}] 超出轮次限制或执行失败"
     except Exception as e:

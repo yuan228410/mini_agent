@@ -255,6 +255,7 @@ def _create_workspace_session(
             inject_fn=inject_fn,
             ctx=ctx,
             bus=app_ctx.bus,
+            context_length=MODEL_CONFIG.get("context_length", 256000),
         )
         return msg
 
@@ -350,21 +351,65 @@ def main():
             print("提示: 前端未构建，请先执行: cd web && pnpm install && pnpm build")
             print("      开发模式可分别启动后端和前端 (pnpm dev)")
         print(f"mini_ai Web 界面启动: http://localhost:{args.port}")
-        import signal
+        import signal, os, sys, threading
+
         app = create_app()
         config = uvicorn.Config(app, host="0.0.0.0", port=args.port,
-                                timeout_graceful_shutdown=3)
+                                timeout_graceful_shutdown=3,
+                                )
         server = uvicorn.Server(config)
-        original_sigint = signal.getsignal(signal.SIGINT)
-        signal.signal(signal.SIGINT,
-                      lambda sig, frame: signal.raise_signal(signal.SIGTERM))
+
+        # Ctrl+C 退出方案：
+        # 第一次 Ctrl+C：设 should_exit + abort 会话，让 uvicorn 优雅关闭
+        # 第二次 Ctrl+C：os._exit(0) 强退
+        # watchdog 兜底：5 秒未退出则强退
+
+        def _watchdog():
+            import time
+            for _ in range(60):
+                if server.should_exit:
+                    break
+                time.sleep(0.5)
+            else:
+                return
+            time.sleep(5)
+            print("[mini-ai] 关闭超时，强制退出", file=sys.stderr, flush=True)
+            try:
+                from .memory.history_db import HistoryDBPool
+                HistoryDBPool.close_all()
+            except Exception:
+                pass
+            os._exit(0)
+
+        threading.Thread(target=_watchdog, daemon=True).start()
+
+        _sigint_count = 0
+        def _sigint_handler(signum, frame):
+            nonlocal _sigint_count
+            _sigint_count += 1
+            if _sigint_count >= 2:
+                print("[mini-ai] 强制退出", file=sys.stderr, flush=True)
+                os._exit(0)
+            server.should_exit = True
+            try:
+                from .web.routes.chat import abort_all_sessions
+                abort_all_sessions()
+            except Exception:
+                pass
+            print("[mini-ai] 正在关闭... (再按 Ctrl+C 强制退出)", file=sys.stderr, flush=True)
+
+        signal.signal(signal.SIGINT, _sigint_handler)
+
         try:
             server.run()
         except KeyboardInterrupt:
             pass
         finally:
-            signal.signal(signal.SIGINT, original_sigint)
-        return
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        from .memory.history_db import HistoryDBPool
+        HistoryDBPool.close_all()
+        os._exit(0)
 
     # ── CLI 模式 ──
     # 使用用户数据目录（与 Web 模式一致）
@@ -521,6 +566,7 @@ def main():
                 ctx=cmd.ctx,
                 persist_fn=_persist,
                 bus=bus,
+                context_length=MODEL_CONFIG.get("context_length", 256000),
             )
             _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)  # 异常时跳过，避免写入不完整消息
 
@@ -540,6 +586,7 @@ def main():
                         ctx=cmd.ctx,
                         persist_fn=_persist,
                         bus=bus,
+                        context_length=MODEL_CONFIG.get("context_length", 256000),
                     )
                     _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)
                     if msg2 and msg2.get("content"):

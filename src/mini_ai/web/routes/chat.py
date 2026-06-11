@@ -30,8 +30,15 @@ _MAX_CONCURRENT_SESSIONS = 10  # 最大并发会话数
 _executor = ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_SESSIONS, thread_name_prefix="chat-")
 _concurrent_semaphore = threading.Semaphore(_MAX_CONCURRENT_SESSIONS)
 
+def abort_all_sessions():
+    """设置所有活跃会话的 abort_event，让 run_tool_loop 尽快退出"""
+    with _sessions_lock:
+        for key, evt in _SESSION_ABORTS.items():
+            evt.set()
+    logger.info(f"[Web] abort_all_sessions: 已中止 {len(_SESSION_ABORTS)} 个会话")
+
 # 注册进程退出时的清理函数
-atexit.register(lambda: _executor.shutdown(wait=True, cancel_futures=False))
+atexit.register(lambda: _executor.shutdown(wait=False, cancel_futures=True))
 
 # 三层缓存 key = f"{username}:{workspace}:{sid}"
 # 所有缓存 dict 统一使用此 key 格式，与存储路径对齐
@@ -593,6 +600,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     ctx=ctx,
                     persist_fn=_persist,
                     bus=comp.get("bus"),
+                    context_length=cfg.get("context_length", 256000),
                 )
                 _touch_session(session_key)
                 
@@ -643,6 +651,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                                 inject_fn=_inject_todos, abort_event=abort_event,
                                 max_turns=max_turns, ctx=ctx, persist_fn=_persist,
                                 bus=bus,
+                                context_length=cfg.get("context_length", 256000),
                             )
                             logger.info("[Web-Team] 兜底回禀处理后 run_tool_loop done")
                             waited = 0
@@ -654,6 +663,7 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                             inject_fn=_inject_todos, abort_event=abort_event,
                             max_turns=max_turns, ctx=ctx, persist_fn=_persist,
                             bus=bus,
+                            context_length=cfg.get("context_length", 256000),
                         )
                 else:
                     logger.debug(f"[Web-Team] 无 Team 组件，跳过回禀等待")
@@ -1036,7 +1046,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                     if event["event"] in ("done", "aborted", "error", "complete"):
                         logger.debug(f'[Web] terminal event from queue sid={sid} event={event["event"]}')
                     await _send(event)
-                    if event["event"] in ("done", "aborted", "error", "complete"):
+                    if event["event"] in ("done", "aborted", "complete"):
                         break
                 except asyncio.TimeoutError:
                     if future.done():

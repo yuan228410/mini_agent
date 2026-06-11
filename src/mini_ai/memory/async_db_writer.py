@@ -7,7 +7,6 @@
 4. 持久化保证（atexit + 信号处理）
 """
 import atexit
-import signal
 import sqlite3
 import threading
 import time
@@ -116,31 +115,10 @@ class AsyncDBWriter:
         }
         self._stats_lock = threading.Lock()
         
-        # 初始化信号处理
-        self._setup_signal_handlers()
+        # 注册 atexit（信号处理由宿主进程负责，避免覆盖 uvicorn 等框架的处理器）
+        atexit.register(self._emergency_flush)
         
         logger.debug(f"[AsyncDBWriter] 初始化: path={db_path}")
-    
-    def _setup_signal_handlers(self):
-        """设置信号处理器，确保异常退出时数据安全"""
-        def signal_handler(signum, frame):
-            logger.warning(f"[AsyncDBWriter] 收到信号 {signum}，执行紧急刷盘...")
-            self._emergency_flush()
-            # 重新抛出信号，让程序正常退出
-            signal.signal(signum, signal.SIG_DFL)
-            import os
-            os.kill(os.getpid(), signum)
-        
-        # 注册信号处理
-        try:
-            signal.signal(signal.SIGTERM, signal_handler)
-            signal.signal(signal.SIGINT, signal_handler)
-        except Exception as e:
-            # Windows 或某些环境可能不支持某些信号
-            logger.debug(f"[AsyncDBWriter] 信号处理注册失败（可忽略）: {e}")
-        
-        # 注册 atexit
-        atexit.register(self._emergency_flush)
     
     def _emergency_flush(self):
         """紧急刷盘（程序退出时调用）"""

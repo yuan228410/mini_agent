@@ -286,8 +286,10 @@ def _check_context_usage(messages: list[dict], context_length: int, limit: float
     from ..memory import Compactor
     
     usage = get_usage()
-    if usage and usage.get("usage_ratio", 0) > limit:
-        logger.info(f"[runner] 上下文使用率 {usage['usage_ratio']:.1%} > {limit:.1%}，触发压缩")
+    prompt_tokens = usage.get("prompt_tokens", 0) if usage else 0
+    usage_ratio = prompt_tokens / context_length if context_length else 0
+    if usage_ratio > limit:
+        logger.info(f"[runner] 上下文使用率 {usage_ratio:.1%} > {limit:.1%}，触发压缩")
         compactor = Compactor(context_length=context_length)
         compactor.compact(messages, ctx=ctx)
         # 压缩后继续循环，LLM 可以基于压缩后的上下文继续工作

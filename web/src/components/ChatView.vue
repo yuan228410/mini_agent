@@ -767,7 +767,24 @@ function _processEvent(s: SessionState, event: WsEvent) {
       _updateUI(s)
       break
     case 'error':
-      s._currentContent += `\n\n⚠ 错误: ${event.data.error || '未知错误'}`
+      {
+        const errMsg = event.data.error || '未知错误'
+        // 先将未刷新的流式内容同步到消息上，避免丢失已生成的部分文本
+        if (s._currentContent) {
+          const lastIdx = s.messages.length - 1
+          if (lastIdx >= 0 && s.messages[lastIdx].role === 'assistant') {
+            s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
+          }
+        }
+        const m = s.messages[s.messages.length - 1]
+        if (m && m.role === 'assistant') {
+          m.content = m.content ? m.content + '\n\n' + errMsg : errMsg
+          m.streaming = false
+        } else {
+          s.messages.push({ role: 'assistant', content: errMsg, timestamp: _localTs(), streaming: false })
+        }
+        _updateUI(s)
+      }
       break
     // ── 新增：工作流事件 ──
     case 'workflow_start':

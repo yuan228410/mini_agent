@@ -222,7 +222,7 @@ class ToolExecutor:
                 logger.error(f"[LLM✗] 流式错误(已重试{attempt}次): {stream_error}")
                 if self.display:
                     self.display.text_end()
-                    self.display.tool_result("error", f"⚠ LLM 错误: {stream_error}", elapsed=0)
+                    self.display.error(f"⚠ LLM 错误: {stream_error}")
                 # 返回带错误标记的消息
                 return {
                     "role": "assistant",
@@ -234,7 +234,7 @@ class ToolExecutor:
         logger.error(f"[LLM✗] 流式错误(已重试{max_retries}次): {last_error}")
         if self.display:
             self.display.text_end()
-            self.display.tool_result("error", f"⚠ LLM 错误: {last_error}", elapsed=0)
+            self.display.error(f"⚠ LLM 错误: {last_error}")
         # 返回带错误标记的消息
         return {
             "role": "assistant",

@@ -164,10 +164,10 @@ class WebDisplay:
         self._push("inbox_message", {"to": to, "from": from_user, "count": count})
 
     def info(self, text: str):
-        pass
+        self._push("info", {"message": text})
 
     def error(self, text: str):
-        pass
+        self._push("error", {"error": text})
 
     def show_banner(self):
         pass
