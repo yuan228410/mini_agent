@@ -51,13 +51,14 @@ class TeammateManager:
         self.config_path.write_text(json.dumps(self.config, ensure_ascii=False, indent=2), encoding="utf-8")
 
     def _mark_offline(self):
-        changed = False
-        for m in self.config.get("members", []):
-            if m.get("status") in ("idle", "working"):
-                m["status"] = "offline"
-                changed = True
-        if changed:
-            self._save_config()
+        with self.lock:
+            changed = False
+            for m in self.config.get("members", []):
+                if m.get("status") in ("idle", "working"):
+                    m["status"] = "offline"
+                    changed = True
+            if changed:
+                self._save_config()
 
     def _find(self, name: str) -> dict | None:
         for m in self.config["members"]:
@@ -107,16 +108,17 @@ class TeammateManager:
             self._wake_events[name] = threading.Event()
             self._wake_events[name].set()
 
-        logger.info(f"[spawn→] {name} role={role}")
-        import contextvars as _cv
-        parent_ctx = _cv.copy_context()
-        thread = threading.Thread(
-            target=parent_ctx.run,
-            args=(self._teammate_loop, name, role, prompt, self._display),
-            daemon=True,
-        )
-        with self.lock:
+            # P0#5: 线程创建和注册在同一个 lock 块内，避免竞态窗口
+            import contextvars as _cv
+            parent_ctx = _cv.copy_context()
+            thread = threading.Thread(
+                target=parent_ctx.run,
+                args=(self._teammate_loop, name, role, prompt, self._display),
+                daemon=True,
+            )
             self.threads[name] = thread
+
+        logger.info(f"[spawn→] {name} role={role}")
         thread.start()
         return f"已召入队友 '{name}'（职司：{role}），它将独立完成任务并回禀你。你不需要再做相同的分析工作，等待它完成后自动通知你即可。"
 

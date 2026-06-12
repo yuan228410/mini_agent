@@ -32,8 +32,8 @@ class WebDisplay:
         self.agent_id = agent_id
 
     def _push(self, event: str, data: dict | None = None):
-        from mini_ai.llm import get_usage
-        usage = get_usage()
+        from mini_ai.llm import get_global_usage
+        usage = get_global_usage()
         if data is None:
             data = {}
         # 自动注入 session_id（用于前端路由工作流事件到对应会话）
@@ -59,7 +59,11 @@ class WebDisplay:
                 # QueueFull 或队列关闭，丢弃事件（前端 watchdog 会兜底重置状态）
                 pass
 
-        self.loop.call_soon_threadsafe(_safe_put)
+        try:
+            self.loop.call_soon_threadsafe(_safe_put)
+        except RuntimeError:
+            # 事件循环已关闭（WS 断连），丢弃事件
+            pass
 
     def llm_round_start(self, model: str = ""):
         """LLM 调用开始"""

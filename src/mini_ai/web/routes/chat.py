@@ -93,6 +93,9 @@ def _touch_session(cache_key: str):
             for k, _ in candidates:
                 if evicted >= len(_SESSION_ACCESS) - _MAX_CACHED_SESSIONS + 5:
                     break
+                # P2#11: 跳过当前会话，防止淘汰刚创建的会话
+                if k == cache_key:
+                    continue
                 # 跳过正在使用的会话（引用计数 > 0）
                 if _SESSION_REFS.get(k, 0) > 0:
                     continue
@@ -781,6 +784,14 @@ def _run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 # 清理 session_id
                 from ...logger import set_session_id
                 set_session_id(None)
+    except Exception as _sync_err:
+        # P1#7: 异常路径兜底发 complete 事件，防止前端 isStreaming 卡 True
+        logger.error(f"[Web⚠] _run_tool_loop_sync 异常: {_sync_err}", exc_info=True)
+        _safe_queue_put(queue, {
+            "event": "complete",
+            "data": {"error": f"⚠ 内部错误: {type(_sync_err).__name__}", "session_id": session_key}
+        })
+        return None, {}
     finally:
         # 防御性重置状态（防止异常路径残留 generating）
         with _sessions_lock:
@@ -952,6 +963,7 @@ async def batch_delete_sessions(body: dict):
         _SESSION_MODELS.pop(cache_key, None)
         _SESSION_LOCKS.pop(cache_key, None)
         _SESSION_ACCESS.pop(cache_key, None)
+        _SESSION_REFS.pop(cache_key, None)  # P0#2
         from ...tools.update_todos import cleanup_session
         cleanup_session(cache_key)
         session_dir = base / sid
@@ -1345,6 +1357,7 @@ async def chat_reset(body: dict | None = None):
     _update_meta_cache(username, sid, ws, _SESSIONS[cache_key])
     with _sessions_lock:
         _SESSION_COMPONENTS.pop(cache_key, None)
+        _SESSION_REFS.pop(cache_key, None)  # P0#2
     return {"status": "ok", "session_id": sid}
 
 @router.get("/chat/export")

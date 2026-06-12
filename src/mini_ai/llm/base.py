@@ -58,7 +58,6 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
         if _INTERNAL_FIELDS & m.keys():
             needs_strip = True
             break
-        # 检查 tool_calls 中是否有 _result
         tcs = m.get("tool_calls")
         if tcs and any(tc.get("_result") is not None for tc in tcs if isinstance(tc, dict)):
             needs_strip = True
@@ -81,24 +80,22 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
 
 
 def estimate_tokens(text: str) -> int:
-    # 字节长度近似：CJK 3 字节 ≈ 1 token，ASCII 1 字节 ≈ 0.33 token
-    # bytes // 3 对 CJK 精确，对 ASCII 高估 ~33%（阈值判断偏保守，安全）
     return max(1, len(text.encode('utf-8')) // 3)
 
 
-# estimate_messages_tokens 缓存：key = (id, len, last_msg_hash)
+# estimate_messages_tokens 缓存：线程安全
 _ESTIMATE_CACHE: dict[tuple, int] = {}
 _ESTIMATE_CACHE_MAX = 10
+_ESTIMATE_CACHE_LOCK = threading.Lock()
 
 def estimate_messages_tokens(messages: list[dict]) -> int:
-    # 缓存 key：消息列表 id + 长度 + 首尾消息 id（检测原地替换 messages[:]=new）
-    # 首尾 id 同时变化才能确认内容已变，避免 messages[:]=pruned 后缓存误命中
     cache_key = (id(messages), len(messages),
                  id(messages[0]) if messages else 0,
                  id(messages[-1]) if messages else 0)
-    cached = _ESTIMATE_CACHE.get(cache_key)
-    if cached is not None:
-        return cached
+    with _ESTIMATE_CACHE_LOCK:
+        cached = _ESTIMATE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
 
     total = 0
     for msg in messages:
@@ -119,33 +116,65 @@ def estimate_messages_tokens(messages: list[dict]) -> int:
                     total += estimate_tokens(args)
         total += 4
 
-    # LRU 淘汰
-    if len(_ESTIMATE_CACHE) >= _ESTIMATE_CACHE_MAX:
-        oldest = next(iter(_ESTIMATE_CACHE))
-        del _ESTIMATE_CACHE[oldest]
-    _ESTIMATE_CACHE[cache_key] = total
+    with _ESTIMATE_CACHE_LOCK:
+        if len(_ESTIMATE_CACHE) >= _ESTIMATE_CACHE_MAX:
+            oldest = next(iter(_ESTIMATE_CACHE))
+            del _ESTIMATE_CACHE[oldest]
+        _ESTIMATE_CACHE[cache_key] = total
 
     return total
 
 
-# ── Thread-local usage store ──
+# ── Global usage store (thread-safe) ──
+# P0#3: 全局原子计数器，多线程共享真实 usage 数据。
+# openai.py/anthropic.py 在流式过程中通过 get_usage() 获取可变引用来累积，
+# 最终调用 commit_usage() 原子提交到全局。
 
+_global_usage_lock = threading.Lock()
+_global_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+
+# 线程局部可变 usage（供 openai.py/anthropic.py 在单次 LLM 调用中累积）
 _local = threading.local()
 
-
 def get_usage() -> dict:
+    """返回线程局部 usage（可变引用，供 LLM 层累积）"""
     if not hasattr(_local, "last_usage"):
         _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
     return _local.last_usage
 
+def commit_usage():
+    """将线程局部 usage 原子提交到全局计数器，并重置线程局部值
 
+    prompt_tokens 用 = 替换（API 返回的是当前请求的绝对值，非增量）；
+    completion_tokens 用 += 累加（API 返回的是本次生成的增量）。
+    多会话并发时 prompt_tokens 取最新提交的值。
+    """
+    if not hasattr(_local, "last_usage"):
+        return
+    with _global_usage_lock:
+        # prompt_tokens: 替换语义（API 返回当前请求的 prompt token 数）
+        _global_usage["prompt_tokens"] = _local.last_usage.get("prompt_tokens", 0)
+        # completion_tokens: 累加语义（API 返回本次生成的增量）
+        _global_usage["completion_tokens"] += _local.last_usage.get("completion_tokens", 0)
+    _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+def get_global_usage() -> dict:
+    """返回全局 usage 快照（供前端/WebDisplay 使用，线程安全）"""
+    with _global_usage_lock:
+        return dict(_global_usage)
 
 def reset_usage():
+    """重置线程局部 usage（保留全局累积）"""
     _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+
+def reset_global_usage():
+    """重置全局 usage 计数器"""
+    with _global_usage_lock:
+        _global_usage["prompt_tokens"] = 0
+        _global_usage["completion_tokens"] = 0
 
 
 # ── Session management (thread-local for safety) ──
-
 
 def get_session(ctx=None) -> requests.Session:
     if ctx:

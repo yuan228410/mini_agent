@@ -71,7 +71,7 @@ class HistoryDB:
         """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()  # P0#4: RLock 防止 search_fts→search 递归死锁
         self._fts_available = True
         self._closed = False
         

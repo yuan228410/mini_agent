@@ -76,7 +76,15 @@ class MessageBus:
             ev.set()
         return f"已送达 {to} 的 inbox"
 
-    def read_inbox(self, name: str) -> list[dict]:
+    def read_inbox(self, name: str, peek: bool = False) -> list[dict]:
+        """读取 inbox 消息。
+
+        Args:
+            name: 收件人名称
+            peek: True=只读不清空（供并发读者检查），False=读取并清空（默认）
+
+        多读者场景：先用 peek=True 检查，确认自己是唯一消费者后再 read_inbox(name) 清空。
+        """
         name = name.strip()
         if not self._valid(name):
             return []
@@ -89,8 +97,9 @@ class MessageBus:
                     fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                     try:
                         lines = f.read().splitlines()
-                        f.seek(0)
-                        f.truncate()
+                        if not peek:
+                            f.seek(0)
+                            f.truncate()
                     finally:
                         fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             except (OSError, FileNotFoundError):

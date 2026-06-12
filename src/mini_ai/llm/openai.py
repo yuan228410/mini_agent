@@ -198,6 +198,9 @@ def chat(messages, tools=True, ctx=None):
         elif msg.get("content"):
             usage_store["completion_tokens"] += estimate_tokens(msg["content"])
 
+        from .base import commit_usage
+        commit_usage()
+
         if "tool_calls" in msg:
             calls = msg["tool_calls"]
             summaries = []
@@ -429,4 +432,6 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     else:
         logger.info(f"[LLM←] text={collected_content} (stream) | {elapsed:.1f}s | tok={p_tok}+{c_tok}")
 
+    from .base import commit_usage
+    commit_usage()
     yield {"type": "done", "msg": msg}

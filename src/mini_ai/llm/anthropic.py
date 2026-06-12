@@ -320,6 +320,9 @@ def chat(messages, tools=True, ctx=None):
         text = (msg.get("content") or "")[:100]
         logger.info(f"[Anth←] text={text} | {elapsed:.1f}s")
 
+    from .base import commit_usage
+    commit_usage()
+
     return msg
 
 
@@ -573,4 +576,6 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         logger.debug(f"[Anth] blocks 数量: {len(blocks)}, 类型: {[b.get('type') for b in blocks]}")
     
     logger.info(f"[Anth←] (stream) | {elapsed:.1f}s | tok={input_tokens}+{output_tokens}")
+    from .base import commit_usage
+    commit_usage()
     yield {"type": "done", "msg": msg}

@@ -417,6 +417,10 @@ class Compactor:
             True = 恢复成功，messages 已替换，可重试 LLM
             False = 所有级别耗尽，仍超限
         """
+        # P2#13: 清空摘要缓存，避免跨级脏数据
+        self._cached_summaries.clear()
+        self._last_round_count = 0
+
         safe_threshold = int(self.context_length * 0.7)
 
         # 5 级渐进参数（对标 my_agent）
