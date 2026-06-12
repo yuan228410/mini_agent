@@ -155,6 +155,43 @@ class Compactor:
             return True
         return False
 
+    def maybe_compact(self, messages: list[dict], prompt_tokens: int,
+                    chat_fn, ctx, context_length: int) -> bool:
+        """检查并执行日常压缩：should_compact → prune → estimate → compact
+
+        统一 CLI/Web 的压缩逻辑，消除双写。
+
+        Args:
+            messages: 消息列表（会被原地修改）
+            prompt_tokens: 当前 prompt token 数
+            chat_fn: LLM chat 函数
+            ctx: 请求上下文
+            context_length: 上下文长度限制
+
+        Returns:
+            True = 执行了压缩（prune 或 compact）
+            False = 不需要压缩
+        """
+        if not self.should_compact(prompt_tokens) and not self.should_compact_local(messages):
+            return False
+
+        logger.info(f"[maybe_compact] 触发压缩: prompt_tokens={prompt_tokens}, messages={len(messages)}")
+
+        # 先裁剪工具结果（零开销）
+        pruned = ContextPruner.prune(messages, PruneOptions())
+        pruned_tokens = estimate_messages_tokens(pruned)
+        threshold = int(context_length * 0.8)
+
+        if pruned_tokens < threshold:
+            messages[:] = pruned
+            logger.info(f"[maybe_compact] 裁剪后 tokens={pruned_tokens}，已低于阈值，跳过压缩")
+            return True
+
+        # 需要压缩
+        messages[:] = self.compact(chat_fn, pruned, ctx=ctx)
+        logger.info(f"[maybe_compact] 压缩完成: messages={len(messages)}")
+        return True
+
     # ── 主压缩流程 ──
 
     def compact(self, chat_fn, messages: list[dict], ctx=None, inject_fn=None, keep_recent_override: int | None = None) -> list[dict]:

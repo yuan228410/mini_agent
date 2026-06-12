@@ -79,26 +79,19 @@ async def switch_workspace(body: dict):
     if not ws:
         return {"error": f"工作空间 '{name}' 不存在"}
 
-    from .chat import _SESSION_COMPONENTS
+    from ..session_manager import SessionManager
     from ...context import ContextBuilder
     from ...memory import MemoryStore
     from ...skills import SkillLoader
 
-    # 清理目标工作空间的缓存，不波及其他工作空间
-    import threading
-    from .chat import _sessions_lock, _SESSIONS, _SESSION_LOCKS, _SESSION_MODELS, _SESSION_STATUS, _SESSION_PLAN_MODE, _META_CACHE
+    # 清理目标工作空间的缓存
     from ...tools.cache import clear_tool_cache
     
     # 清除工具缓存，避免跨工作空间缓存污染
     clear_tool_cache()
     
-    with _sessions_lock:
-        prefix = f"{username}:{name}:"
-        for d in (_SESSION_COMPONENTS, _SESSION_LOCKS, _SESSION_MODELS, _SESSION_STATUS, _SESSION_PLAN_MODE, _META_CACHE, _SESSIONS):
-            if isinstance(d, dict):
-                keys = [k for k in d if k.startswith(prefix)]
-                for k in keys:
-                    del d[k]
+    # 清除旧工作空间的缓存会话
+    SessionManager.instance().clear_workspace_prefix(f"{username}:{name}:")
 
     store = MemoryStore(ws.ws_dir / "memory_data")
     ctx = ContextBuilder(DATA_DIR)

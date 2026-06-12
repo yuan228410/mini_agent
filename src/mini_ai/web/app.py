@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .routes import chat, models, skills, config, commands, workspaces, files, team
+from .routes import chat, models, skills, config, commands, workspaces, files, team, sessions
 from .deps import init_components, shutdown_mcp
 from ..logger import logger
 
@@ -32,7 +32,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # 中止所有活跃会话（让 run_tool_loop 尽快退出）
-    from .routes.chat import abort_all_sessions
+    from .session_manager import abort_all_sessions
     abort_all_sessions()
 
     # 关闭历史数据库连接池
@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(workspaces.router, prefix="/api")
     app.include_router(files.router, prefix="/api")
     app.include_router(team.router, prefix="/api")
+    app.include_router(sessions.router, prefix="/api")
 
     dist_dir = Path(__file__).parent.parent.parent.parent / "web" / "dist"
     if dist_dir.exists():

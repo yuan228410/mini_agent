@@ -85,7 +85,7 @@ class ToolCache:
             try:
                 key_str = f"{tool_name}:{frozenset(args.items())}"
                 # 只对最终字符串做 hash，避免对每个值单独 hash
-                return hashlib.md5(key_str.encode()).hexdigest()[:12]
+                return f"{tool_name}:{hashlib.md5(key_str.encode()).hexdigest()[:12]}"
             except (TypeError, ValueError):
                 pass  # 降级到 JSON 方案
         

@@ -7,11 +7,8 @@ import tempfile
 import shutil
 
 # 导入被测试模块
-from mini_ai.web.routes.chat import (
-    _get_or_create_components,
-    _SESSION_COMPONENTS,
-    _sessions_lock,
-    _cache_key,
+from mini_ai.web.session_manager import (
+    SessionManager, cache_key, get_or_create_components,
 )
 from mini_ai.team.blackboard import Blackboard
 from mini_ai.memory.history_db import HistoryDB, HistoryDBPool
@@ -20,36 +17,29 @@ from mini_ai.memory.history_db import HistoryDB, HistoryDBPool
 class TestConcurrentSessionCreation:
     """测试并发创建会话"""
 
-    def test_concurrent_get_or_create_components(self):
-        """多个线程同时创建同一会话，应获得同一个组件实例"""
+    def test_concurrent_session_manager_singleton(self):
+        """多个线程同时获取 SessionManager 实例，应为同一个单例"""
         results = []
         errors = []
-        
-        def create_session():
+
+        def get_sm():
             try:
-                comp = _get_or_create_components(
-                    username="test_user",
-                    sid="test_session_1",
-                    base=None,
-                    workspace="default"
-                )
-                results.append(id(comp))
+                sm = SessionManager.instance()
+                results.append(id(sm))
             except Exception as e:
                 errors.append(e)
-        
+
         # 清理之前的测试数据
-        cache_key = _cache_key("test_user", "default", "test_session_1")
-        with _sessions_lock:
-            _SESSION_COMPONENTS.pop(cache_key, None)
-        
-        # 创建 10 个线程并发请求
-        threads = [threading.Thread(target=create_session) for _ in range(10)]
+        SessionManager._instance = None
+
+        # 创建 10 个线程并发获取单例
+        threads = [threading.Thread(target=get_sm) for _ in range(10)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        
-        # 所有线程应获得同一个组件实例
+
+        # 所有线程应获得同一个单例实例
         assert len(set(results)) == 1, f"发现 {len(set(results))} 个不同实例，应只有一个"
         assert len(errors) == 0, f"发生错误: {errors}"
 
@@ -203,16 +193,12 @@ class TestSessionEviction:
 
     def test_session_eviction_thread_safety(self):
         """测试会话淘汰时的线程安全性"""
-        from mini_ai.web.routes.chat import (
-            _touch_session,
-            _SESSION_ACCESS,
-            _MAX_CACHED_SESSIONS,
-        )
+        from mini_ai.web.session_manager import SessionManager, SessionState, cache_key, _MAX_CACHED_SESSIONS
         
         # 临时降低最大缓存数以触发淘汰
         original_max = _MAX_CACHED_SESSIONS
-        import mini_ai.web.routes.chat as chat_module
-        chat_module._MAX_CACHED_SESSIONS = 5
+        import mini_ai.web.session_manager as sm_module
+        sm_module._MAX_CACHED_SESSIONS = 5
         
         errors = []
         
@@ -220,7 +206,7 @@ class TestSessionEviction:
             try:
                 for i in range(20):
                     cache_key = f"test_user:default:session_{threading.current_thread().name}_{i}"
-                    _touch_session(cache_key)
+                    SessionManager.instance().touch(cache_key)
             except Exception as e:
                 errors.append(e)
         
@@ -239,11 +225,11 @@ class TestSessionEviction:
             assert len(errors) == 0, f"发生错误: {errors}"
             
             # 缓存数量应不超过限制
-            assert len(_SESSION_ACCESS) <= 10  # 留一些余量
+            assert len(SessionManager.instance()._sessions) <= 10  # 留一些余量
             
         finally:
             # 恢复原始限制
-            chat_module._MAX_CACHED_SESSIONS = original_max
+            sm_module._MAX_CACHED_SESSIONS = original_max
 
 
 # 运行测试

@@ -76,6 +76,39 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
                     for tc in tcs
                 ]
         result.append(d)
+
+    # 结构校验：删除孤立的 tool 消息（没有对应 assistant.tool_calls 的 tool 消息）
+    has_assistant_tool_calls = any(
+        m.get("role") == "assistant" and m.get("tool_calls") for m in result
+    )
+    if has_assistant_tool_calls:
+        valid_tool_ids: set[str] = set()
+        for m in result:
+            if m.get("role") == "assistant" and m.get("tool_calls"):
+                for tc in m["tool_calls"]:
+                    if isinstance(tc, dict) and tc.get("id"):
+                        valid_tool_ids.add(tc["id"])
+        cleaned = []
+        orphan_count = 0
+        for m in result:
+            if m.get("role") == "tool":
+                tc_id = m.get("tool_call_id", "")
+                if tc_id and tc_id not in valid_tool_ids:
+                    orphan_count += 1
+                    continue
+            cleaned.append(m)
+        if orphan_count:
+            from ..logger import logger as _log
+            _log.warning(f"[strip] removed {orphan_count} orphan tool messages")
+        result = cleaned
+    else:
+        # 没有 assistant.tool_calls → 所有 tool 消息都是孤立的，全部删除
+        tool_count = sum(1 for m in result if m.get("role") == "tool")
+        if tool_count:
+            result = [m for m in result if m.get("role") != "tool"]
+            from ..logger import logger as _log
+            _log.warning(f"[strip] removed {tool_count} orphan tool messages (no assistant.tool_calls)")
+
     return result
 
 

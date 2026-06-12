@@ -56,7 +56,7 @@ models:
 | `requests.Session()` 长连接 | 复用 HTTP 连接，避免每次 TLS 握手 |
 | `tools` 参数三态 | `True`=全部工具，`list[dict]`=指定列表，`False`=无工具 |
 | 失败重试 | `llm_retries` 次，指数退避（2s → 4s → 8s），支持 timeout/connection/rate limit/429/5xx 等错误 |
-| token 估算 | API 未返回 usage 时按内容 CJK-aware 估算（CJK 1:1，其他 4:1），见 `llm/base.py` `estimate_tokens()` |
+| token 估算 | 字节长度近似（`len(utf8)//3`），偏保守（ASCII 高估 33%），见 `llm/base.py` `estimate_tokens()` |
 | `RequestContext` | 每请求独立 model_config/display/http_session，多用户并发隔离 |
 
 ---
@@ -76,7 +76,7 @@ def run_tool_loop(messages, tools, *, streaming=False, display=None,
 Runner 模块拆分为四个职责清晰的子模块：
 
 - **state.py** — 循环状态管理（`LoopState`）：轮次计数、错误计数、spawn 标记
-- **executor.py** — LLM 调用和工具执行（`ToolExecutor`）：流式/非流式统一、工具分发
+- **executor.py** — LLM 调用（`ToolExecutor`）：流式/非流式统一，工具执行由 loop.py 直接调用 handle_tool_calls
 - **error_handler.py** — 错误处理策略（`ErrorHandler`）：异常分类、用户提示、恢复建议
 - **loop.py** — 精简版主循环（`run_tool_loop`、`run_agent`）：协调上述组件
 
@@ -245,22 +245,29 @@ except ToolError as e:
 
 ```
 src/mini_ai/
-├── main.py              # 主循环编排
-├── config.py            # 配置加载（DATA_DIR / PACKAGE_DIR 分离），支持热加载
+├── main.py              # CLI 主循环编排
+├── config.py            # 配置加载（AppConfig 访问器 + 热加载）
 ├── exceptions.py        # 统一异常体系（MiniAIError / ToolError / LLMError 等）
 ├── context.py           # 系统提示词组装
 ├── utils.py             # 公共工具函数（now_ts 时间戳生成）
 ├── workspace.py         # 工作空间管理
 ├── logger.py            # 日志模块（终端 WARNING+ / 文件 DEBUG）
-├── logger_structured.py # 结构化日志（text/json 双模式）
+├── core/                # 核心编排层（CLI/Web 共用）
+│   ├── display_protocol.py  # Display 协议定义（类型安全约束）
+│   ├── persister.py         # HistoryPersister 统一持久化
+│   └── chat_session.py      # ChatSession 统一会话运行逻辑
 ├── llm/                 # LLM 通信层（base + openai + anthropic）
 ├── cli/                 # CLI 交互层（display + commands）
-├── memory/              # 记忆系统（store + compactor + history_db + session）
+├── memory/              # 记忆系统（store + compactor + context_pruner + history_db）
 ├── runner/              # Agent 执行循环（state + executor + error_handler + loop）
-├── tools/               # 工具系统（ToolRegistry + 25+ 工具模块 + cache）
+├── tools/               # 工具系统（ToolBase + ToolRegistry + 25+ 工具模块 + cache）
 ├── team/                # 多 Agent 编排（bus + manager + blackboard + task_graph + orchestrator）
 ├── subagents/           # 子代理定义（coder/researcher/reviewer/tester/planner）
-├── web/                 # Web 界面（FastAPI + 路由）
+├── web/                 # Web 界面
+│   ├── session_manager.py   # SessionState + SessionManager（统一会话状态管理）
+│   ├── chat_runner.py       # Web 端工具循环运行器
+│   ├── display.py           # WebDisplay 适配器
+│   └── routes/              # FastAPI 路由（chat + sessions + models + ...）
 └── character/           # Agent 人设（SOUL.md + RULES.md）
 ```
 

@@ -79,6 +79,21 @@ class Display:
         self._last_todos_render = ''
         self.show_banner()
 
+    def llm_round_start(self, model: str = ""):
+        pass
+
+    def llm_round_end(self, prompt_tokens: int = 0, completion_tokens: int = 0, model: str = ""):
+        pass
+
+    def teammate_status(self, name: str, status: str):
+        pass
+
+    def blackboard_update(self, key: str, author: str):
+        pass
+
+    def inbox_message(self, to: str, from_user: str, count: int):
+        pass
+
     def show_banner(self):
         if not _IS_TTY:
             return

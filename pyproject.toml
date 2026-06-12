@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mini-ai"
-version = "1.10.10"
+version = "1.10.11"
 description = "基于 OpenAI / Anthropic Chat API 的智能对话 Agent"
 readme = "README.md"
 requires-python = ">=3.10"

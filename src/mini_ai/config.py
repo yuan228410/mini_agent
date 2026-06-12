@@ -386,3 +386,80 @@ def switch_model(name: str) -> str | None:
     _global_thinking = (_raw.get("thinking") or {"enabled": False, "budget_tokens": 10000, "type": "enabled"})
     _model_thinking = model_cfg.get("thinking") or {}
     THINKING = {**_global_thinking, **_model_thinking}
+
+
+
+# ═══════════════════════════════════════════
+# AppConfig — 配置访问器（渐进替代模块级全局变量）
+# ═══════════════════════════════════════════
+
+class AppConfig:
+    """配置访问器，封装全局变量
+
+    新代码使用 app_config.model_config / app_config.streaming 等，
+    旧代码 from .config import MODEL_CONFIG 继续工作。
+    _apply_config 同时更新两边，保证一致性。
+    """
+
+    def __init__(self):
+        self._model_config: dict = MODEL_CONFIG
+        self._available_models: list[str] = AVAILABLE_MODELS
+        self._timeouts: dict = TIMEOUTS
+        self._compactor: dict = COMPACTOR
+        self._teammate: dict = TEAMMATE
+        self._tool: dict = TOOL
+        self._image: dict = IMAGE
+        self._api_mode: str = API_MODE
+        self._streaming: bool = STREAMING
+        self._runner: dict = RUNNER
+        self._thinking: dict = THINKING
+        self._display: dict = DISPLAY
+        self._web: dict = WEB
+        self._logging: dict = LOGGING
+        self._plan: dict = PLAN
+        self._mcp: dict = MCP
+        self._skill_paths: list[Path] = SKILL_PATHS
+        self._subagent_models: dict = SUBAGENT_MODELS
+        self._database: dict = DATABASE
+
+    @property
+    def model_config(self) -> dict: return MODEL_CONFIG
+    @property
+    def available_models(self) -> list[str]: return AVAILABLE_MODELS
+    @property
+    def timeouts(self) -> dict: return TIMEOUTS
+    @property
+    def compactor(self) -> dict: return COMPACTOR
+    @property
+    def teammate(self) -> dict: return TEAMMATE
+    @property
+    def tool(self) -> dict: return TOOL
+    @property
+    def image(self) -> dict: return IMAGE
+    @property
+    def api_mode(self) -> str: return API_MODE
+    @property
+    def streaming(self) -> bool: return STREAMING
+    @property
+    def runner(self) -> dict: return RUNNER
+    @property
+    def thinking(self) -> dict: return THINKING
+    @property
+    def display(self) -> dict: return DISPLAY
+    @property
+    def web(self) -> dict: return WEB
+    @property
+    def logging(self) -> dict: return LOGGING
+    @property
+    def plan(self) -> dict: return PLAN
+    @property
+    def mcp(self) -> dict: return MCP
+    @property
+    def skill_paths(self) -> list[Path]: return SKILL_PATHS
+    @property
+    def subagent_models(self) -> dict: return SUBAGENT_MODELS
+    @property
+    def database(self) -> dict: return DATABASE
+
+
+app_config = AppConfig()

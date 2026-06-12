@@ -675,14 +675,13 @@ function _processEvent(s: SessionState, event: WsEvent) {
     case 'complete':
       {
         const m = s.messages[s.messages.length - 1]
-        if (m) m.streaming = false
+        if (m) s.messages[s.messages.length - 1] = { ...m, streaming: false }
         
         // 🔧 complete 事件携带错误：始终显示，追加到已有内容
         if (event.data?.error) {
           console.error('[complete] LLM 返回错误:', event.data.error)
           if (m && m.role === 'assistant') {
-            // 有 assistant 消息：追加错误提示（可能已有部分流式内容）
-            m.content = (m.content ? m.content + '\n\n' : '') + event.data.error
+            s.messages[s.messages.length - 1] = { ...m, content: (m.content ? m.content + '\n\n' : '') + event.data.error, streaming: false }
             _updateUI(s)
           } else {
             // 无 assistant 消息：新增一条
@@ -695,6 +694,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           }
         }
         
+        console.log('[mini-ai] cpl: msgs=' + s.messages.length + ' last=' + (s.messages[s.messages.length-1]?.role) + ':' + (s.messages[s.messages.length-1]?.content || '').substring(0, 60) + ' err=' + !!event.data?.error)
         _updateUI(s)
       }
       break
@@ -771,11 +771,11 @@ function _processEvent(s: SessionState, event: WsEvent) {
         }
         const m = s.messages[s.messages.length - 1]
         if (m && m.role === 'assistant') {
-          m.content = m.content ? m.content + '\n\n' + errMsg : errMsg
-          m.streaming = false
+          s.messages[s.messages.length - 1] = { ...m, content: m.content ? m.content + '\n\n' + errMsg : errMsg, streaming: false }
         } else {
           s.messages.push({ role: 'assistant', content: errMsg, timestamp: _localTs(), streaming: false })
         }
+        console.log('[mini-ai] err: msgs=' + s.messages.length + ' last=' + (s.messages[s.messages.length-1]?.role) + ':' + (s.messages[s.messages.length-1]?.content || '').substring(0, 60))
         _updateUI(s)
       }
       break

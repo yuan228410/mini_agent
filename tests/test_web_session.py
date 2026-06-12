@@ -12,20 +12,20 @@ class TestWebSessionConcurrency:
     
     def test_session_lock_prevents_concurrent_execution(self):
         """会话锁应阻止同一会话并发执行"""
-        from mini_ai.web.routes.chat import _get_session_lock, _cache_key
+        from mini_ai.web.session_manager import SessionManager, SessionState, cache_key, _MAX_CACHED_SESSIONS
         
         username = "test_user"
         workspace = "default"
         sid = "test-session-123"
         
-        lock = _get_session_lock(username, workspace, sid)
+        lock = SessionManager.instance().get_lock(SessionManager.cache_key(username, workspace, sid))
         
         # 第一次获取锁
         acquired1 = lock.acquire(blocking=False)
         assert acquired1 is True
         
         # 第二次获取锁应失败
-        lock2 = _get_session_lock(username, workspace, sid)
+        lock2 = SessionManager.instance().get_lock(SessionManager.cache_key(username, workspace, sid))
         acquired2 = lock2.acquire(blocking=False)
         assert acquired2 is False
         
@@ -37,66 +37,55 @@ class TestWebSessionConcurrency:
     
     def test_is_session_generating(self):
         """测试会话生成状态检查"""
-        from mini_ai.web.routes.chat import _SESSION_STATUS, _cache_key
+        from mini_ai.web.session_manager import SessionManager, SessionState, cache_key, _MAX_CACHED_SESSIONS
         
         username = "test_user"
         workspace = "default"
         sid = "test-session-456"
-        key = _cache_key(username, workspace, sid)
+        key = SessionManager.cache_key(username, workspace, sid)
         
         # 初始状态应为 idle
-        assert _SESSION_STATUS.get(key) != "generating"
+        assert SessionManager.instance().get_status(key) != "generating"
         
         # 设置为 generating
-        _SESSION_STATUS[key] = "generating"
-        assert _SESSION_STATUS.get(key) == "generating"
+        SessionManager.instance()._sessions[key] = SessionState(status="generating")
+        assert SessionManager.instance().get_status(key) == "generating"
         
         # 设置为 idle
-        _SESSION_STATUS[key] = "idle"
-        assert _SESSION_STATUS.get(key) != "generating"
+        SessionManager.instance()._sessions[key] = SessionState(status="idle")
+        assert SessionManager.instance().get_status(key) != "generating"
         
         # 清理
-        del _SESSION_STATUS[key]
+        del SessionManager.instance()._sessions[key]
     
     def test_session_eviction_skips_generating_sessions(self):
         """会话淘汰应跳过正在生成的会话"""
-        from mini_ai.web.routes.chat import (
-            _touch_session,
-            _SESSION_STATUS,
-            _SESSION_ACCESS,
-            _SESSIONS,
-            _MAX_CACHED_SESSIONS,
-            _cache_key
-        )
+        from mini_ai.web.session_manager import SessionManager, SessionState, cache_key, _MAX_CACHED_SESSIONS
         
         # 清空缓存
-        _SESSION_ACCESS.clear()
-        _SESSIONS.clear()
-        _SESSION_STATUS.clear()
+        SessionManager.instance()._sessions.clear()
         
         # 创建多个会话
         for i in range(_MAX_CACHED_SESSIONS + 5):
             key = f"user:default:session-{i}"
-            _SESSIONS[key] = [{"role": "system", "content": "test"}]
-            _touch_session(key)
+            SessionManager.instance()._sessions[key] = SessionState(messages=[{"role": "system", "content": "test"}])
+            SessionManager.instance().touch(key)
         
         # 标记最后一个会话为 generating
         generating_key = f"user:default:session-{_MAX_CACHED_SESSIONS + 4}"
-        _SESSION_STATUS[generating_key] = "generating"
+        SessionManager.instance()._sessions[generating_key] = SessionState(status="generating")
         
         # 触发淘汰
         new_key = "user:default:session-new"
-        _SESSIONS[new_key] = [{"role": "system", "content": "test"}]
-        _touch_session(new_key)
+        SessionManager.instance()._sessions[new_key] = SessionState(messages=[{"role": "system", "content": "test"}])
+        SessionManager.instance().touch(new_key)
         
         # generating 的会话不应被淘汰
-        assert generating_key in _SESSIONS
-        assert _SESSION_STATUS.get(generating_key) == "generating"
+        assert generating_key in SessionManager.instance()._sessions
+        assert SessionManager.instance().get_status(generating_key) == "generating"
         
         # 清理
-        _SESSION_ACCESS.clear()
-        _SESSIONS.clear()
-        _SESSION_STATUS.clear()
+        SessionManager.instance()._sessions.clear()
 
 
 class TestWebSessionLock:
@@ -139,39 +128,40 @@ class TestWebSocketConcurrency:
     
     def test_concurrent_messages_rejected(self):
         """同一会话并发消息应被拒绝"""
-        from mini_ai.web.routes.chat import _SESSION_STATUS, _cache_key
+        from mini_ai.web.session_manager import SessionManager, SessionState, cache_key, _MAX_CACHED_SESSIONS
         
         username = "test_user"
         workspace = "default"
         sid = "test-session-789"
-        key = _cache_key(username, workspace, sid)
+        key = SessionManager.cache_key(username, workspace, sid)
         
         # 模拟会话正在生成
-        _SESSION_STATUS[key] = "generating"
+        SessionManager.instance()._sessions[key] = SessionState(status="generating")
         
         # 检查应返回 generating
-        assert _SESSION_STATUS.get(key) == "generating"
+        assert SessionManager.instance().get_status(key) == "generating"
         
         # 清理
-        del _SESSION_STATUS[key]
+        del SessionManager.instance()._sessions[key]
     
     def test_abort_event_cleanup(self):
         """WebSocket 断开时应清理 abort 事件"""
-        from mini_ai.web.routes.chat import _SESSION_ABORTS, _cache_key
+        from mini_ai.web.session_manager import SessionManager, SessionState, cache_key, _MAX_CACHED_SESSIONS
         
         username = "test_user"
         workspace = "default"
         sid = "test-session-abort"
-        key = _cache_key(username, workspace, sid)
+        key = SessionManager.cache_key(username, workspace, sid)
         
         # 创建 abort 事件
         event = threading.Event()
-        _SESSION_ABORTS[key] = event
+        sm = SessionManager.instance()
+        sm._sessions[key] = SessionState(abort_event=event)
         
         # 模拟清理
-        evt = _SESSION_ABORTS.pop(key, None)
+        evt = SessionManager.instance()._sessions.pop(key, None)
         assert evt is not None
-        assert key not in _SESSION_ABORTS
+        assert SessionManager.instance().get_abort_event(key) is None or not SessionManager.instance().get_abort_event(key).is_set()
 
 
 # 集成测试（需要实际 WebSocket 连接，标记为慢测试）

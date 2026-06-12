@@ -12,6 +12,7 @@ from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
                      DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw, user_data_dir)
 from .context import ContextBuilder
 from .llm import get_usage, reset_usage, estimate_tokens
+from .core import ChatSession, HistoryPersister
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
@@ -492,21 +493,8 @@ def main():
             reset_usage()
             tools = [] if cmd.plan_mode else _lead_tool_defs(_app_ctx)
 
-            _cli_deferred = []
-
-            def _persist(m):
-                ws_name = _get_workspace_name()
-                if m["role"] == "tool":
-                    history_db.append(ws_name, current_session_id, "tool", m.get("content", ""),
-                                      metadata=json.dumps({"name": m.get("name", ""),
-                                                           "tool_call_id": m.get("tool_call_id", "")}))
-                elif m["role"] == "assistant":
-                    if m.get("tool_calls"):
-                        _cli_deferred.append(m)
-                    else:
-                        meta = {"thinking": m["thinking"]} if m.get("thinking") else {}
-                        history_db.append(ws_name, current_session_id, "assistant", m.get("content", ""),
-                                          metadata=json.dumps(meta) if meta else "")
+            # 使用 HistoryPersister 统一持久化
+            _cli_persister = HistoryPersister(history_db, _get_workspace_name(), current_session_id)
 
             msg, _ = run_tool_loop(
                 messages, tools,
@@ -514,12 +502,12 @@ def main():
                 display=disp,
                 inject_fn=_inject_todos,
                 ctx=cmd.ctx,
-                persist_fn=_persist,
+                persist_fn=_cli_persister,
                 bus=bus,
                 context_length=MODEL_CONFIG.get("context_length", 256000),
                 compactor=compactor,
             )
-            _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)  # 异常时跳过，避免写入不完整消息
+            _cli_persister.flush_deferred(messages)  # 异常时跳过，避免写入不完整消息
 
             # 计划模式自动执行
             if cmd.plan_mode and msg and msg.get("content"):
@@ -535,12 +523,12 @@ def main():
                         display=disp,
                         inject_fn=_inject_todos,
                         ctx=cmd.ctx,
-                        persist_fn=_persist,
+                        persist_fn=_cli_persister,
                         bus=bus,
                         context_length=MODEL_CONFIG.get("context_length", 256000),
                         compactor=compactor,
                     )
-                    _flush_deferred(history_db, messages, _cli_deferred, _get_workspace_name(), current_session_id)
+                    _cli_persister.flush_deferred(messages)
                     if msg2 and msg2.get("content"):
                         msg = msg2
 
@@ -572,17 +560,8 @@ def main():
                 history_count=history_db.count(),
             )
 
-            if compactor.should_compact(usage["prompt_tokens"]) or compactor.should_compact_local(messages):
-                logger.info(f"[CLI] 触发压缩: prompt_tokens={usage['prompt_tokens']}, messages={len(messages)}")
-                from .llm import chat
-                # 先裁剪工具结果（零开销）
-                pruned = ContextPruner.prune(messages, PruneOptions())
-                if estimate_messages_tokens(pruned) < int(MODEL_CONFIG.get("context_length", 256000) * 0.8):
-                    messages[:] = pruned
-                    logger.info(f"[CLI] 裁剪后已低于阈值，跳过压缩: messages={len(messages)}")
-                else:
-                    messages[:] = compactor.compact(chat, pruned, ctx=cmd.ctx)
-                    logger.info(f"[CLI] 压缩完成: messages={len(messages)}")
+            # 使用 Compactor.maybe_compact 统一压缩逻辑
+            compactor.maybe_compact(messages, usage["prompt_tokens"], llm_chat, cmd.ctx, MODEL_CONFIG.get("context_length", 256000))
 
         except KeyboardInterrupt:
             disp.info("⚠ 已中断")

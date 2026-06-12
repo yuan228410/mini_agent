@@ -34,6 +34,9 @@ class WebDisplay:
     def _push(self, event: str, data: dict | None = None):
         from mini_ai.llm import get_global_usage
         usage = get_global_usage()
+        if event in ("error", "complete", "done", "aborted"):
+            from ..logger import logger as _dlog
+            _dlog.info(f'[Display] push: event={event} sid={self.session_id} has_err={bool(data and data.get("error"))}')
         if data is None:
             data = {}
         # 自动注入 session_id（用于前端路由工作流事件到对应会话）

@@ -8,6 +8,7 @@ import threading
 from typing import Any, Callable
 
 from .state import LoopState
+from ..core.display_protocol import DisplayProtocol
 from .executor import ToolExecutor
 from .error_handler import ErrorHandler
 
@@ -25,7 +26,7 @@ def run_tool_loop(
     tools: list[dict],
     *,
     streaming: bool = False,
-    display=None,
+    display: DisplayProtocol | None = None,
     inject_fn=None,
     persist_fn=None,
     abort_event: threading.Event | None = None,
@@ -72,7 +73,7 @@ def run_tool_loop(
         # 检查中断
         if abort_event and abort_event.is_set():
             # 🔧 修复：中断时保存已生成的内容
-            if display and hasattr(display, 'text_end'):
+            if display:
                 partial_content = display.text_end()  # 获取已流式输出的内容
                 if partial_content:
                     partial_msg = {
@@ -98,7 +99,7 @@ def run_tool_loop(
             # 检查是否需要中断
             if abort_event and abort_event.is_set():
                 # 🔧 修复：中断时保存已生成的内容
-                if display and hasattr(display, 'text_end'):
+                if display:
                     partial_content = display.text_end()  # 获取已流式输出的内容
                     if partial_content:
                         partial_msg = {
@@ -141,8 +142,9 @@ def run_tool_loop(
                 executor.finalize_response(msg, messages)
                 return msg, state.spawned_teammate
             
-            # 执行工具
-            tool_spawned = executor.execute_tools(msg, messages, state)
+            # 执行工具（直接调用 tools.handle_tool_calls，不再经过 executor）
+            from ..tools import handle_tool_calls
+            tool_spawned = handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
             
             # 检查工具错误
             # 注意：这里检测的是 execute_tools 内部处理的字符串格式错误（⚠ 开头）

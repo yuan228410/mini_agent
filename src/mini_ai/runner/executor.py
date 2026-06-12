@@ -11,6 +11,7 @@ from typing import Any, Callable
 
 from ..logger import logger
 from ..utils import now_ts
+from ..core.display_protocol import DisplayProtocol
 
 class ToolExecutor:
     """工具执行器
@@ -23,7 +24,7 @@ class ToolExecutor:
     
     def __init__(
         self,
-        display: Any = None,
+        display: DisplayProtocol | None = None,
         persist_fn: Callable[[dict], None] | None = None,
         streaming: bool = False,
     ):
@@ -71,7 +72,7 @@ class ToolExecutor:
         
         # 调用开始
         model = get_model(ctx)
-        if self.display and hasattr(self.display, 'llm_round_start'):
+        if self.display:
             self.display.llm_round_start(model)
         
         try:
@@ -83,7 +84,7 @@ class ToolExecutor:
             raise
         
         # 调用结束
-        if self.display and hasattr(self.display, 'llm_round_end'):
+        if self.display:
             from ..llm import get_usage
             usage = get_usage()
             self.display.llm_round_end(
@@ -126,7 +127,7 @@ class ToolExecutor:
         for attempt in range(max_retries + 1):
             # 调用开始
             model = get_model(ctx)
-            if self.display and hasattr(self.display, 'llm_round_start'):
+            if self.display:
                 self.display.llm_round_start(model)
             
             msg = None
@@ -138,7 +139,7 @@ class ToolExecutor:
             for chunk in llm_chat_stream(messages, tools=tools, ctx=ctx, abort_event=abort_event):
                 if abort_event and abort_event.is_set():
                     # 🔧 修复：中断时返回已生成的内容（如果有）
-                    if self.display and hasattr(self.display, 'text_end'):
+                    if self.display:
                         partial_content = self.display.text_end()
                         if partial_content:
                             # 返回部分消息，让上层决定是否保存
@@ -201,7 +202,7 @@ class ToolExecutor:
                     # 继续重试逻辑
                 else:
                     # 调用结束
-                    if self.display and hasattr(self.display, 'llm_round_end'):
+                    if self.display:
                         usage = get_usage()
                         self.display.llm_round_end(
                             prompt_tokens=usage.get("prompt_tokens", last_usage["prompt_tokens"]),
@@ -230,8 +231,7 @@ class ToolExecutor:
                 logger.error(f"[LLM✗] 流式错误(已重试{attempt}次): {stream_error}")
                 if self.display:
                     self.display.text_end()
-                    self.display.error(f"⚠ LLM 错误: {stream_error}")
-                # 返回带错误标记的消息
+                # 返回带错误标记的消息（error 由 chat_runner 统一通过 complete 事件发送）
                 return {
                     "role": "assistant",
                     "content": None,
@@ -243,37 +243,13 @@ class ToolExecutor:
         logger.error(f"[LLM✗] 流式错误(已重试{max_retries}次): {last_error}")
         if self.display:
             self.display.text_end()
-            self.display.error(f"⚠ LLM 错误: {last_error}")
-        # 返回带错误标记的消息
+        # 返回带错误标记的消息（error 由 chat_runner 统一通过 complete 事件发送）
         return {
             "role": "assistant",
             "content": None,
             "error": str(last_error),
             "is_context_overflow": stream_overflow,
         }
-    
-    def execute_tools(
-        self,
-        msg: dict,
-        messages: list[dict],
-        state: Any = None,
-    ) -> bool:
-        """执行工具调用
-        
-        Args:
-            msg: LLM 响应消息（含 tool_calls）
-            messages: 消息列表（会被修改）
-            state: 循环状态
-        
-        Returns:
-            是否 spawn 了队友
-        """
-        from ..tools import handle_tool_calls
-        
-        display = self.display
-        spawned = handle_tool_calls(msg, messages, display=display, persist_fn=self.persist_fn)
-        
-        return spawned
     
     def finalize_response(
         self,

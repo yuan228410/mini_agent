@@ -7,7 +7,7 @@ from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config
 from ...llm.base import estimate_tokens
 from ...logger import logger
-from .chat import _get_or_create_session, _SESSION_MODELS, _LAST_USAGE, _SESSION_PLAN_MODE, _lead_tool_defs
+from ..session_manager import SessionManager, cache_key, resolve_base, get_or_create_session, lead_tool_defs, _load_session_model
 
 router = APIRouter()
 
@@ -19,15 +19,16 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
     if not session_id:
         session_id = "default"
     ws = workspace or None
-    from .chat import _cache_key, _resolve_base
-    base = _resolve_base(username, ws)
-    cache_key = _cache_key(username, ws, session_id)
-    _, messages = _get_or_create_session(username, session_id, base, ws, create=False)
-    usage = _LAST_USAGE.get(cache_key, {"prompt_tokens": 0, "completion_tokens": 0})
-    model_name = _SESSION_MODELS.get(cache_key)
+    # already imported from session_manager
+    base = resolve_base(username, ws)
+    key = cache_key(username, ws, session_id)
+    _, messages = get_or_create_session(username, session_id, base, ws, create=False)
+    s = SessionManager.instance().get(key)
+    usage = s.last_usage if s and s.last_usage else {"prompt_tokens": 0, "completion_tokens": 0}
+    model_name = SessionManager.instance().get_model(key)
     if not model_name:
         # 从 meta.json 恢复会话专属模型
-        from .chat import _load_session_model
+        # already imported from session_manager
         model_name = _load_session_model(base, session_id)
     model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
     logger.debug(f"[perf] get_config sid={session_id} ws={workspace} time={time.time()-_t0:.3f}s")
@@ -50,18 +51,18 @@ async def get_system_prompt(username: str = Query(default=""), workspace: str = 
     if not username:
         return {"error": "缺少 username"}
     
-    from .chat import _resolve_base, _get_or_create_components
+    from ..session_manager import resolve_base, get_or_create_components
     from ...context import ContextBuilder
     from ...skills import SkillLoader
     from ...config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
     from ...llm import estimate_tokens
     
     ws = workspace or None
-    base = _resolve_base(username, ws)
+    base = resolve_base(username, ws)
     
     # 获取组件（MemoryStore, SkillLoader 等）
     comp_key = "default"
-    comp = _get_or_create_components(username, comp_key, base, ws)
+    comp = get_or_create_components(username, comp_key, base, ws)
     
     # 构建完整系统提示词
     ctx_builder = ContextBuilder(DATA_DIR)
@@ -87,7 +88,7 @@ async def get_system_prompt(username: str = Query(default=""), workspace: str = 
 @router.get("/config/tools")
 async def get_tools():
     """获取工具定义（含字符数和 token 估算）"""
-    tools = _lead_tool_defs()
+    tools = lead_tool_defs()
     import json
     tools_json = json.dumps(tools, ensure_ascii=False)
     chars = len(tools_json)

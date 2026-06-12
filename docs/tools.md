@@ -8,6 +8,29 @@
 - `execute(args)` — 工具执行函数
 - `configure(**kwargs)` — 可选，注入外部依赖
 
+### ToolBase 基类
+
+`tools/base.py` 提供统一的工具基类，新工具推荐继承 `ToolBase`：
+
+```python
+from .base import ToolBase
+
+class MyTool(ToolBase):
+    name = "my_tool"
+    description = "做某事"
+    parameters = {"type": "object", "properties": {...}, "required": [...]}
+
+    @staticmethod
+    def execute(args: dict) -> str:
+        ...
+
+# 向后兼容
+definition = MyTool.definition()
+execute = MyTool.execute
+```
+
+`ToolBase` 自动生成 `definition()` 格式，并提供 `_truncate()` 辅助方法截断过长输出。
+
 添加新工具只需在 `tools/` 目录下创建新模块，通过 `ToolRegistry.add_tools()` 注册即可。
 
 ## 内置工具

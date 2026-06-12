@@ -6,6 +6,29 @@
 
 技术栈：FastAPI + WebSocket 后端，Vue 3 + Vite 前端。同一套 LLM/工具/记忆逻辑，仅 Display 层不同。
 
+## 后端架构
+
+Web 后端按职责拆分为：
+
+- `web/session_manager.py` — `SessionManager` 单例 + `SessionState` dataclass，统一管理所有会话状态（替代原 13 个全局 dict）
+- `web/chat_runner.py` — `run_tool_loop_sync()`，后台线程执行工具循环，推送事件到 WS 队列
+- `web/routes/sessions.py` — 会话 CRUD REST API（创建/列表/删除/重命名）
+- `web/routes/chat.py` — WebSocket 端点 + 聊天历史/导出/重置
+- `web/display.py` — `WebDisplay` 适配器，实现 `DisplayProtocol` 协议
+
+### Display 协议
+
+`core/display_protocol.py` 定义 `DisplayProtocol`（`typing.Protocol`），CLI 和 Web 的 Display 适配器隐式满足此协议。Runner/Executor 通过协议类型调用，不再用 `hasattr` 鸭子类型检查。
+
+### 会话状态管理
+
+所有会话状态（消息、模型、状态、引用计数等）封装在 `SessionState` dataclass 中，由 `SessionManager` 单例统一管理。对外暴露方法而非裸 dict，其他路由通过 `SessionManager.instance()` 获取。
+
+### 持久化与压缩
+
+- `core/persister.py` — `HistoryPersister` 统一 CLI/Web 的 DB 写入逻辑（tool/assistant/deferred-assistant）
+- `Compactor.maybe_compact()` — 统一日常压缩入口，消除 CLI/Web 双写
+
 ## 启动方式
 
 ```bash

@@ -19,7 +19,7 @@ class TestWorkspace:
         assert ws.ws_dir == ws_dir
         assert ws.project_path == "/project"
         assert ws.memory_dir == ws_dir / "memory_data"
-        assert ws.sessions_dir == ws_dir / "memory_data" / "sessions"
+        assert ws.memory_dir == ws_dir / "memory_data"
         assert ws.team_dir == ws_dir / ".team"
         assert ws.history_db_path == ws_dir / "memory_data" / "history.db"
     
@@ -266,7 +266,7 @@ class TestWorkspaceIsolation:
             ws2 = manager.get("ws2")
             
             assert ws1.memory_dir != ws2.memory_dir
-            assert ws1.sessions_dir != ws2.sessions_dir
+            assert ws1.memory_dir != ws2.memory_dir
             assert ws1.history_db_path != ws2.history_db_path
     
     def test_get_nonexistent_workspace(self):

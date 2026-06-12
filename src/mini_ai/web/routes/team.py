@@ -7,9 +7,9 @@ router = APIRouter()
 
 
 def _get_team_comp(username: str, workspace: str):
-    from .chat import _TEAM_COMPONENTS, _ws_key
-    wk = _ws_key(username, workspace)
-    return _TEAM_COMPONENTS.get(wk)
+    from ..session_manager import SessionManager, ws_key
+    wk = ws_key(username, workspace)
+    return SessionManager.instance().get_team_component(wk)
 
 
 @router.get("/team/status")
