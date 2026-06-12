@@ -113,9 +113,8 @@ function openImage(dataUrl: string) {
 }
 
 .message--user {
-  text-align: right;
   background: var(--accent-soft);
-  margin-left: 8%;
+  border-radius: 10px;
 }
 
 .message--user .message-row {
@@ -280,7 +279,6 @@ function openImage(dataUrl: string) {
 
 .message--user .message-body {
   color: var(--fg);
-  text-align: left;
 }
 
 .message-images {

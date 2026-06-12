@@ -2,15 +2,21 @@
 import { computed, ref } from 'vue'
 
 const props = defineProps<{
-  version: string
   model: string
   context_length: number
   prompt_tokens: number
   completion_tokens: number
-  system_prompt_tokens: number
   history_count: number
   planMode?: boolean
 }>()
+
+const modelShort = computed(() => {
+  const m = props.model || '?'
+  if (m.length <= 12) return m
+  const parts = m.split(/[-_]/)
+  if (parts.length > 1) return parts.slice(0, 2).join('-')
+  return m.slice(0, 12)
+})
 
 const usagePct = computed(() => {
   if (!props.context_length) return '0'
@@ -24,15 +30,11 @@ const usagePct = computed(() => {
   <div class="status-bar">
     <span class="status-item" :class="{ 'plan-mode': planMode }">{{ planMode ? '📋 计划' : '⚡ 执行' }}</span>
     <span class="status-sep">·</span>
-    <span class="status-item">{{ model }}</span>
+    <span class="status-item">{{ modelShort }}</span>
     <span class="status-sep">·</span>
-    <span class="status-item">ctx {{ usagePct }}% ({{ prompt_tokens }}/{{ context_length }})</span>
-    <span class="status-sep">·</span>
-    <span class="status-item">v{{ version }}</span>
+    <span class="status-item">ctx {{ usagePct }}%</span>
     <span class="status-sep">·</span>
     <span class="status-item">↑{{ prompt_tokens }} ↓{{ completion_tokens }}</span>
-    <span class="status-sep">·</span>
-    <span class="status-item">sys {{ system_prompt_tokens }}</span>
     <span class="status-sep">·</span>
     <span class="status-item">msg {{ history_count }}</span>
   </div>

@@ -62,12 +62,12 @@ function toggleResult() {
       <span v-if="resultLen > 0" class="tool-size">{{ resultLen > 1000 ? (resultLen / 1000).toFixed(1) + 'k' : resultLen }} 字</span>
       <span class="tool-toggle">{{ expanded ? '收起' : '详情' }}</span>
     </div>
-    <div class="tool-args-line" @click="toggle">
+    <div v-if="expanded" class="tool-args-line" @click="toggle">
       <span class="tool-args">{{ tool.args }}</span>
     </div>
     
-    <!-- 结果预览（折叠状态） -->
-    <div v-if="!expanded && tool.result" class="result-preview-line" @click="toggle">
+    <!-- 结果预览（展开状态） -->
+    <div v-if="expanded && tool.result" class="result-preview-line" @click="toggle">
       <span class="result-preview-label">结果:</span>
       <span class="result-preview" :class="{ 'result-json': resultIsJson }">{{ resultPreview }}</span>
       <span v-if="needsPreview" class="result-more">+{{ resultLen - PREVIEW_LEN }} 字</span>

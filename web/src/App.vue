@@ -18,12 +18,10 @@ const SIDEBAR_WIDTH_KEY = 'mini-ai-sidebar-width'
 
 const theme = ref<Theme>('light')
 const config = ref({
-  version: '',
   model: '?',
   context_length: 128000,
   prompt_tokens: 0,
   completion_tokens: 0,
-  system_prompt_tokens: 0,
   history_count: 0,
   session_id: '',
   username: '',
@@ -31,7 +29,7 @@ const config = ref({
 const sidebarWidth = ref(260)
 const sidebarCollapsed = ref(false)
 const rightPanelTab = ref<string>('files')
-const rightPanelCollapsed = ref(false)
+const rightPanelCollapsed = ref(true)
 const rightPanelWidth = ref(300)
 
 // 用户相关
@@ -262,18 +260,6 @@ function onTodosUpdate(content: string) {
       </div>
       <div class="header-right">
         <ModelSelector :session-id="sessionId" :workspace="activeWorkspace || undefined" @switched="onModelSwitched" />
-        <button class="skill-btn" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'" title="文件浏览">
-          <span>📄</span>
-        </button>
-        <button class="skill-btn" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'" title="协作面板">
-          <span>👥</span>
-        </button>
-        <button class="skill-btn" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'" title="工具面板">
-          <span>🔧</span>
-        </button>
-        <button class="skill-btn" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'" title="设置">
-          <span>⚙</span>
-        </button>
         <ThemeToggle :theme="theme" @toggle="onToggleTheme" />
       </div>
     </header>
@@ -292,17 +278,17 @@ function onTodosUpdate(content: string) {
       <div class="rp-resize-handle" @mousedown.prevent="startRightPanelResize"></div>
       <div class="right-panel" :class="{ 'rp-collapsed': rightPanelCollapsed }" :style="rightPanelCollapsed ? {} : { width: rightPanelWidth + 'px' }">
         <div class="rp-tabs">
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'todos' }" @click="rightPanelTab = rightPanelTab === 'todos' ? '' : 'todos'" v-if="todosContent">📋</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'workflow' }" @click="rightPanelTab = rightPanelTab === 'workflow' ? '' : 'workflow'" title="工作流">🔀</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'" title="协作">👥</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'" title="工具">🔧</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'" title="文件">📄</button>
-          <button class="rp-tab" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'" title="设置">⚙</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'todos' }" @click="rightPanelTab = rightPanelTab === 'todos' ? '' : 'todos'; rightPanelCollapsed = false" v-if="todosContent" title="任务计划">任务</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'workflow' }" @click="rightPanelTab = rightPanelTab === 'workflow' ? '' : 'workflow'; rightPanelCollapsed = false" title="工作流">流程</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'; rightPanelCollapsed = false" title="协作">协作</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'skills' }" @click="rightPanelTab = rightPanelTab === 'skills' ? '' : 'skills'; rightPanelCollapsed = false" title="工具">工具</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'files' }" @click="rightPanelTab = rightPanelTab === 'files' ? '' : 'files'; rightPanelCollapsed = false" title="文件">文件</button>
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'settings' }" @click="rightPanelTab = rightPanelTab === 'settings' ? '' : 'settings'; rightPanelCollapsed = false" title="设置">设置</button>
           <button class="rp-tab rp-collapse" @click="rightPanelCollapsed = !rightPanelCollapsed">{{ rightPanelCollapsed ? '◂' : '▸' }}</button>
         </div>
         <div class="rp-body" v-show="!rightPanelCollapsed">
           <div v-if="rightPanelTab === 'todos'" class="rp-content">
-            <div class="rp-title">📋 任务计划</div>
+            <div class="rp-title">任务计划</div>
             <div class="rp-todos" v-html="renderTodos()"></div>
           </div>
           <div v-if="rightPanelTab === 'workflow'" class="rp-content">
@@ -622,29 +608,7 @@ function onTodosUpdate(content: string) {
   gap: 0.8rem;
 }
 
-.skill-btn {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--bg-card);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.2s ease;
-  font-size: 0.95rem;
-}
 
-.skill-btn:hover {
-  border-color: var(--accent);
-  background: var(--bg-thinking);
-}
-
-.skill-btn.active {
-  border-color: var(--accent);
-  background: var(--bg-thinking);
-}
 
 .main-area {
   flex: 1;
@@ -701,18 +665,20 @@ function onTodosUpdate(content: string) {
 }
 
 .rp-tab {
-  width: 30px;
   height: 30px;
+  min-width: 30px;
+  padding: 0 8px;
   border: 1px solid transparent;
   background: transparent;
   cursor: pointer;
-  font-size: 0.85rem;
+  font-size: 0.78rem;
   border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s ease;
   position: relative;
+  white-space: nowrap;
 }
 
 .rp-tab:hover {
@@ -753,7 +719,8 @@ function onTodosUpdate(content: string) {
 .right-panel.rp-collapsed .rp-tab {
   width: 30px;
   height: 30px;
-  font-size: 0.8rem;
+  padding: 0;
+  font-size: 0.78rem;
 }
 .right-panel.rp-collapsed .rp-tab.active::after {
   bottom: auto;
