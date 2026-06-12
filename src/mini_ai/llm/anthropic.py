@@ -11,8 +11,10 @@ from .base import (
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, get_session, ensure_session_anthropic,
     estimate_tokens, estimate_messages_tokens, detect_context_overflow,
+    _strip_internal_fields, commit_usage,
 )
 from ..logger import logger
+from ..tools import get_definitions
 from ..exceptions import LLMError
 from .retry import RetryStrategy
 
@@ -176,8 +178,6 @@ def _apply_model_params(payload: dict, ctx=None):
 
 def chat(messages, tools=True, ctx=None):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
-    from ..tools import get_definitions
-    from .base import _strip_internal_fields
 
     clean_msgs = _strip_internal_fields(messages)
     system_text, ant_msgs = _openai_to_anthropic(clean_msgs)
@@ -320,7 +320,6 @@ def chat(messages, tools=True, ctx=None):
         text = (msg.get("content") or "")[:100]
         logger.info(f"[Anth←] text={text} | {elapsed:.1f}s")
 
-    from .base import commit_usage
     commit_usage()
 
     return msg
@@ -328,8 +327,6 @@ def chat(messages, tools=True, ctx=None):
 
 def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
-    from ..tools import get_definitions
-    from .base import _strip_internal_fields
 
     clean_msgs = _strip_internal_fields(messages)
     system_text, ant_msgs = _openai_to_anthropic(clean_msgs)
@@ -576,6 +573,5 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         logger.debug(f"[Anth] blocks 数量: {len(blocks)}, 类型: {[b.get('type') for b in blocks]}")
     
     logger.info(f"[Anth←] (stream) | {elapsed:.1f}s | tok={input_tokens}+{output_tokens}")
-    from .base import commit_usage
     commit_usage()
     yield {"type": "done", "msg": msg}

@@ -1,10 +1,11 @@
 """状态配置接口"""
 import time
+import yaml
 
 from fastapi import APIRouter, Query
 
 from ... import __version__
-from ...config import MODEL_CONFIG, get_model_config
+from ...config import MODEL_CONFIG, get_model_config, _raw, _config_path, AVAILABLE_MODELS, switch_model as _switch_model
 from ...llm.base import estimate_tokens
 from ...logger import logger
 from ..session_manager import SessionManager, cache_key, resolve_base, get_or_create_session, lead_tool_defs, _load_session_model
@@ -140,8 +141,6 @@ async def get_settings():
 
 @router.put("/settings")
 async def update_settings(body: dict):
-    from ...config import _raw, _config_path, switch_model as _switch_model
-    import yaml
 
     updated_sections = []
 
@@ -258,8 +257,6 @@ async def update_settings(body: dict):
 
 @router.post("/settings/add_model")
 async def add_model(body: dict):
-    from ...config import _raw, _config_path, AVAILABLE_MODELS
-    import yaml
 
     name = body.get("name", "").strip()
     if not name:
@@ -291,8 +288,6 @@ async def add_model(body: dict):
 
 @router.delete("/settings/remove_model")
 async def remove_model(body: dict):
-    from ...config import _raw, _config_path, AVAILABLE_MODELS, MODEL_CONFIG
-    import yaml
 
     name = body.get("name", "").strip()
     if not name:
@@ -310,8 +305,7 @@ async def remove_model(body: dict):
     if was_active:
         first = next(iter(_raw["models"]))
         _raw["active_model"] = first
-        from ...config import switch_model
-        switch_model(first)
+        _switch_model(first)
 
     with open(_config_path, "w", encoding="utf-8") as f:
         yaml.dump(_raw, f, default_flow_style=False, allow_unicode=True)
@@ -321,8 +315,6 @@ async def remove_model(body: dict):
 
 @router.post("/settings/mcp/add")
 async def add_mcp_server(body: dict):
-    from ...config import _raw, _config_path
-    import yaml
 
     name = body.get("name", "").strip()
     server_type = body.get("type", "stdio")
@@ -368,8 +360,6 @@ async def add_mcp_server(body: dict):
 
 @router.delete("/settings/mcp/{name}")
 async def remove_mcp_server(name: str, username: str = ""):
-    from ...config import _raw, _config_path
-    import yaml
 
     mcp_cfg = _raw.get("mcp", {})
     servers = mcp_cfg.get("servers", {})

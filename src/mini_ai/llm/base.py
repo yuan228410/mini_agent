@@ -62,6 +62,9 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
         if tcs and any(tc.get("_result") is not None for tc in tcs if isinstance(tc, dict)):
             needs_strip = True
             break
+        if m.get("role") == "tool":
+            needs_strip = True
+            break
     if not needs_strip:
         return messages
     result = []
@@ -111,6 +114,30 @@ def _strip_internal_fields(messages: list[dict]) -> list[dict]:
 
     return result
 
+
+
+
+def rebuild_tool_messages(messages: list[dict]) -> list[dict]:
+    """重建消息结构：去掉 tool_calls 和 tool 消息，只保留对话正文。
+
+    历史上下文不需要完整的工具调用细节（tool_calls + tool 结果），
+    assistant 的 content 文本已包含最终回复。去掉可节省 20-40% context token。
+    同时避免孤立 tool 消息导致 API 400 错误。
+    """
+    result = []
+    for m in messages:
+        role = m.get("role")
+        if role == "tool":
+            continue
+        if role == "assistant" and m.get("tool_calls"):
+            cleaned = {k: v for k, v in m.items() if k != "tool_calls"}
+            if not cleaned.get("content"):
+                tool_names = [tc.get("function", {}).get("name", "?") for tc in m["tool_calls"] if isinstance(tc, dict)]
+                cleaned["content"] = f"[调用了工具: {', '.join(tool_names)}]"
+            result.append(cleaned)
+        else:
+            result.append(m)
+    return result
 
 def estimate_tokens(text: str) -> int:
     return max(1, len(text.encode('utf-8')) // 3)

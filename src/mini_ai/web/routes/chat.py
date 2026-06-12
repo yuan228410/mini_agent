@@ -79,6 +79,8 @@ async def chat_ws_endpoint(ws: WebSocket):
         abort_event = sm.get_abort_event(session_key)
         if abort_event is None:
             abort_event = threading.Event()
+        else:
+            abort_event.clear()  # 上次 abort 后重置，否则新请求立即被中止
 
         model_name = sm.get_model(session_key)
         _ws_abort_keys.append(session_key)

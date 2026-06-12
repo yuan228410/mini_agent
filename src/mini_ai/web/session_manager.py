@@ -15,6 +15,8 @@ from pathlib import Path
 from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
 from ..logger import logger
 from ..utils import now_ts
+from ..workspace import WorkspaceManager
+from ..llm.base import rebuild_tool_messages as _rebuild_tool_messages
 
 
 # ═══════════════════════════════════════════
@@ -347,7 +349,6 @@ def resolve_base(username: str, workspace: str | None) -> Path:
     ws_base = _get_workspace_base(username, workspace)
     if ws_base:
         return ws_base
-    from ..workspace import WorkspaceManager
     ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
     ws = ws_mgr.get(workspace)
     if ws:
@@ -366,7 +367,6 @@ def resolve_base(username: str, workspace: str | None) -> Path:
 def _get_workspace_base(username: str, workspace: str | None) -> Path | None:
     if not workspace:
         return None
-    from ..workspace import WorkspaceManager
     ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
     ws = ws_mgr.get(workspace)
     if ws:
@@ -412,7 +412,6 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
     project_path = ""
     ws_dir = None
     if workspace:
-        from ..workspace import WorkspaceManager
         ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
         ws = ws_mgr.get(workspace)
         if ws:
@@ -516,30 +515,6 @@ def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: 
     except Exception as e:
         logger.error(f"[Web] _load_from_db error: {e}", exc_info=True)
         return None
-
-def _rebuild_tool_messages(messages: list[dict]) -> list[dict]:
-    """重建消息结构：去掉 tool_calls 和 tool 消息，只保留对话正文。
-    
-    历史上下文不需要完整的工具调用细节（tool_calls + tool 结果），
-    assistant 的 content 文本已包含最终回复。去掉可节省 20-40% context token。
-    """
-    result = []
-    for m in messages:
-        role = m.get("role")
-        # 跳过独立的 tool 消息（结果已反映在 assistant 的后续回复中）
-        if role == "tool":
-            continue
-        # assistant 消息：去掉 tool_calls（无对应 tool 消息会导致 API 400）
-        if role == "assistant" and m.get("tool_calls"):
-            cleaned = {k: v for k, v in m.items() if k != "tool_calls"}
-            # 如果 content 为空但原来有 tool_calls，保留简要说明
-            if not cleaned.get("content"):
-                tool_names = [tc.get("function", {}).get("name", "?") for tc in m["tool_calls"] if isinstance(tc, dict)]
-                cleaned["content"] = f"[调用了工具: {', '.join(tool_names)}]"
-            result.append(cleaned)
-        else:
-            result.append(m)
-    return result
 
 def _parse_created_at(sid: str) -> str:
     try:

@@ -10,6 +10,7 @@ from .base import (
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, get_session, ensure_session_openai, detect_context_overflow,
     estimate_tokens, estimate_messages_tokens,
+    _strip_internal_fields, commit_usage,
 )
 from ..logger import logger
 from ..tools import get_definitions
@@ -68,7 +69,6 @@ def chat(messages, tools=True, ctx=None):
     if get_api_mode(ctx) == "anthropic":
         from .anthropic import chat as anth_chat
         return anth_chat(messages, tools, ctx=ctx)
-    from .base import _strip_internal_fields
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs}
     _apply_model_params(payload, ctx)
@@ -198,8 +198,7 @@ def chat(messages, tools=True, ctx=None):
         elif msg.get("content"):
             usage_store["completion_tokens"] += estimate_tokens(msg["content"])
 
-        from .base import commit_usage
-        commit_usage()
+            commit_usage()
 
         if "tool_calls" in msg:
             calls = msg["tool_calls"]
@@ -226,7 +225,6 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         from .anthropic import chat_stream as anth_stream
         yield from anth_stream(messages, tools, ctx=ctx)
         return
-    from .base import _strip_internal_fields
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs, "stream": True, "stream_options": {"include_usage": True}}
     _apply_model_params(payload, ctx)
@@ -432,6 +430,5 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     else:
         logger.info(f"[LLM←] text={collected_content} (stream) | {elapsed:.1f}s | tok={p_tok}+{c_tok}")
 
-    from .base import commit_usage
     commit_usage()
     yield {"type": "done", "msg": msg}

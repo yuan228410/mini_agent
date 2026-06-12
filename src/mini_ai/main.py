@@ -10,8 +10,9 @@ from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, HistoryDB, HistoryDBPool
 from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
                      DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw, user_data_dir)
+from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
+from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
-from .llm import get_usage, reset_usage, estimate_tokens
 from .core import ChatSession, HistoryPersister
 from .logger import logger
 from .runner import run_tool_loop
@@ -272,8 +273,9 @@ def _create_workspace_session(
     ctx_limit = COMPACTOR.get("context_limit", 50)
     restored = history_db.load_session(ws_name, session_id, limit=ctx_limit)
     if restored:
-        messages.extend(restored)
-        logger.info(f"[恢复] 会话 {session_id} 的 {len(restored)} 条历史消息")
+        cleaned = rebuild_tool_messages(restored)
+        messages.extend(cleaned)
+        logger.info(f"[恢复] 会话 {session_id} 的 {len(restored)} 条历史消息（清理后 {len(cleaned)} 条）")
 
     session = SessionContext(
         username=username,

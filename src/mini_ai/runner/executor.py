@@ -112,7 +112,6 @@ class ToolExecutor:
         from ..llm import chat_stream as llm_chat_stream, get_model, get_usage
         from ..llm.retry import RetryStrategy
         from ..config import TIMEOUTS
-        import time
         
         # 初始化重试策略（与 LLM 层保持一致）
         max_retries = TIMEOUTS.get("llm_retries", 3)

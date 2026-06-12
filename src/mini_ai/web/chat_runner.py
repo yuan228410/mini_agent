@@ -12,7 +12,7 @@ from ..memory.context_pruner import ContextPruner, PruneOptions
 from ..runner import run_tool_loop
 from ..tools import register_memory_tools, register_history_tools, register, inject_todos as _inject_todos
 from ..tools import register_team, register_blackboard
-from ..logger import logger
+from ..logger import logger, set_session_id
 from .display import WebDisplay
 from .session_manager import (
     SessionManager, cache_key, safe_queue_put,
@@ -45,7 +45,6 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         return None, {}
 
     try:
-        from ..logger import set_session_id
         sid = session_key.split(":")[-1] if ":" in session_key else session_key
         set_session_id(sid)
 
@@ -147,7 +146,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 # 错误时跳过轮询，直接进入错误处理
                 bus = comp.get("bus")
                 team_mgr = comp.get("team_mgr")
-                if bus and team_mgr and msg is not None and not msg.get("error"):
+                if bus and team_mgr and msg is not None and not msg.get("error") and msg.get("tool_calls"):
                     from ..config import TIMEOUTS
 
                     def _inject_inbox(inbox_msgs, label="兜底"):
@@ -257,7 +256,6 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
             finally:
                 sm.set_status(session_key, "idle")
                 sm.dec_ref(session_key)
-                from ..logger import set_session_id
                 set_session_id(None)
 
     except Exception as _sync_err:
