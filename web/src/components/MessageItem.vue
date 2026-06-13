@@ -46,13 +46,24 @@ const renderedContent = computed(() => {
 const isUser = computed(() => props.message.role === 'user')
 const isError = computed(() => !isUser.value && !!props.message.content && props.message.content.startsWith('⚠'))
 const isTeammate = computed(() => !!props.message.teammate)
+
+const roleTag = computed(() => {
+  if (!isTeammate.value) return ''
+  const tm = props.message.teammate || ''
+  const base = tm.replace(/^(sub:|wf:)/, '')
+  const roles: Record<string, string> = {
+    researcher: '研究', coder: '编码', reviewer: '审查',
+    tester: '测试', planner: '规划',
+  }
+  return roles[base] || ''
+})
 const label = computed(() => {
   if (props.message.role === 'user') return 'You'
   if (props.message.teammate) {
     const tm = props.message.teammate
-    if (tm.startsWith('sub:')) return `📦 ${tm.slice(4)}`
-    if (tm.startsWith('wf:')) return `🔀 ${tm.slice(3)}`
-    return `🤖 ${tm}`
+    if (tm.startsWith('sub:')) return tm.slice(4)
+    if (tm.startsWith('wf:')) return tm.slice(3)
+    return tm
   }
   return 'mini_ai'
 })
@@ -81,7 +92,9 @@ function openImage(dataUrl: string) {
     :style="isTeammate ? { borderLeftColor: message.teammateColor || '#888' } : {}"
   >
     <div class="message-row">
+      <span v-if="isTeammate" class="agent-dot" :style="{ background: message.teammateColor || '#888' }"></span>
       <span class="message-label" :style="isTeammate ? { color: message.teammateColor || '#888' } : {}">{{ label }}</span>
+      <span v-if="roleTag" class="role-tag">{{ roleTag }}</span>
       <span v-if="timeLabel" class="message-time">{{ timeLabel }}</span>
     </div>
     
@@ -138,9 +151,27 @@ function openImage(dataUrl: string) {
 .message--teammate {
   border-left: 3px solid #888;
   padding-left: 0.6rem;
-  margin-left: 0;
+  margin-left: 1.5rem;
   background: var(--bg-tool);
   border-radius: 0 8px 8px 0;
+}
+
+.agent-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+
+.role-tag {
+  font-size: 0.6rem;
+  padding: 0 0.3rem;
+  margin-left: 0.3rem;
+  border-radius: 3px;
+  background: var(--border);
+  color: var(--fg-muted);
 }
 
 .message--user .message-time {

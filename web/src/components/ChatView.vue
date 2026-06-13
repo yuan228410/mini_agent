@@ -84,9 +84,9 @@ const teammateColorMap: Record<string, string> = {
 }
 
 function _tmLabel(tm: string): string {
-  if (tm.startsWith('sub:')) return `📦 ${tm.slice(4)}`
-  if (tm.startsWith('wf:')) return `🔀 ${tm.slice(3)}`
-  return `🤖 ${tm}`
+  if (tm.startsWith('sub:')) return tm.slice(4)
+  if (tm.startsWith('wf:')) return tm.slice(3)
+  return tm
 }
 
 function _tmColor(name: string): string {
@@ -526,6 +526,17 @@ function _updateUI(s: SessionState) {
   }
 }
 
+// Stop streaming cursor on the last main-agent message (no teammate)
+function _stopMainAgentStreaming(s: SessionState) {
+  for (let i = s.messages.length - 1; i >= 0; i--) {
+    const m = s.messages[i]
+    if (m.role === 'assistant' && !m.teammate && m.streaming) {
+      s.messages[i] = { ...m, streaming: false }
+      break
+    }
+  }
+}
+
 function _processEvent(s: SessionState, event: WsEvent) {
   const msg = s.messages[s.messages.length - 1]
 
@@ -538,9 +549,9 @@ function _processEvent(s: SessionState, event: WsEvent) {
           if (tmMsg) tmMsg.thinking = { chars: 0, elapsed: 0, content: '' }
         } else {
           s._currentThinking = ''
+          _startNewAssistantMsg(s)
         }
       }
-      _startNewAssistantMsg(s)
       break
     case 'thinking':
       {
@@ -556,6 +567,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           // 查找或创建队友消息
           let tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
           if (!tmMsg) {
+            _stopMainAgentStreaming(s)
             tmMsg = { role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), teammate: tm, teammateColor: _tmColor(tm) }
             s.messages.push(tmMsg)
           }
@@ -602,6 +614,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           // 查找或创建队友消息
           let tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
           if (!tmMsg) {
+            _stopMainAgentStreaming(s)
             tmMsg = { role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), teammate: tm, teammateColor: _tmColor(tm) }
             s.messages.push(tmMsg)
           }
@@ -623,6 +636,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
         if (tm) {
           let tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
           if (!tmMsg) {
+            _stopMainAgentStreaming(s)
             tmMsg = { role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), teammate: tm, teammateColor: _tmColor(tm) }
             s.messages.push(tmMsg)
           }
@@ -965,6 +979,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
         const task = event.data.task || ''
         const icon = agentType.startsWith('sub:') ? '📦' : '🤖'
         const label = agentType.startsWith('sub:') ? agentType.slice(4) : agentType
+                _stopMainAgentStreaming(s)
         s.messages.push({
           role: 'assistant',
           content: `${icon} **${label}** 已启动${role ? ` (${role})` : ''}\n\n任务: ${task}`,
