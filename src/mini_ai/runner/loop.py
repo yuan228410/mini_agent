@@ -347,9 +347,9 @@ def _check_context_usage(messages: list[dict], context_length: int, limit: float
         # compact 后仍超限，尝试 force_compact 渐进恢复
         logger.warning("[runner/compact] compact 后仍超限，尝试 force_compact")
         if compactor.force_compact(llm_chat, messages, ctx):
-            after_tokens = estimate_messages_tokens(messages)
-            logger.info(f"[runner/compact] force_compact 后 tokens={after_tokens}")
-            return after_tokens > threshold
+            # force_compact 成功 = tokens < 安全线(0.7*context_length)，无需再 estimate
+            logger.info(f"[runner/compact] force_compact 恢复成功")
+            return False
         return True
     except Exception as e:
         logger.error(f"[runner/compact] 压缩异常: {e}", exc_info=True)

@@ -326,15 +326,16 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
 
     key = cache_key(username, workspace or None, session_id)
     sm = SessionManager.instance()
-    messages = sm.get_messages(key)
-    if messages is None:
-        messages = get_or_create_session(username, session_id, base, workspace or None)[1]
-    if not messages:
-        messages = []
+    mem_msgs = sm.get_messages(key)
 
-    non_system = [m for m in messages if m["role"] not in ("system", "tool")]
+    if mem_msgs:
+        messages = [m for m in mem_msgs if m["role"] not in ("system", "tool")]
+    else:
+        comp = get_or_create_components(username, session_id, base, workspace or None)
+        messages = comp["history_db"].load_session_for_display(workspace or "default", session_id) or []
+
     history = []
-    for m in non_system:
+    for m in messages:
         entry: dict = {"role": m["role"]}
         content = m.get("content")
 

@@ -193,16 +193,33 @@ function _flushState(sid: string) {
 
 function _doFlush(sid?: string) {
   const targetSid = sid || _flushSid || activeSessionId.value
-  _flushSid = ''  // 用完即清
+  _flushSid = ''
   _flushState(targetSid)
-  // 仅活跃会话刷新 UI
   if (targetSid === activeSessionId.value) {
     const key = _cacheKey(targetSid, props.workspace)
     const s = _states.get(key)
     if (!s) return
-    messages.value = [...s.messages]
-    
-    // 验证生成状态（与 _load 保持一致）
+    // Sync _currentContent into s.messages before any UI update
+    if (s._currentContent) {
+      const lastIdx = s.messages.length - 1
+      if (lastIdx >= 0) {
+        s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
+      }
+    }
+    // Incremental: only update last message when count matches
+    if (s.messages.length === messages.value.length && s.messages.length > 0) {
+      const sLast = s.messages[s.messages.length - 1]
+      const mLast = messages.value[messages.value.length - 1]
+      if (mLast && sLast) {
+        mLast.content = sLast.content
+        mLast.thinking = sLast.thinking
+        mLast.tools = sLast.tools
+        mLast.streaming = sLast.streaming
+      }
+    } else {
+      // Count differs (new message added by tool_start/teammate): full rebuild
+      messages.value = [...s.messages]
+    }
     const isActiveGenerating = s.isStreaming && isWsConnected() && 
       _lastWsEventTime > 0 && (Date.now() - _lastWsEventTime < STREAMING_TIMEOUT)
     isStreaming.value = isActiveGenerating
@@ -321,7 +338,7 @@ async function restoreHistory(sid: string, ws?: string) {
   const _t0 = performance.now()
   try {
     const resp = await getHistory(sid, ws || props.workspace)
-    const raw = (resp.history || []).filter((m: any) => m.role !== 'system' && m.role !== 'tool')
+    const raw = resp.history || []  // 后端已过滤 system/tool，无需前端再过滤
     const merged: Message[] = []
     for (const m of raw) {
       if (m.role === 'assistant' && merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
@@ -415,7 +432,7 @@ async function handleWsEvent(event: WsEvent) {
   const seq = event.data?.seq
   if (seq !== undefined) {
     const expectedSeq = s._lastSeq + 1
-    if (seq > expectedSeq) {
+    if (seq > expectedSeq + 1) {  // allow 1 event reorder, suppress gap=1 false alarm
       console.warn(`[mini-ai] 检测到事件丢失: expected=${expectedSeq}, got=${seq}, gap=${seq - expectedSeq}`)
     }
     s._lastSeq = seq
@@ -497,8 +514,14 @@ function _updateUI(s: SessionState) {
   const key = _cacheKey(activeSessionId.value, props.workspace)
   const activeS = _states.get(key)
   if (s === activeS) {
+    // Sync _currentContent into s.messages before full rebuild to avoid flicker
+    if (s._currentContent) {
+      const lastIdx = s.messages.length - 1
+      if (lastIdx >= 0) {
+        s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
+      }
+    }
     messages.value = [...s.messages]
-    // 同步工作流状态到响应式 ref
     workflowStateRef.value = s.workflowState ? { ...s.workflowState, tasks: { ...s.workflowState.tasks } } : undefined
   }
 }
@@ -586,9 +609,14 @@ function _processEvent(s: SessionState, event: WsEvent) {
           _updateUI(s)
         } else {
           s._currentContent += event.data.content || ''
+          const lastMsg = messages.value[messages.value.length - 1]
+          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.streaming) {
+            lastMsg.content = s._currentContent
+          }
         }
       }
-      break
+      _scheduleScroll()
+      return  // incremental: skip _scheduleFlush
     case 'tool_start':
       {
         const tm = event.data.teammate || ''
@@ -1062,6 +1090,27 @@ async function sendMessage(text: string, images?: ImageFile[]) {
   }
 }
 
+function handleRetry(msgIndex: number) {
+  // Find the user message before this error assistant message
+  const s = _state(activeSessionId.value)
+  let userText = ''
+  // Search backwards from msgIndex for the last user message
+  for (let i = msgIndex - 1; i >= 0; i--) {
+    if (messages.value[i]?.role === 'user') {
+      userText = messages.value[i].content || ''
+      break
+    }
+  }
+  if (!userText) return
+  // Remove the error assistant message
+  messages.value.splice(msgIndex, 1)
+  if (s) {
+    s.messages.splice(msgIndex, 1)
+  }
+  // Re-send the user message
+  sendMessage(userText)
+}
+
 function stopGeneration() {
   console.log(`[mini-ai] stopGeneration: sid=${activeSessionId.value}`)
   if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
@@ -1173,6 +1222,7 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
         :message="msg"
         :style="{ animationDelay: `${Math.min(i * 0.04, 0.6)}s` }"
         class="msg-anim"
+        @retry="handleRetry(i)"
       />
 
     </div>

@@ -11,6 +11,8 @@ marked.use({
   gfm: true,
 })
 
+const emit = defineEmits<{ (e: 'retry'): void }>()
+
 const props = defineProps<{
   message: {
     role: string
@@ -42,6 +44,7 @@ const renderedContent = computed(() => {
 })
 
 const isUser = computed(() => props.message.role === 'user')
+const isError = computed(() => !isUser.value && !!props.message.content && props.message.content.startsWith('⚠'))
 const isTeammate = computed(() => !!props.message.teammate)
 const label = computed(() => {
   if (props.message.role === 'user') return 'You'
@@ -94,6 +97,7 @@ function openImage(dataUrl: string) {
     
     <div v-if="message.content" class="message-body" v-html="renderedContent"></div>
     <span v-if="message.streaming" class="streaming-cursor"></span>
+    <button v-if="isError && !message.streaming" class="retry-btn" @click="emit('retry')">↻ 重试</button>
   </div>
 </template>
 
@@ -307,5 +311,22 @@ function openImage(dataUrl: string) {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.retry-btn {
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.retry-btn:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent);
 }
 </style>

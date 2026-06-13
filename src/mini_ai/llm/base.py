@@ -145,13 +145,16 @@ def estimate_tokens(text: str) -> int:
 
 # estimate_messages_tokens 缓存：线程安全
 _ESTIMATE_CACHE: dict[tuple, int] = {}
-_ESTIMATE_CACHE_MAX = 10
+_ESTIMATE_CACHE_MAX = 256
 _ESTIMATE_CACHE_LOCK = threading.Lock()
 
 def estimate_messages_tokens(messages: list[dict]) -> int:
+    # 缓存 key 增加首消息 content 前 50 字符的 hash，
+    # 防止 messages[:] = pruned 原地替换后 id 不变导致命中旧缓存
     cache_key = (id(messages), len(messages),
                  id(messages[0]) if messages else 0,
-                 id(messages[-1]) if messages else 0)
+                 id(messages[-1]) if messages else 0,
+                 hash(messages[0].get("content", "")[:50]) if messages else 0)
     with _ESTIMATE_CACHE_LOCK:
         cached = _ESTIMATE_CACHE.get(cache_key)
         if cached is not None:

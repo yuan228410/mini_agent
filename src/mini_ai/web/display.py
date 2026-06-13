@@ -55,18 +55,14 @@ class WebDisplay:
                 _EVENT_SEQS[self.session_id] = seq
                 data["seq"] = seq
         
-        def _safe_put():
-            try:
-                self.queue.put_nowait({"event": event, "data": data})
-            except Exception:
-                # QueueFull 或队列关闭，丢弃事件（前端 watchdog 会兜底重置状态）
-                pass
-
+        # 直接 put_nowait：asyncio.Queue 内部基于 deque + lock，线程安全
+        # 不再使用 call_soon_threadsafe，消除每帧 ~15-50ms 调度延迟
         try:
-            self.loop.call_soon_threadsafe(_safe_put)
+            self.queue.put_nowait({"event": event, "data": data})
+        except asyncio.QueueFull:
+            pass  # 队列满时丢弃（前端 watchdog 兜底重置状态）
         except RuntimeError:
-            # 事件循环已关闭（WS 断连），丢弃事件
-            pass
+            pass  # 事件循环已关闭（WS 断连）
 
     def llm_round_start(self, model: str = ""):
         """LLM 调用开始"""

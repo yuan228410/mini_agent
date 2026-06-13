@@ -120,6 +120,9 @@ let _ws: WebSocket | null = null
 let _wsConnected = false
 const _eventHandlers: ((event: WsEvent) => void)[] = []
 
+// Pending messages queue for offline resilience
+const _pendingMessages: any[] = []
+
 // 导出连接状态查询函数
 export function isWsConnected(): boolean {
   return _wsConnected && _ws !== null && _ws.readyState === WebSocket.OPEN
@@ -213,6 +216,7 @@ export async function ensureWs(): Promise<boolean> {
       
       // 重置重连计数
       _wsReconnectAttempts = 0
+      _flushPendingMessages()
       
       const u = getUsername()
       if (u) ws.send(JSON.stringify({ type: 'login', username: u }))
@@ -315,6 +319,16 @@ export function wsSend(data: object) {
   }
 }
 
+function _flushPendingMessages() {
+  if (_pendingMessages.length === 0) return
+  console.log(`[WS] Flushing ${_pendingMessages.length} pending messages`)
+  const pending = [..._pendingMessages]
+  _pendingMessages.length = 0
+  for (const p of pending) {
+    wsChat(p.message, p.sessionId, p.workspace, p.planMode, p.images)
+  }
+}
+
 export interface ImageData {
   dataUrl: string
   name: string
@@ -322,6 +336,11 @@ export interface ImageData {
 }
 
 export function wsChat(message: string, sessionId?: string, workspace?: string, planMode?: boolean, images?: ImageData[]) {
+  if (!_ws || _ws.readyState !== WebSocket.OPEN) {
+    _pendingMessages.push({ message, sessionId, workspace, planMode, images })
+    console.log(`[WS] Queued message (offline), pending=${_pendingMessages.length}`)
+    return
+  }
   const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
   if (sessionId) chatMsg.session_id = sessionId
   if (workspace) chatMsg.workspace = workspace
