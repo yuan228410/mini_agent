@@ -472,22 +472,26 @@ async function handleWsEvent(event: WsEvent) {
     emit('status-change', sid, 'idle')
   }
 
+  // Token 用量更新：terminal 事件携带的 usage 应总是上抛，避免会话切换后状态栏停在旧值
+  // 但仅当事件来自当前活跃会话时才更新 UI 的 config（其他会话的 token 不应覆盖当前显示）
+  if (isTerminal && sid === activeSessionId.value && event.data?.prompt_tokens !== undefined) {
+    emit('config-update', {
+      prompt_tokens: event.data.prompt_tokens,
+      completion_tokens: event.data.completion_tokens || 0,
+    })
+  }
+
   if (sid === activeSessionId.value) {
     if (isTerminal) {
       if (_flushTimer !== null) { clearTimeout(_flushTimer); _flushTimer = null }
       _doFlush(sid)
       console.log(`[mini-ai] terminal event: sid=${sid} event=${event.event}`)
-      if (event.data?.prompt_tokens !== undefined) {
-        emit('config-update', {
-          prompt_tokens: event.data.prompt_tokens,
-          completion_tokens: event.data.completion_tokens || 0,
-        })
-      }
       fetchConfig()
       if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
     } else {
       _scheduleFlush(sid)
       if (isStreaming.value) _startStreamingWatchdog(sid)
+      // 流式过程中也更新 token（部分模型在 text 事件中携带中间 usage）
       if (event.data?.prompt_tokens !== undefined && event.data.prompt_tokens > 0) {
         emit('config-update', {
           prompt_tokens: event.data.prompt_tokens,
@@ -622,13 +626,19 @@ function _processEvent(s: SessionState, event: WsEvent) {
           _updateUI(s)
         } else {
           s._currentContent += event.data.content || ''
-          const lastMsg = messages.value[messages.value.length - 1]
-          if (lastMsg && lastMsg.role === 'assistant' && lastMsg.streaming) {
-            lastMsg.content = s._currentContent
+          // 只修改 state 中的 messages，不直接动全局 messages.value（避免跨会话串台）
+          const m = s.messages[s.messages.length - 1]
+          if (m && m.role === 'assistant') {
+            m.content = s._currentContent
           }
         }
       }
       _scheduleScroll()
+      // 仅当事件属于当前活跃会话时才调度刷新（避免跨会话串台）
+      const _activeKey = _cacheKey(activeSessionId.value, props.workspace)
+      if (s === _states.get(_activeKey)) {
+        _scheduleFlush(activeSessionId.value)
+      }
       return  // incremental: skip _scheduleFlush
     case 'tool_start':
       {

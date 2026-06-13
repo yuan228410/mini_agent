@@ -45,8 +45,8 @@ class WebDisplay:
         # 自动注入 agent_id（用于前端分组消息）
         if self.agent_id:
             data["agent_id"] = self.agent_id
-        data["promptTokens"] = usage["prompt_tokens"]
-        data["completionTokens"] = usage["completion_tokens"]
+        data["prompt_tokens"] = usage["prompt_tokens"]
+        data["completion_tokens"] = usage["completion_tokens"]
         
         # 添加事件序号（用于前端检测消息丢失）
         if self.session_id:
@@ -123,7 +123,13 @@ class WebDisplay:
     def text_end(self, full_text: str | None = None):
         # 🔧 修复：先保存 _stream_buf，再清空（避免中断时丢失）
         saved_buf = self._stream_buf
-        if full_text:
+        # 流式过程中已通过 text_chunk 发送分段，前端累加成完整文本。
+        # 这里仅在以下两种情况补发 text 事件：
+        #   1) 非流式路径（_stream_buf 为空）：full_text 是唯一来源，必须发
+        #   2) full_text 与已累积内容不一致：兜底，避免丢失内容
+        # 否则跳过补发，否则前端会把完整文本再追加一次，导致显示两遍。
+        should_emit = bool(full_text) and (not saved_buf or full_text != saved_buf)
+        if should_emit:
             self._stream_buf = ""
             self._streaming = True
             data = {"content": full_text}
@@ -131,7 +137,7 @@ class WebDisplay:
                 data["teammate"] = self._teammate
             self._push("text", data)
         else:
-            # 如果没有 full_text，说明是中断或异常结束，保留 saved_buf 供上层保存
+            # 正常流式结束或中断：保留 saved_buf 供上层使用
             pass
         self._stream_buf = ""
         self._streaming = False

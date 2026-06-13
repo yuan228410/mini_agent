@@ -139,16 +139,17 @@ class ToolRegistry:
             logger.info(f"[缓存命中] {name}")
             output = cached_result
             # 缓存命中也需要写入 messages，否则 LLM 无法获取工具结果
-            if output is not None:
-                full_output = output
-                logger.debug(f"[工具←] {name} (cached) len={len(output)}")
-                truncated = _truncate(output)
-                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": now_ts()}
-                if persist_fn:
-                    persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": now_ts()})
-                messages.append(tool_msg)
-                if display:
-                    display.tool_result(name, output, 0, tc["id"])  # elapsed=0 for cache hit
+            # 即使 output 为 None 也必须写 tool 消息，否则 OpenAI API 会因
+            # assistant.tool_calls 未被一一响应而返回 HTTP 400
+            full_output = output if output is not None else ""
+            logger.debug(f"[工具←] {name} (cached) len={len(full_output)}")
+            truncated = _truncate(full_output)
+            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": now_ts()}
+            if persist_fn:
+                persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": now_ts()})
+            messages.append(tool_msg)
+            if display:
+                display.tool_result(name, full_output, 0, tc["id"])  # elapsed=0 for cache hit
             return  # 缓存命中直接返回
         
         logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
@@ -185,15 +186,17 @@ class ToolRegistry:
         elapsed = time.monotonic() - t0
         if display:
             display.tool_result(name, output or "", elapsed, tc["id"])
-        
-        if output is not None:
-            full_output = output
-            logger.debug(f"[工具←] {name} len={len(output)}")
-            truncated = _truncate(output)
-            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": now_ts()}
-            if persist_fn:
-                persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": now_ts()})
-            messages.append(tool_msg)
+
+        # OpenAI 规范：assistant.tool_calls 中的每个 tool_call_id 都必须有
+        # 对应的 role=tool 消息响应。即使工具返回 None（或执行成功但无输出），
+        # 也必须写入一条占位 tool 消息，否则下次 LLM 调用会 HTTP 400
+        full_output = output if output is not None else ""
+        logger.debug(f"[工具←] {name} len={len(full_output)}")
+        truncated = _truncate(full_output)
+        tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": now_ts()}
+        if persist_fn:
+            persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": now_ts()})
+        messages.append(tool_msg)
 
     def _execute_parallel(self, calls: list[dict], messages: list[dict], display=None, persist_fn=None) -> None:
         results = {}
@@ -270,19 +273,22 @@ class ToolRegistry:
             for future in as_completed(futures):
                 try:
                     tc_id, output = future.result()
-                    if output is not None:
-                        results[tc_id] = output
+                    # 即使 output 为 None 也要记录，保证每个 tool_call_id 都有响应
+                    # 否则 OpenAI API 会 HTTP 400（insufficient tool messages）
+                    results[tc_id] = output if output is not None else ""
                 except Exception as e:
                     logger.error(f"[并行✗] 获取结果异常: {e}")
 
+        # 每个 tool_call_id 都必须写入对应 tool 消息
         for tc in calls:
-            if tc["id"] in results:
-                full_output = results[tc["id"]]
-                truncated = _truncate(full_output)
-                tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": tc["function"]["name"], "content": truncated, "timestamp": now_ts()}
-                if persist_fn:
-                    persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": tc["function"]["name"], "content": full_output, "timestamp": now_ts()})
-                messages.append(tool_msg)
+            tc_id = tc["id"]
+            full_output = results.get(tc_id, "")
+            name = tc["function"]["name"]
+            truncated = _truncate(full_output)
+            tool_msg = {"role": "tool", "tool_call_id": tc_id, "name": name, "content": truncated, "timestamp": now_ts()}
+            if persist_fn:
+                persist_fn({"role": "tool", "tool_call_id": tc_id, "name": name, "content": full_output, "timestamp": now_ts()})
+            messages.append(tool_msg)
 
     def render_todos(self) -> str:
         return update_todos._store.render()
