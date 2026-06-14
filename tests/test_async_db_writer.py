@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from .async_db_writer import AsyncDBWriter, WriteTask
-from .history_db import HistoryDB
+from mini_ai.memory.async_db_writer import AsyncDBWriter, WriteTask
+from mini_ai.memory.history_db import HistoryDB
 
 
 class TestAsyncDBWriter:
@@ -566,3 +566,58 @@ if __name__ == "__main__":
         print("✓ 优雅关闭测试通过")
         
         print("\n✅ 所有测试通过！")
+
+
+def test_history_db_delete_before_keeps_other_workspace_fts(tmp_path):
+    db = HistoryDB(tmp_path / "history.db", async_write=False)
+    db.append("ws_a", "sid", "user", "alpha old")
+    db.append("ws_b", "sid", "user", "shared keyword")
+    db.append("ws_a", "sid", "user", "alpha new")
+
+    assert db.delete_before("ws_a", keep_count=1) == 1
+
+    results = db.search_fts("shared", workspace="ws_b")
+    assert [r["content"] for r in results] == ["shared keyword"]
+    db.close()
+
+
+def test_history_db_purge_workspace_clears_fts(tmp_path):
+    db = HistoryDB(tmp_path / "history.db", async_write=False)
+    db.append("ws_a", "sid", "user", "alpha keyword")
+    db.append("ws_b", "sid", "user", "beta keyword")
+
+    assert db.purge("ws_a") == 1
+
+    assert db.search_fts("alpha", workspace="ws_a") == []
+    assert [r["content"] for r in db.search_fts("beta", workspace="ws_b")] == ["beta keyword"]
+    db.close()
+
+
+def test_load_session_with_cache_deduplicates_committed_messages(tmp_path):
+    db_path = tmp_path / "test_dedupe.db"
+    writer = AsyncDBWriter(db_path)
+    db_messages = [
+        {"role": "user", "content": "hello", "metadata": "", "timestamp": "2026-01-01T00:00:00"}
+    ]
+    writer._add_to_cache("ws", "sid", {
+        "role": "user",
+        "content": "hello",
+        "metadata": "",
+        "timestamp": "2026-01-01T00:00:00",
+        "_task_id": 1,
+    })
+    writer._add_to_cache("ws", "sid", {
+        "role": "assistant",
+        "content": "new",
+        "metadata": "",
+        "timestamp": "2026-01-01T00:00:01",
+        "_task_id": 2,
+    })
+
+    def loader(_workspace, _session_id, limit=0):
+        return db_messages
+
+    merged = writer.load_session_with_cache("ws", "sid", loader)
+
+    assert [m["content"] for m in merged] == ["hello", "new"]
+    assert "_task_id" not in merged[-1]

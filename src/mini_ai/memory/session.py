@@ -55,7 +55,11 @@ class SessionManager:
                 continue
             try:
                 row = json.loads(line)
-                messages.append({"role": row["role"], "content": row.get("content")})
+                msg = {"role": row["role"], "content": row.get("content")}
+                for key in ("tool_calls", "thinking", "timestamp", "tool_call_id", "name"):
+                    if key in row:
+                        msg[key] = row[key]
+                messages.append(msg)
             except (json.JSONDecodeError, KeyError):
                 continue
 

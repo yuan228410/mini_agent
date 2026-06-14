@@ -220,6 +220,7 @@ class Compactor:
         round_summaries = []
         new_round_summaries = []
         batch_candidates = []
+        batch_summaries: dict[int, str] = {}
 
         # 🔧 关键说明：
         # old_rounds = rounds[:len(rounds) - keep_rounds]，即 rounds 的前 N 个元素
@@ -229,35 +230,19 @@ class Compactor:
         
         for i, rnd in enumerate(old_rounds):
             global_idx = old_round_start_idx + i  # 全局轮次索引（在 rounds 中的位置）
-            
-            # 🔧 修复：不再跳过闲聊轮次，所有轮次一视同仁
-            new_messages.append(rnd["user_msg"])
             execution = rnd["execution"]
             if not execution:
                 continue
 
             if incremental and global_idx in self._cached_summaries:
-                summary = self._cached_summaries[global_idx]
                 logger.debug(f"[压缩] 第{global_idx+1}轮命中缓存摘要")
-                # 🔧 修复：用元数据标记摘要消息，而非伪装成普通 user 消息
-                new_messages.append({
-                    "role": "user",
-                    "content": f"[第{global_idx+1}轮执行摘要]\n{summary}",
-                    "_is_summary": True,  # 标记为摘要，避免被误判为用户输入
-                })
+                batch_summaries[global_idx] = self._cached_summaries[global_idx]
                 continue
 
             exec_text = self._messages_to_text(execution)
             if len(exec_text) < 100:
                 logger.debug(f"[压缩] 第{global_idx+1}轮执行过程过短({len(exec_text)}字)，直接保留")
-                new_messages.append({
-                    "role": "user",
-                    "content": f"[第{global_idx+1}轮执行摘要]\n{exec_text}",
-                    "_is_summary": True,
-                })
-                summary_entry = f"第{global_idx+1}轮: {exec_text[:200]}"
-                round_summaries.append(summary_entry)
-                new_round_summaries.append(summary_entry)
+                batch_summaries[global_idx] = exec_text
                 self._cached_summaries[global_idx] = exec_text
                 continue
 
@@ -269,14 +254,22 @@ class Compactor:
             logger.info(f"[压缩→] 批量摘要完成: {len(summaries)} 条结果")
             for round_idx, summary in summaries:
                 if summary:
-                    new_messages.append({
-                        "role": "user",
-                        "content": f"[第{round_idx+1}轮执行摘要]\n{summary}",
-                    })
-                    summary_entry = f"第{round_idx+1}轮: {summary[:200]}"
-                    round_summaries.append(summary_entry)
-                    new_round_summaries.append(summary_entry)
+                    batch_summaries[round_idx] = summary
                     self._cached_summaries[round_idx] = summary
+
+        for i, rnd in enumerate(old_rounds):
+            global_idx = old_round_start_idx + i
+            new_messages.append(rnd["user_msg"])
+            summary = batch_summaries.get(global_idx)
+            if summary:
+                new_messages.append({
+                    "role": "user",
+                    "content": f"[第{global_idx+1}轮执行摘要]\n{summary}",
+                    "_is_summary": True,
+                })
+                summary_entry = f"第{global_idx+1}轮: {summary[:200]}"
+                round_summaries.append(summary_entry)
+                new_round_summaries.append(summary_entry)
 
         for rnd in recent_rounds:
             new_messages.append(rnd["user_msg"])

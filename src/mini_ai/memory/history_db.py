@@ -339,26 +339,12 @@ class HistoryDB:
     
     def load_session_for_display(self, workspace: str, session_id: str,
                                   limit: int = 0) -> list[dict]:
-        """加载会话消息供前端显示 — 只返回 user/assistant 消息
-
-        比 load_session() 快 30-50%，因为：
-        - SQL 层直接过滤 role IN ('user', 'assistant')，跳过 system/tool 行
-        - 不需要 Python 端二次过滤
-        - 减少网络传输量
-        """
-        with self._lock:
-            self._ensure_conn()
-            if limit > 0:
-                rows = self._conn.execute(
-                    "SELECT role, content, metadata, ts FROM (SELECT id, role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? AND role IN ('user', 'assistant') ORDER BY id DESC LIMIT ?) ORDER BY id",
-                    (workspace, session_id, limit),
-                ).fetchall()
-            else:
-                rows = self._conn.execute(
-                    "SELECT role, content, metadata, ts FROM messages WHERE workspace=? AND session_id=? AND role IN ('user', 'assistant') ORDER BY id",
-                    (workspace, session_id),
-                ).fetchall()
-        return self._parse_messages(rows)
+        """加载会话消息供前端显示 — 只返回 user/assistant 消息。"""
+        messages = self.load_session(workspace, session_id, limit=0)
+        display_messages = [m for m in messages if m.get("role") in ("user", "assistant")]
+        if limit > 0 and len(display_messages) > limit:
+            return display_messages[-limit:]
+        return display_messages
     
     def load_recent(self, workspace: str = "", limit: int = 100) -> list[dict]:
         """加载最近消息（跨会话）
@@ -597,14 +583,21 @@ class HistoryDB:
                 if not row:
                     return 0
                 cutoff_id = row[0]
-                cur = self._conn.execute(
-                    "DELETE FROM messages WHERE workspace=? AND id < ?",
+                ids = [r[0] for r in self._conn.execute(
+                    "SELECT id FROM messages WHERE workspace=? AND id < ?",
                     (workspace, cutoff_id),
-                )
+                ).fetchall()]
+                if not ids:
+                    return 0
+                placeholders = ",".join("?" for _ in ids)
                 try:
-                    self._conn.execute("DELETE FROM messages_fts WHERE rowid < ?", (cutoff_id,))
+                    self._conn.execute(f"DELETE FROM messages_fts WHERE rowid IN ({placeholders})", ids)
                 except Exception:
                     pass
+                cur = self._conn.execute(
+                    f"DELETE FROM messages WHERE id IN ({placeholders})",
+                    ids,
+                )
         
         logger.info(f"[HistoryDB] delete_before: workspace={workspace}, 保留最近 {keep_count} 条，删除 {cur.rowcount} 条旧消息")
         return cur.rowcount
@@ -622,10 +615,6 @@ class HistoryDB:
             self._ensure_conn()
             with self._conn:
                 if workspace:
-                    cur = self._conn.execute(
-                        "DELETE FROM messages WHERE workspace=?",
-                        (workspace,),
-                    )
                     try:
                         self._conn.execute(
                             "DELETE FROM messages_fts WHERE rowid IN (SELECT id FROM messages WHERE workspace=?)",
@@ -633,6 +622,10 @@ class HistoryDB:
                         )
                     except Exception:
                         pass
+                    cur = self._conn.execute(
+                        "DELETE FROM messages WHERE workspace=?",
+                        (workspace,),
+                    )
                     logger.info(f"[HistoryDB] 已清除 workspace={workspace}, 共 {cur.rowcount} 条消息")
                 else:
                     cur = self._conn.execute("DELETE FROM messages")

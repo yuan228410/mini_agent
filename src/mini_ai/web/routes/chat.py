@@ -36,7 +36,6 @@ router = APIRouter()
 @router.websocket("/chat/ws")
 async def chat_ws_endpoint(ws: WebSocket):
     await ws.accept()
-    _active_tasks: dict[str, asyncio.Task] = {}
     _ws_abort_keys: list[str] = []
     ws_closed = False
     _write_lock = asyncio.Lock()
@@ -110,7 +109,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         logger.debug(f'[Web] terminal event from queue sid={sid} event={event["event"]}')
                     await _send(event)
                     logger.info(f'[Web] WS after _send: event={event["event"]} sid={sid}')
-                    if event["event"] in ("done", "aborted", "complete"):
+                    if event["event"] in ("done", "aborted", "error", "complete"):
                         got_terminal = True
                         logger.info(f'[Web] WS breaking: event={event["event"]} sid={sid}')
                         break
@@ -126,7 +125,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                                     logger.debug(f'[Web] drained terminal event sid={sid} event={event["event"]}')
                                 await _send(event)
                                 logger.info(f'[Web] WS drain: event={event["event"]} sid={sid}')
-                                if event["event"] in ("done", "aborted", "complete"):
+                                if event["event"] in ("done", "aborted", "error", "complete"):
                                     got_terminal = True
                                     break
                             except asyncio.QueueEmpty:
@@ -150,13 +149,20 @@ async def chat_ws_endpoint(ws: WebSocket):
 
         logger.info(f"[Web] WS loop exit: aborted={aborted} got_terminal={got_terminal} sid={sid}")
         if not aborted and not got_terminal:
-            logger.debug(f"[Web] sending done sid={sid} usage={usage}")
-            await _send({
-                "event": "done",
-                "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
-            })
+            try:
+                future.result()
+            except Exception as e:
+                logger.error(f"[Web] chat runner ended without terminal event: {e}", exc_info=True)
+                await _send({"event": "error", "data": {"error": str(e), "session_id": sid}})
+            else:
+                logger.debug(f"[Web] sending done sid={sid} usage={usage}")
+                await _send({
+                    "event": "done",
+                    "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
+                })
 
-        _active_tasks.pop(session_key, None)
+        current_task = asyncio.current_task()
+        sm.release_active_task(session_key, current_task)
 
     async def _reader():
         nonlocal ws_closed, _ws_username
@@ -256,23 +262,16 @@ async def chat_ws_endpoint(ws: WebSocket):
 
                     ws_name = data.get("workspace")
 
-                    # 取消正在生成的请求
-                    sm = SessionManager.instance()
+                    # 同一会话只允许一个生成任务，避免多个 runner 同时改同一 messages 导致串流
                     session_key = cache_key(username, ws_name, session_id)
-                    existing = _active_tasks.get(session_key)
-                    if existing and not existing.done():
-                        evt = sm.get_abort_event(session_key)
-                        if evt:
-                            evt.set()
-                        try:
-                            await asyncio.wait_for(existing, timeout=5.0)
-                        except (asyncio.TimeoutError, Exception):
-                            existing.cancel()
-
+                    sm = SessionManager.instance()
                     task = asyncio.create_task(
                         _run_chat(session_id, username, user_message, ws_name, images)
                     )
-                    _active_tasks[session_key] = task
+                    if not sm.claim_active_task(session_key, task):
+                        task.cancel()
+                        await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": session_id}})
+                        continue
 
                 except asyncio.TimeoutError:
                     pass

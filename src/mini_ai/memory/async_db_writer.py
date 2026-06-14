@@ -280,6 +280,7 @@ class AsyncDBWriter:
             "content": content,
             "metadata": metadata,
             "timestamp": task.ts[:19],
+            "_task_id": task_id,
         })
         
         # 加入队列
@@ -316,15 +317,10 @@ class AsyncDBWriter:
             role = msg.get("role", "")
             content = msg.get("content", "")
             metadata = msg.get("metadata", "")
-            
-            # 更新缓存
-            self._add_to_cache(workspace, session_id, {
-                "role": role,
-                "content": content,
-                "metadata": metadata,
-                "timestamp": ts[:19],
-            })
-            
+            with self._task_counter_lock:
+                self._task_counter += 1
+                task_id = self._task_counter
+
             # 创建任务
             task = WriteTask(
                 workspace=workspace,
@@ -333,7 +329,17 @@ class AsyncDBWriter:
                 content=content,
                 metadata=metadata,
                 ts=ts,
+                task_id=task_id,
             )
+
+            # 更新缓存
+            self._add_to_cache(workspace, session_id, {
+                "role": role,
+                "content": content,
+                "metadata": metadata,
+                "timestamp": ts[:19],
+                "_task_id": task_id,
+            })
             
             try:
                 self._queue.put_nowait(task)
@@ -453,13 +459,16 @@ class AsyncDBWriter:
             try:
                 self._do_write_batch(tasks)
                 
-                # 写入成功后清空已写入的缓存
+                # 写入成功后仅清理本批任务，避免误删同会话新提交但尚未落库的缓存
+                written_ids: dict[tuple[str, str], set[int]] = defaultdict(set)
+                for task in tasks:
+                    written_ids[(task.workspace, task.session_id)].add(task.task_id)
                 with self._cache_lock:
-                    for task in tasks:
-                        key = (task.workspace, task.session_id)
-                        # 清空该会话的缓存（因为已经写入数据库）
+                    for key, task_ids in written_ids.items():
                         if key in self._cache:
-                            del self._cache[key]
+                            self._cache[key] = [m for m in self._cache[key] if m.get("_task_id") not in task_ids]
+                            if not self._cache[key]:
+                                del self._cache[key]
                 
                 # 更新统计
                 with self._stats_lock:
@@ -625,21 +634,20 @@ class AsyncDBWriter:
         with self._stats_lock:
             self._stats["cache_hits"] += 1
         
-        # 合并消息（缓存的消息追加到数据库消息后面）
-        # 注意：数据库消息可能已经包含部分缓存消息，需要去重
-        if db_messages:
-            # 假设数据库消息按时间顺序排列
-            # 缓存消息应该追加到末尾
-            # 简单策略：取缓存中最新的消息，避免重复
-            db_count = len(db_messages)
-            cache_to_add = cached_messages
-            
-            # 如果数据库已经有消息，检查缓存中有多少已经在数据库中
-            # 这里简化处理：如果缓存数量小于总消息数，说明部分已在数据库
-            # 只追加缓存中可能的新消息
-            all_messages = db_messages + cache_to_add
-        else:
-            all_messages = cached_messages
+        # 合并消息（缓存的消息追加到数据库消息后面），按稳定字段去重
+        seen = {
+            (m.get("role"), m.get("content"), m.get("metadata", ""), m.get("timestamp") or m.get("ts"))
+            for m in db_messages
+        }
+        cache_to_add = []
+        for msg in cached_messages:
+            key = (msg.get("role"), msg.get("content"), msg.get("metadata", ""), msg.get("timestamp") or msg.get("ts"))
+            if key in seen:
+                continue
+            clean_msg = {k: v for k, v in msg.items() if k != "_task_id"}
+            cache_to_add.append(clean_msg)
+            seen.add(key)
+        all_messages = db_messages + cache_to_add
         
         if limit > 0 and len(all_messages) > limit:
             return all_messages[-limit:]

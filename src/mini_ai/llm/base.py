@@ -148,13 +148,34 @@ _ESTIMATE_CACHE: dict[tuple, int] = {}
 _ESTIMATE_CACHE_MAX = 256
 _ESTIMATE_CACHE_LOCK = threading.Lock()
 
+def _message_fingerprint(msg: dict) -> tuple:
+    content = msg.get("content") or ""
+    if isinstance(content, str):
+        content_sig = (len(content), hash(content[:256]), hash(content[-256:]))
+    elif isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict):
+                text = block.get("text") or block.get("type") or ""
+                parts.append((block.get("type"), len(str(text)), hash(str(text)[:128])))
+            else:
+                text = str(block)
+                parts.append(("str", len(text), hash(text[:128])))
+        content_sig = tuple(parts)
+    else:
+        content_sig = (type(content).__name__, len(str(content)))
+
+    tool_calls = msg.get("tool_calls") or []
+    tool_sig = tuple(
+        (call.get("id"), call.get("function", {}).get("name"), len(call.get("function", {}).get("arguments", "")))
+        for call in tool_calls if isinstance(call, dict)
+    )
+    return (id(msg), msg.get("role"), msg.get("tool_call_id"), msg.get("name"), content_sig, tool_sig)
+
+
 def estimate_messages_tokens(messages: list[dict]) -> int:
-    # 缓存 key 增加首消息 content 前 50 字符的 hash，
-    # 防止 messages[:] = pruned 原地替换后 id 不变导致命中旧缓存
-    cache_key = (id(messages), len(messages),
-                 id(messages[0]) if messages else 0,
-                 id(messages[-1]) if messages else 0,
-                 hash(messages[0].get("content", "")[:50]) if messages else 0)
+    # 所有消息都参与轻量指纹，避免原地修改未采样中间消息时复用过期估算
+    cache_key = (id(messages), len(messages), tuple(_message_fingerprint(m) for m in messages))
     with _ESTIMATE_CACHE_LOCK:
         cached = _ESTIMATE_CACHE.get(cache_key)
         if cached is not None:

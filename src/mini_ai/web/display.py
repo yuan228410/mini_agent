@@ -24,6 +24,9 @@ class WebDisplay:
         self.thinking_mode = "collapsed"
         self.tool_detail = "summary"
         self._llm_round_start_time = 0.0
+        self._pending_events: list[dict] = []
+        self._pending_lock = threading.Lock()
+        self._flush_scheduled = False
 
     def set_teammate(self, name: str):
         self._teammate = name
@@ -45,8 +48,8 @@ class WebDisplay:
         # 自动注入 agent_id（用于前端分组消息）
         if self.agent_id:
             data["agent_id"] = self.agent_id
-        data["prompt_tokens"] = usage["prompt_tokens"]
-        data["completion_tokens"] = usage["completion_tokens"]
+        data.setdefault("prompt_tokens", usage["prompt_tokens"])
+        data.setdefault("completion_tokens", usage["completion_tokens"])
         
         # 添加事件序号（用于前端检测消息丢失）
         if self.session_id:
@@ -55,14 +58,30 @@ class WebDisplay:
                 _EVENT_SEQS[self.session_id] = seq
                 data["seq"] = seq
         
-        # 直接 put_nowait：asyncio.Queue 内部基于 deque + lock，线程安全
-        # 不再使用 call_soon_threadsafe，消除每帧 ~15-50ms 调度延迟
+        self._enqueue({"event": event, "data": data})
+
+    def _enqueue(self, item: dict):
+        with self._pending_lock:
+            self._pending_events.append(item)
+            if self._flush_scheduled:
+                return
+            self._flush_scheduled = True
         try:
-            self.queue.put_nowait({"event": event, "data": data})
-        except asyncio.QueueFull:
-            pass  # 队列满时丢弃（前端 watchdog 兜底重置状态）
-        except RuntimeError:
-            pass  # 事件循环已关闭（WS 断连）
+            self.loop.call_soon_threadsafe(self._flush_pending)
+        except Exception:
+            with self._pending_lock:
+                self._flush_scheduled = False
+
+    def _flush_pending(self):
+        with self._pending_lock:
+            pending = self._pending_events
+            self._pending_events = []
+            self._flush_scheduled = False
+        for item in pending:
+            try:
+                self.queue.put_nowait(item)
+            except Exception:
+                pass
 
     def llm_round_start(self, model: str = ""):
         """LLM 调用开始"""

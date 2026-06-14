@@ -86,11 +86,11 @@ class ContextPruner:
                     result.append(msg)
                     continue
 
-                # 硬裁剪：替换为占位符
+                # 硬裁剪：保留摘要和协议字段，避免完全丢失工具结果语义
                 if nearest_depth > opts.hard_prune_after:
                     hard_pruned += 1
                     pruned = dict(msg)
-                    pruned["content"] = "[tool result pruned]"
+                    pruned["content"] = _summarize_tool_result(content)
                     pruned["_pruned"] = "hard"
                     result.append(pruned)
                     continue
@@ -119,6 +119,21 @@ class ContextPruner:
             logger.debug(f"[context_pruner] 无需裁剪: msgs={len(messages)}")
 
         return result
+
+
+def _summarize_tool_result(content: str) -> str:
+    """硬裁剪摘要：保留极短首尾片段，避免工具语义完全丢失"""
+    if not content:
+        return "[tool result pruned: empty]"
+    lines = content.split("\n")
+    head = "\n".join(lines[:2]).strip()
+    tail = "\n".join(lines[-2:]).strip() if len(lines) > 2 else ""
+    summary = f"[tool result pruned: {len(content)} chars, {len(lines)} lines]"
+    if head:
+        summary += f"\nhead:\n{head[:400]}"
+    if tail and tail != head:
+        summary += f"\ntail:\n{tail[-400:]}"
+    return summary
 
 
 def _soft_prune(content: str, keep_lines: int) -> str:

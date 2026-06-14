@@ -214,12 +214,12 @@ export async function ensureWs(): Promise<boolean> {
       // 判断是重连还是首次连接（在重置计数之前判断）
       const isReconnect = _wsReconnectAttempts > 0
       
+      const u = getUsername()
+      if (u) ws.send(JSON.stringify({ type: 'login', username: u }))
+
       // 重置重连计数
       _wsReconnectAttempts = 0
       _flushPendingMessages()
-      
-      const u = getUsername()
-      if (u) ws.send(JSON.stringify({ type: 'login', username: u }))
       
       // 启动心跳
       _startHeartbeat()

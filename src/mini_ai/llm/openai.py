@@ -198,7 +198,7 @@ def chat(messages, tools=True, ctx=None):
         elif msg.get("content"):
             usage_store["completion_tokens"] += estimate_tokens(msg["content"])
 
-            commit_usage()
+        commit_usage()
 
         if "tool_calls" in msg:
             calls = msg["tool_calls"]

@@ -21,6 +21,7 @@ interface Message {
   teammate?: string
   teammateColor?: string
   workflow?: { status: string; tasks: Record<string, { status: string; agent: string; prompt?: string; result?: string }> }
+  main?: boolean
 }
 
 interface SessionState {
@@ -37,6 +38,8 @@ interface SessionState {
   _lastSeq: number
   // 事件去重
   _seenEvents: Set<string>
+  // 最近一次流式事件时间（按会话隔离）
+  _lastWsEventTime: number
 }
 
 // 工作流状态定义
@@ -105,7 +108,6 @@ let _flushSid = ''
 let _scrollTimer: number | null = null
 let _isNearBottom = true
 let _streamingWatchdog: number | null = null
-let _lastWsEventTime = 0
 let _sessionDeleteHandler: ((e: Event) => void) | null = null  // 保存监听器引用
 const FLUSH_INTERVAL = 50
 const SCROLL_INTERVAL = 100
@@ -124,7 +126,8 @@ function _state(sid: string): SessionState {
       _teammateBuffers: new Map(),
       workflowState: { status: 'idle', tasks: {} },
       _lastSeq: 0,
-      _seenEvents: new Set()
+      _seenEvents: new Set(),
+      _lastWsEventTime: 0
     })
   }
   return _states.get(key)!
@@ -150,7 +153,7 @@ function _load(sid: string) {
     
     // 检查是否真的在生成（验证 WebSocket 状态和超时）
     const isActiveGenerating = s.isStreaming && isWsConnected() && 
-      _lastWsEventTime > 0 && (Date.now() - _lastWsEventTime < STREAMING_TIMEOUT)
+      s._lastWsEventTime > 0 && (Date.now() - s._lastWsEventTime < STREAMING_TIMEOUT)
     isStreaming.value = isActiveGenerating
     
     // 如果状态过期，清理流式标记
@@ -178,17 +181,28 @@ function _scheduleFlush(sid: string) {
   }, FLUSH_INTERVAL)
 }
 
+function _mainAssistantIndex(s: SessionState): number {
+  for (let i = s.messages.length - 1; i >= 0; i--) {
+    const m = s.messages[i]
+    if (m.role === 'assistant' && m.main) return i
+  }
+  return -1
+}
+
+function _syncMainContent(s: SessionState) {
+  if (!s._currentContent) return
+  const idx = _mainAssistantIndex(s)
+  if (idx >= 0) {
+    s.messages[idx] = { ...s.messages[idx], content: s._currentContent }
+  }
+}
+
 function _flushState(sid: string) {
   const key = _cacheKey(sid, props.workspace)
   const s = _states.get(key)
   if (!s) return
   // 只在 _currentContent 非空时同步（避免空字符串覆盖已完成的消息）
-  if (s._currentContent) {
-    const lastIdx = s.messages.length - 1
-    if (lastIdx >= 0) {
-      s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
-    }
-  }
+  _syncMainContent(s)
 }
 
 function _doFlush(sid?: string) {
@@ -199,29 +213,11 @@ function _doFlush(sid?: string) {
     const key = _cacheKey(targetSid, props.workspace)
     const s = _states.get(key)
     if (!s) return
-    // Sync _currentContent into s.messages before any UI update
-    if (s._currentContent) {
-      const lastIdx = s.messages.length - 1
-      if (lastIdx >= 0) {
-        s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
-      }
-    }
-    // Incremental: only update last message when count matches
-    if (s.messages.length === messages.value.length && s.messages.length > 0) {
-      const sLast = s.messages[s.messages.length - 1]
-      const mLast = messages.value[messages.value.length - 1]
-      if (mLast && sLast) {
-        mLast.content = sLast.content
-        mLast.thinking = sLast.thinking
-        mLast.tools = sLast.tools
-        mLast.streaming = sLast.streaming
-      }
-    } else {
-      // Count differs (new message added by tool_start/teammate): full rebuild
-      messages.value = [...s.messages]
-    }
+    // Sync _currentContent into the main assistant message before any UI update
+    _syncMainContent(s)
+    messages.value = [...s.messages]
     const isActiveGenerating = s.isStreaming && isWsConnected() && 
-      _lastWsEventTime > 0 && (Date.now() - _lastWsEventTime < STREAMING_TIMEOUT)
+      s._lastWsEventTime > 0 && (Date.now() - s._lastWsEventTime < STREAMING_TIMEOUT)
     isStreaming.value = isActiveGenerating
   }
 }
@@ -369,17 +365,22 @@ async function fetchConfig() {
 }
 
 
+function _stopAllStreamingMessages(s: SessionState) {
+  s.messages = s.messages.map(m => m.streaming ? { ...m, streaming: false } : m)
+}
+
 function _resetStreaming(sid: string, reason: string) {
   const key = _cacheKey(sid, props.workspace)
   const s = _states.get(key)
-  if (s) s.isStreaming = false
+  if (s) {
+    s.isStreaming = false
+    _stopAllStreamingMessages(s)
+  }
   if (sid === activeSessionId.value) {
     isStreaming.value = false
   }
   console.warn(`[mini-ai] isStreaming reset: sid=${sid} reason=${reason}`)
   emit('status-change', sid, 'idle')
-  const last = s?.messages[s.messages.length - 1]
-  if (last && last.streaming) last.streaming = false
   if (s && sid === activeSessionId.value) messages.value = [...s.messages]
   if (_streamingWatchdog !== null) { clearTimeout(_streamingWatchdog); _streamingWatchdog = null }
 }
@@ -411,12 +412,9 @@ async function handleWsEvent(event: WsEvent) {
   // 处理重连事件，重置所有会话的生成状态
   if (event.event === 'reconnected') {
     console.log('[mini-ai] WebSocket 已重连，重置所有会话状态')
-    _states.forEach((s, key) => {
+    _states.forEach((s) => {
       s.isStreaming = false
-      if (s.messages.length > 0) {
-        const last = s.messages[s.messages.length - 1]
-        if (last && last.streaming) last.streaming = false
-      }
+      _stopAllStreamingMessages(s)
     })
     isStreaming.value = false
     emit('status-change', activeSessionId.value, 'idle')
@@ -425,7 +423,11 @@ async function handleWsEvent(event: WsEvent) {
     return
   }
   
-  const sid = event.data?.session_id || activeSessionId.value
+  const sid = event.data?.session_id
+  if (!sid) {
+    if (event.event === 'error') console.warn('[mini-ai] WebSocket 全局错误', event.data?.error || event.data)
+    return
+  }
   const s = _state(sid)
 
   // 检测事件序号缺口（消息丢失检测）
@@ -453,13 +455,14 @@ async function handleWsEvent(event: WsEvent) {
   }
 
   _processEvent(s, event)
-  _lastWsEventTime = Date.now()
+  s._lastWsEventTime = Date.now()
 
   const isTerminal = event.event === 'done' || event.event === 'aborted' || event.event === 'error' || event.event === 'complete'
 
   // 🔧 简化：终端事件时，直接重置会话状态
   if (isTerminal) {
     s.isStreaming = false
+    _stopAllStreamingMessages(s)
     s._currentContent = ''
     s._currentThinking = ''
     
@@ -504,27 +507,23 @@ async function handleWsEvent(event: WsEvent) {
 }
 
 function _startNewAssistantMsg(s: SessionState) {
-  const last = s.messages[s.messages.length - 1]
-  if (!last || last.role !== 'assistant') return
-  const hasContent = last.content || (last.tools && last.tools.length) || s._currentContent
+  const idx = _mainAssistantIndex(s)
+  const current = idx >= 0 ? s.messages[idx] : undefined
+  if (!current) return
+  const hasContent = current.content || (current.tools && current.tools.length) || s._currentContent
   if (!hasContent) return
-  s.messages[s.messages.length - 1] = { ...last, streaming: false, content: s._currentContent || last.content }
+  s.messages[idx] = { ...current, streaming: false, content: s._currentContent || current.content }
   s._currentContent = ''
   s._currentThinking = ''
-  s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs() })
+  s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), main: true })
 }
 
 function _updateUI(s: SessionState) {
   const key = _cacheKey(activeSessionId.value, props.workspace)
   const activeS = _states.get(key)
   if (s === activeS) {
-    // Sync _currentContent into s.messages before full rebuild to avoid flicker
-    if (s._currentContent) {
-      const lastIdx = s.messages.length - 1
-      if (lastIdx >= 0) {
-        s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
-      }
-    }
+    // Sync _currentContent into the main assistant message before full rebuild
+    _syncMainContent(s)
     messages.value = [...s.messages]
     workflowStateRef.value = s.workflowState ? { ...s.workflowState, tasks: { ...s.workflowState.tasks } } : undefined
   }
@@ -542,8 +541,6 @@ function _stopMainAgentStreaming(s: SessionState) {
 }
 
 function _processEvent(s: SessionState, event: WsEvent) {
-  const msg = s.messages[s.messages.length - 1]
-
   switch (event.event) {
     case 'thinking_start':
       {
@@ -579,9 +576,10 @@ function _processEvent(s: SessionState, event: WsEvent) {
           _updateUI(s)
         } else {
           s._currentThinking += event.data.content || ''
-          const m = s.messages[s.messages.length - 1]
-          if (m && m.role === 'assistant') {
-            m.thinking = { chars: s._currentThinking.length, elapsed: 0, content: s._currentThinking }
+          const idx = _mainAssistantIndex(s)
+          const m = idx >= 0 ? s.messages[idx] : undefined
+          if (m) {
+            s.messages[idx] = { ...m, thinking: { chars: s._currentThinking.length, elapsed: 0, content: s._currentThinking } }
           }
         }
       }
@@ -596,10 +594,10 @@ function _processEvent(s: SessionState, event: WsEvent) {
             tmMsg.thinking.elapsed = event.data.elapsed || 0
           }
         } else {
-          const m = s.messages[s.messages.length - 1]
-          if (m && m.role === 'assistant' && m.thinking) {
-            m.thinking.chars = event.data.chars || m.thinking.chars
-            m.thinking.elapsed = event.data.elapsed || 0
+          const idx = _mainAssistantIndex(s)
+          const m = idx >= 0 ? s.messages[idx] : undefined
+          if (m && m.thinking) {
+            s.messages[idx] = { ...m, thinking: { ...m.thinking, chars: event.data.chars || m.thinking.chars, elapsed: event.data.elapsed || 0 } }
           }
         }
       }
@@ -626,11 +624,8 @@ function _processEvent(s: SessionState, event: WsEvent) {
           _updateUI(s)
         } else {
           s._currentContent += event.data.content || ''
-          // 只修改 state 中的 messages，不直接动全局 messages.value（避免跨会话串台）
-          const m = s.messages[s.messages.length - 1]
-          if (m && m.role === 'assistant') {
-            m.content = s._currentContent
-          }
+          // 只修改 state 中的主 assistant 消息，不直接动全局 messages.value（避免跨会话串台）
+          _syncMainContent(s)
         }
       }
       _scheduleScroll()
@@ -654,12 +649,15 @@ function _processEvent(s: SessionState, event: WsEvent) {
           tmMsg.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
           _updateUI(s)
         } else {
-          const m = s.messages[s.messages.length - 1]
-          if (m && m.role === 'assistant') {
-            if (!m.tools) m.tools = []
-            m.tools.push({ name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' })
-            _updateUI(s)
+          let idx = _mainAssistantIndex(s)
+          if (idx < 0) {
+            s.messages.push({ role: 'assistant', content: '', tools: [], streaming: true, timestamp: _localTs(), main: true })
+            idx = s.messages.length - 1
           }
+          const m = s.messages[idx]
+          const tools = [...(m.tools || []), { name: event.data.name || '?', args: event.data.args || '', result: '...', elapsed: 0, tool_call_id: event.data.tool_call_id || '' }]
+          s.messages[idx] = { ...m, tools }
+          _updateUI(s)
         }
       }
       break
@@ -699,23 +697,25 @@ function _processEvent(s: SessionState, event: WsEvent) {
         }
         
         // 主 Agent 的工具
-        const m = s.messages[s.messages.length - 1]
-        if (m && m.role === 'assistant' && m.tools && m.tools.length > 0) {
-          let target: any = null
+        const idx = _mainAssistantIndex(s)
+        const m = idx >= 0 ? s.messages[idx] : undefined
+        if (m && m.tools && m.tools.length > 0) {
+          let targetIndex = -1
           // 优先按 tool_call_id 精确匹配
-          if (tcId) target = m.tools.find((t: any) => t.tool_call_id === tcId)
+          if (tcId) targetIndex = m.tools.findIndex((t: any) => t.tool_call_id === tcId)
           // 否则按 name + 占位符匹配
-          if (!target) {
+          if (targetIndex < 0) {
             const name = event.data.name || ''
-            target = m.tools.find((t: any) => t.name === name && t.result === '...')
+            targetIndex = m.tools.findIndex((t: any) => t.name === name && t.result === '...')
           }
           // 最后兜底：找最后一个占位符
-          if (!target) target = m.tools.find((t: any) => t.result === '...')
-          if (!target) target = m.tools[m.tools.length - 1]
-          
-          if (target) {
-            target.result = event.data.result || ''
-            target.elapsed = event.data.elapsed || 0
+          if (targetIndex < 0) targetIndex = m.tools.findIndex((t: any) => t.result === '...')
+          if (targetIndex < 0) targetIndex = m.tools.length - 1
+
+          if (targetIndex >= 0) {
+            const tools = [...m.tools]
+            tools[targetIndex] = { ...tools[targetIndex], result: event.data.result || '', elapsed: event.data.elapsed || 0 }
+            s.messages[idx] = { ...m, tools }
             _updateUI(s)
           } else {
             console.warn('[tool_result] 未找到匹配的工具调用', { tcId, name: event.data.name })
@@ -726,27 +726,20 @@ function _processEvent(s: SessionState, event: WsEvent) {
     case 'done':
     case 'complete':
       {
-        const m = s.messages[s.messages.length - 1]
-        if (m) s.messages[s.messages.length - 1] = { ...m, streaming: false }
-        
-        // 🔧 complete 事件携带错误：始终显示，追加到已有内容
+        _stopAllStreamingMessages(s)
+
+        // complete/error 事件携带错误：始终显示，追加到主 assistant 内容
         if (event.data?.error) {
           console.error('[complete] LLM 返回错误:', event.data.error)
-          if (m && m.role === 'assistant') {
-            s.messages[s.messages.length - 1] = { ...m, content: (m.content ? m.content + '\n\n' : '') + event.data.error, streaming: false }
-            _updateUI(s)
-          } else {
-            // 无 assistant 消息：新增一条
-            s.messages.push({
-              role: 'assistant',
-              content: event.data.error,
-              timestamp: new Date().toISOString()
-            })
-            _updateUI(s)
+          let idx = _mainAssistantIndex(s)
+          if (idx < 0) {
+            s.messages.push({ role: 'assistant', content: '', timestamp: _localTs(), main: true })
+            idx = s.messages.length - 1
           }
+          const m = s.messages[idx]
+          s.messages[idx] = { ...m, content: (m.content ? m.content + '\n\n' : '') + `⚠ ${event.data.error}`, streaming: false }
         }
-        
-        console.log('[mini-ai] cpl: msgs=' + s.messages.length + ' last=' + (s.messages[s.messages.length-1]?.role) + ':' + (s.messages[s.messages.length-1]?.content || '').substring(0, 60) + ' err=' + !!event.data?.error)
+
         _updateUI(s)
       }
       break
@@ -756,6 +749,9 @@ function _processEvent(s: SessionState, event: WsEvent) {
       break
     case 'aborted':
       s._currentContent += '\n\n⚠ 已中断生成'
+      _syncMainContent(s)
+      _stopAllStreamingMessages(s)
+      _updateUI(s)
       break
     case 'teammate_status':
       if (event.data) {
@@ -813,21 +809,16 @@ function _processEvent(s: SessionState, event: WsEvent) {
       break
     case 'error':
       {
-        const errMsg = event.data.error || '未知错误'
-        // 先将未刷新的流式内容同步到消息上，避免丢失已生成的部分文本
-        if (s._currentContent) {
-          const lastIdx = s.messages.length - 1
-          if (lastIdx >= 0 && s.messages[lastIdx].role === 'assistant') {
-            s.messages[lastIdx] = { ...s.messages[lastIdx], content: s._currentContent }
-          }
+        const errMsg = `⚠ ${event.data.error || '未知错误'}`
+        _syncMainContent(s)
+        let idx = _mainAssistantIndex(s)
+        if (idx < 0) {
+          s.messages.push({ role: 'assistant', content: '', timestamp: _localTs(), streaming: false, main: true })
+          idx = s.messages.length - 1
         }
-        const m = s.messages[s.messages.length - 1]
-        if (m && m.role === 'assistant') {
-          s.messages[s.messages.length - 1] = { ...m, content: m.content ? m.content + '\n\n' + errMsg : errMsg, streaming: false }
-        } else {
-          s.messages.push({ role: 'assistant', content: errMsg, timestamp: _localTs(), streaming: false })
-        }
-        console.log('[mini-ai] err: msgs=' + s.messages.length + ' last=' + (s.messages[s.messages.length-1]?.role) + ':' + (s.messages[s.messages.length-1]?.content || '').substring(0, 60))
+        const m = s.messages[idx]
+        s.messages[idx] = { ...m, content: m.content ? m.content + '\n\n' + errMsg : errMsg, streaming: false }
+        _stopAllStreamingMessages(s)
         _updateUI(s)
       }
       break
@@ -1086,7 +1077,7 @@ async function sendMessage(text: string, images?: ImageFile[]) {
     }))
   }
   
-  s.messages = [...s.messages, userMsg, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '' }]
+  s.messages = [...s.messages, userMsg, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '', main: true }]
   _updateUI(s)
 
   emit('status-change', sid, 'generating')
@@ -1102,38 +1093,56 @@ async function sendMessage(text: string, images?: ImageFile[]) {
   }
 
   let wsOk = false
-  try { wsOk = await ensureWs() } catch { wsOk = false }
-  if (wsOk) {
-    wsChat(text, sid, props.workspace, planMode.value, userMsg.images)
-  } else {
-    const s2 = _state(sid)
-    const msg2 = s2.messages[s2.messages.length - 1]
-    if (msg2) { msg2.streaming = false; msg2.content = '⚠ WebSocket 连接失败，请刷新页面重试' }
-    s2.isStreaming = false
+  try { wsOk = await ensureWs() } catch {}
+  wsChat(text, sid, props.workspace, planMode.value, userMsg.images)
+  if (!wsOk) {
+    const idx = _mainAssistantIndex(s)
+    if (idx >= 0) {
+      const m = s.messages[idx]
+      s.messages[idx] = { ...m, content: '⚠ WebSocket 未连接，消息已加入待发送队列，将在重连后自动发送。', streaming: false }
+    }
+    s.isStreaming = false
     isStreaming.value = false
-    messages.value = [...s2.messages]
+    _updateUI(s)
+    emit('status-change', sid, 'disconnected')
   }
 }
 
-function handleRetry(msgIndex: number) {
-  // Find the user message before this error assistant message
-  const s = _state(activeSessionId.value)
-  let userText = ''
-  // Search backwards from msgIndex for the last user message
+async function handleRetry(msgIndex: number) {
+  const sid = activeSessionId.value
+  const s = _state(sid)
+  let userMsg: Message | undefined
   for (let i = msgIndex - 1; i >= 0; i--) {
-    if (messages.value[i]?.role === 'user') {
-      userText = messages.value[i].content || ''
+    if (s.messages[i]?.role === 'user') {
+      userMsg = s.messages[i]
       break
     }
   }
-  if (!userText) return
-  // Remove the error assistant message
-  messages.value.splice(msgIndex, 1)
-  if (s) {
-    s.messages.splice(msgIndex, 1)
+  if (!userMsg) return
+
+  s.messages.splice(msgIndex, 1, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '', main: true })
+  s._currentContent = ''
+  s._currentThinking = ''
+  s.isStreaming = true
+  isStreaming.value = true
+  _updateUI(s)
+  emit('status-change', sid, 'generating')
+  _startStreamingWatchdog(sid)
+
+  let wsOk = false
+  try { wsOk = await ensureWs() } catch {}
+  wsChat(userMsg.content || '', sid, props.workspace, planMode.value, userMsg.images)
+  if (!wsOk) {
+    const idx = _mainAssistantIndex(s)
+    if (idx >= 0) {
+      const m = s.messages[idx]
+      s.messages[idx] = { ...m, content: '⚠ WebSocket 未连接，消息已加入待发送队列，将在重连后自动发送。', streaming: false }
+    }
+    s.isStreaming = false
+    isStreaming.value = false
+    _updateUI(s)
+    emit('status-change', sid, 'disconnected')
   }
-  // Re-send the user message
-  sendMessage(userText)
 }
 
 function stopGeneration() {
@@ -1145,11 +1154,9 @@ function stopGeneration() {
   const s = _states.get(key)
   if (s) {
     s.isStreaming = false
-    const last = s.messages[s.messages.length - 1]
-    if (last && last.streaming) {
-      s.messages[s.messages.length - 1] = { ...last, streaming: false, content: s._currentContent + '\n\n⚠ 已中断生成' }
-      messages.value = [...s.messages]
-    }
+    _syncMainContent(s)
+    _stopAllStreamingMessages(s)
+    messages.value = [...s.messages]
   }
 }
 

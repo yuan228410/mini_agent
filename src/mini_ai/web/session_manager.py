@@ -68,6 +68,8 @@ class SessionManager:
         self._team_components: dict[str, dict] = {}
         # 工具定义缓存
         self._lead_tools_cache: list[dict] | None = None
+        # 活跃生成任务：cache_key → task，用于跨 WebSocket 连接隔离同一会话生成
+        self._active_tasks: dict[str, object] = {}
 
     # ── key 工具 ──
 
@@ -154,6 +156,22 @@ class SessionManager:
         with self._lock:
             s = self._sessions.get(key)
             return s.components if s else None
+
+    def claim_active_task(self, key: str, task: object) -> bool:
+        """尝试登记活跃生成任务；同一会话已有未完成任务时返回 False。"""
+        with self._lock:
+            existing = self._active_tasks.get(key)
+            if existing and not existing.done():
+                return False
+            self._active_tasks[key] = task
+            return True
+
+    def release_active_task(self, key: str, task: object | None = None):
+        """释放活跃生成任务；传入 task 时只释放当前登记的任务。"""
+        with self._lock:
+            if task is not None and self._active_tasks.get(key) is not task:
+                return
+            self._active_tasks.pop(key, None)
 
     def set_components(self, key: str, components: dict):
         with self._lock:
@@ -321,12 +339,22 @@ def cache_key(username: str, workspace: str | None, sid: str) -> str:
 def ws_key(username: str, workspace: str | None) -> str:
     return SessionManager.ws_key(username, workspace)
 
-def safe_queue_put(queue, item):
-    """Queue.put_nowait 的安全版本，QueueFull 时静默丢弃"""
-    try:
-        queue.put_nowait(item)
-    except Exception:
-        pass
+def safe_queue_put(queue, item, loop=None):
+    """线程安全投递队列事件；QueueFull/loop 关闭时静默丢弃。"""
+    def _put():
+        try:
+            queue.put_nowait(item)
+        except Exception:
+            pass
+
+    if loop is not None:
+        try:
+            loop.call_soon_threadsafe(_put)
+        except Exception:
+            pass
+        return
+
+    _put()
 
 def abort_all_sessions():
     SessionManager.instance().abort_all()

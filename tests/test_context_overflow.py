@@ -110,15 +110,16 @@ class TestContextPruner:
             assert "line 0" in tm["content"]       # 首行保留
             assert "line 49" in tm["content"]      # 末行保留
 
-    def test_hard_prune_replaces_with_placeholder(self):
-        """硬裁剪替换为占位符"""
+    def test_hard_prune_keeps_summary_and_tool_id(self):
+        """硬裁剪保留摘要和工具配对字段"""
         msgs = _make_messages(n_rounds=3, tool_content="x" * 5000)
         opts = PruneOptions(protect_recent=1, hard_prune_after=1, max_tool_result_chars=2000)
         pruned = ContextPruner.prune(msgs, opts)
 
         tool_msgs = [m for m in pruned if m["role"] == "tool"]
-        # round 0 (depth=3 > hard_prune_after=1) → 硬裁剪
-        assert tool_msgs[0]["content"] == "[tool result pruned]"
+        # round 0 (depth=3 > hard_prune_after=1) → 硬裁剪摘要
+        assert tool_msgs[0]["content"].startswith("[tool result pruned:")
+        assert tool_msgs[0]["tool_call_id"] == "call_0"
         # round 2 (depth=1 ≤ protect_recent=1) → 完整保留
         assert tool_msgs[2]["content"] == "x" * 5000
 
@@ -483,3 +484,52 @@ class TestSoftPruneBoundary:
         content = "\n".join(["short"] * 5)
         result = _soft_prune(content, 5)
         assert result == content
+
+
+class TestRecentRegressionFixes:
+    """近期上下文/裁剪回归测试"""
+
+    def test_estimate_cache_detects_middle_tool_content_change(self):
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "q"},
+            {"role": "assistant", "content": "a", "tool_calls": [{"id": "c1", "function": {"name": "t", "arguments": "{}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "x" * 9000},
+            {"role": "assistant", "content": "done"},
+        ]
+        before = estimate_messages_tokens(messages)
+        messages[3] = {**messages[3], "content": "short"}
+        after = estimate_messages_tokens(messages)
+        assert after < before
+
+    def test_estimate_cache_detects_unsampled_message_change(self):
+        messages = [{"role": "system", "content": "sys"}]
+        for i in range(20):
+            content = "x" * 9000 if i == 8 else f"message {i}"
+            messages.append({"role": "user", "content": content})
+
+        before = estimate_messages_tokens(messages)
+        messages[9] = {**messages[9], "content": "short"}
+        after = estimate_messages_tokens(messages)
+
+        assert after < before
+
+    def test_compact_keeps_user_summary_pairs_in_order(self, tmp_path):
+        store = MemoryStore(tmp_path / "memory")
+        compactor = Compactor(store, keep_recent=1, context_length=10000, summary_dir=tmp_path / "summary")
+        messages = [{"role": "system", "content": "sys"}]
+        for i in range(4):
+            messages.append({"role": "user", "content": f"question {i}"})
+            messages.append({"role": "assistant", "content": "answer " + (str(i) * 200)})
+
+        def mock_chat(msgs, tools=None, ctx=None):
+            content = "\n".join(f"round_{i+1}: summary {i}" for i in range(3))
+            return {"role": "assistant", "content": content}
+
+        compacted = compactor.compact(mock_chat, messages, keep_recent_override=1)
+        non_system = compacted[1:]
+        assert non_system[0]["content"] == "question 0"
+        assert non_system[1]["content"].startswith("[第1轮执行摘要]")
+        assert non_system[2]["content"] == "question 1"
+        assert non_system[3]["content"].startswith("[第2轮执行摘要]")
+        assert non_system[1].get("_is_summary") is True

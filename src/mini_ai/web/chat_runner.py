@@ -41,7 +41,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         safe_queue_put(queue, {
             "event": "error",
             "data": {"error": "服务器繁忙，请稍后重试", "session_id": session_key}
-        })
+        }, loop)
         return None, {}
 
     try:
@@ -228,7 +228,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                             "error_context": error_context,
                             "session_id": session_key
                         }
-                    })
+                    }, loop)
                     return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
                 # ── 正常流程 ──
@@ -250,7 +250,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 if comp["compactor"].maybe_compact(messages, usage["prompt_tokens"], llm_chat, ctx, cfg.get("context_length", 256000)):
                     messages[0]["content"] = build_system_prompt(username, comp_key, base, workspace)
 
-                safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}})
+                safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}, loop)
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
             finally:
@@ -263,7 +263,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
         safe_queue_put(queue, {
             "event": "complete",
             "data": {"error": f"⚠ 内部错误: {type(_sync_err).__name__}", "session_id": session_key}
-        })
+        }, loop)
         return None, {}
 
     finally:
