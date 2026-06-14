@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, nextTick, computed } from 'vue'
-import { initTheme, toggleTheme, type Theme } from './theme'
+import { initTheme, setTheme, type Theme } from './theme'
 import { hasUsername, getUsername, setUsername, closeWs } from './api'
 import ChatView from './components/ChatView.vue'
 import SessionSidebar from './components/SessionSidebar.vue'
@@ -16,7 +16,7 @@ import WorkflowPanel from './components/WorkflowPanel.vue'
 const SIDEBAR_KEY = 'mini-ai-sidebar-open'
 const SIDEBAR_WIDTH_KEY = 'mini-ai-sidebar-width'
 
-const theme = ref<Theme>('light')
+const theme = ref<Theme>('linen-light')
 const config = ref({
   model: '?',
   context_length: 128000,
@@ -117,8 +117,8 @@ onMounted(async () => {
   }
 })
 
-function onToggleTheme() {
-  theme.value = toggleTheme(theme.value)
+function onSelectTheme(nextTheme: Theme) {
+  theme.value = setTheme(nextTheme)
 }
 
 function onConfigUpdate(c: any) {
@@ -260,7 +260,7 @@ function onTodosUpdate(content: string) {
       </div>
       <div class="header-right">
         <ModelSelector :session-id="sessionId" :workspace="activeWorkspace || undefined" @switched="onModelSwitched" />
-        <ThemeToggle :theme="theme" @toggle="onToggleTheme" />
+        <ThemeToggle :theme="theme" @select="onSelectTheme" />
       </div>
     </header>
     <div class="main-area">
