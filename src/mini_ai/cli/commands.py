@@ -8,13 +8,14 @@ from ..plan.service import PlanService
 
 
 class CommandHandler:
-    def __init__(self, *, disp, store, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path="", username="default", session_id=None):
+    def __init__(self, *, disp, store, compactor, inject_fn, run_tool_fn, lead_tools, ctx=None, workspace_mgr=None, history_db=None, context_builder=None, skill_loader=None, project_path="", username="default", session_id=None, tool_registry=None):
         self.disp = disp
         self.store = store
         self.compactor = compactor
         self.inject_fn = inject_fn
         self.run_tool_fn = run_tool_fn
         self.lead_tools = lead_tools
+        self.tool_registry = tool_registry
         self.ctx = ctx
         self.workspace_mgr = workspace_mgr
         self.history_db = history_db
@@ -302,11 +303,13 @@ class CommandHandler:
             return "continue"
         
         if user_input == "/tools":
-            from ..tools import get_definitions
             from ..llm import estimate_tokens
             import json
-            
-            tool_defs = get_definitions()
+
+            if not self.tool_registry:
+                self.disp.error("当前会话缺少 session-local tool_registry")
+                return "continue"
+            tool_defs = self.tool_registry.get_definitions()
             if not tool_defs:
                 self.disp.info("暂无可用工具")
                 return "continue"
@@ -444,13 +447,12 @@ class CommandHandler:
                     self.disp.error("请指定技能 URL 或路径")
                     return "continue"
                 
-                # 调用 install_skill 工具
-                from ..tools import dispatch
-                if params.startswith("http"):
-                    result = dispatch("install_skill", {"source": params, "level": level})
-                else:
-                    result = dispatch("install_skill", {"source": params, "level": level})
-                
+                # 调用当前会话的 install_skill 工具绑定，确保使用 session-local SkillLoader。
+                if not self.tool_registry:
+                    self.disp.error("当前会话缺少 session-local tool_registry")
+                    return "continue"
+                result = self.tool_registry.dispatch("install_skill", {"source": params, "level": level}) or "Error: install_skill 工具不可用"
+
                 self.disp.info(result)
                 return "continue"
             
@@ -463,12 +465,14 @@ class CommandHandler:
                 name = params.split()[0]
                 level = params.split()[1] if len(params.split()) > 1 else None
                 
-                from ..tools import dispatch
+                if not self.tool_registry:
+                    self.disp.error("当前会话缺少 session-local tool_registry")
+                    return "continue"
                 if level:
-                    result = dispatch("delete_skill", {"name": name, "level": level})
+                    result = self.tool_registry.dispatch("delete_skill", {"name": name, "level": level}) or "Error: delete_skill 工具不可用"
                 else:
-                    result = dispatch("delete_skill", {"name": name})
-                
+                    result = self.tool_registry.dispatch("delete_skill", {"name": name}) or "Error: delete_skill 工具不可用"
+
                 if result.startswith("Error:"):
                     self.disp.error(result)
                 else:
@@ -482,9 +486,11 @@ class CommandHandler:
                     return "continue"
                 
                 skill_name = params.split()[0]
-                from ..tools import dispatch
-                result = dispatch("load_skill", {"name": skill_name})
-                
+                if not self.tool_registry:
+                    self.disp.error("当前会话缺少 session-local tool_registry")
+                    return "continue"
+                result = self.tool_registry.dispatch("load_skill", {"name": skill_name}) or "Error: load_skill 工具不可用"
+
                 if result.startswith("Error:"):
                     self.disp.error(result)
                 else:
@@ -689,8 +695,12 @@ tags: 标签1,标签2
             return "continue"
 
         if user_input == "/todos":
-            from ..tools import render_todos
-            text = render_todos()
+            from ..tools.update_todos import _current_session, render_current_todos
+            token = _current_session.set(self.session_id or "default")
+            try:
+                text = render_current_todos()
+            finally:
+                _current_session.reset(token)
             if not text:
                 self.disp.info("暂无任务计划")
                 return "continue"

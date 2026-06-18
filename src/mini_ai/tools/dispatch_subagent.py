@@ -347,24 +347,18 @@ def execute(args: dict, abort_event: threading.Event | None = None) -> str:
         messages.append({"role": "user", "content": task, "timestamp": _ts})
 
     sub_display = None
-    try:
-        lead_display = _display_ctx.get()
-        if lead_display is None:
-            from ..tools import _registry
-            lead_display = _registry._display
-        if lead_display and hasattr(lead_display, 'queue'):
-            from ..web.display import WebDisplay
-            sub_display = WebDisplay(lead_display.queue, lead_display.loop, session_id=getattr(lead_display, 'session_id', ''))
-            sub_display.set_teammate(f"sub:{spec['name']}")
-
-            # 推送 agent_start 事件
-            sub_display._push("agent_start", {
-                "agent_type": f"sub:{spec['name']}",
-                "task": task[:100] + "..." if len(task) > 100 else task,
-                "max_turns": spec.get("max_turns", 10),
-            })
-    except (ImportError, AttributeError):
-        pass
+    lead_display = _display_ctx.get()
+    if lead_display:
+        try:
+            sub_display = lead_display.child(teammate=f"sub:{spec['name']}")
+            sub_display.agent_start(
+                agent_type=f"sub:{spec['name']}",
+                task=task[:100] + "..." if len(task) > 100 else task,
+                max_turns=spec.get("max_turns", 10),
+            )
+        except Exception as exc:
+            logger.debug(f"[dispatch_subagent] 创建子 display 失败: {exc}")
+            sub_display = None
 
     # 获取子代理专属模型配置
     model_config = MODEL_CONFIG

@@ -7,7 +7,7 @@ from .blackboard import Blackboard
 from ..config import TEAMMATE
 from ..logger import logger
 from .prompts import build_team_prompt
-from .task_graph import TaskGraph, TaskNode
+from .task_graph import TaskGraph, TaskNode, TaskStatus
 from ..utils import now_ts
 
 class Orchestrator:
@@ -24,15 +24,15 @@ class Orchestrator:
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
 
     def _push_event(self, event: str, data: dict):
-        """推送工作流事件到 WebDisplay"""
+        """通过 DisplayProtocol 推送工作流事件。"""
         if self._display:
             try:
-                self._display._push(event, data)
+                self._display.emit(event, data)
                 logger.info(f"[Orchestrator] 推送事件成功: {event}")
             except Exception as e:
                 logger.warning(f"[Orchestrator] 推送事件失败: {e}")
         else:
-            logger.warning(f"[Orchestrator] display 为空，无法推送事件: {event}")
+            logger.debug(f"[Orchestrator] display 为空，跳过事件: {event}")
 
     def run(self, timeout: int = 1800) -> str:
         logger.info(f"[Orchestrator] 启动，{len(self.graph.nodes)} 个任务，超时 {timeout}s")
@@ -48,10 +48,11 @@ class Orchestrator:
             }
             for t in self.graph.nodes.values()
         ]
-        self._push_event("workflow_start", {
-            "tasks": tasks_info,
-            "total": len(self.graph.nodes),
-        })
+        if self._display:
+            try:
+                self._display.workflow_start(tasks_info, len(self.graph.nodes))
+            except Exception:
+                self._push_event("workflow_start", {"tasks": tasks_info, "total": len(self.graph.nodes)})
 
         while not self.graph.is_complete():
             if time.monotonic() - start > timeout:
@@ -59,18 +60,19 @@ class Orchestrator:
                 break
 
             ready = self.graph.get_ready()
-            if not ready and not any(n.status == "running" for n in self.graph.nodes.values()):
+            if not ready and not any(n.status == TaskStatus.RUNNING for n in self.graph.nodes.values()):
                 logger.warning("[Orchestrator] 无可执行任务且无运行中任务，退出")
                 break
 
             for task in ready:
                 self.graph.mark_running(task.id)
                 # 推送 task_start 事件
-                self._push_event("task_start", {
-                    "id": task.id,
-                    "agent": task.agent,
-                    "prompt": task.prompt[:100] + "..." if len(task.prompt) > 100 else task.prompt,
-                })
+                task_prompt = task.prompt[:100] + "..." if len(task.prompt) > 100 else task.prompt
+                if self._display:
+                    try:
+                        self._display.workflow_task_start(task.id, task.agent, task_prompt)
+                    except Exception:
+                        self._push_event("task_start", {"id": task.id, "agent": task.agent, "prompt": task_prompt})
                 prompt = self.graph.resolve_prompt(task)
                 # 捕获当前上下文（包含 ContextVar）
                 ctx = contextvars.copy_context()
@@ -88,31 +90,32 @@ class Orchestrator:
                     if result is not None:
                         self.graph.mark_done(task_id, result)
                         # 推送 task_end 事件
-                        self._push_event("task_end", {
-                            "id": task_id,
-                            "status": "done",
-                            "result_preview": result[:200] + "..." if result and len(result) > 200 else result,
-                        })
+                        result_preview = result[:200] + "..." if result and len(result) > 200 else result
+                        if self._display:
+                            try:
+                                self._display.workflow_task_end(task_id, TaskStatus.DONE.value, result_preview=result_preview)
+                            except Exception:
+                                self._push_event("task_end", {"id": task_id, "status": TaskStatus.DONE.value, "result_preview": result_preview})
                     else:
                         self.graph.mark_failed(task_id, error or "执行失败")
                         # 推送 task_end 事件
-                        self._push_event("task_end", {
-                            "id": task_id,
-                            "status": "failed",
-                            "error": error or "执行失败",
-                        })
+                        err_text = error or "执行失败"
+                        if self._display:
+                            try:
+                                self._display.workflow_task_end(task_id, TaskStatus.FAILED.value, error=err_text)
+                            except Exception:
+                                self._push_event("task_end", {"id": task_id, "status": TaskStatus.FAILED.value, "error": err_text})
                     del self._pending_results[task_id]
 
         # 推送 workflow_end 事件
         elapsed = round(time.monotonic() - start, 1)
-        completed = sum(1 for n in self.graph.nodes.values() if n.status == "done")
-        failed = sum(1 for n in self.graph.nodes.values() if n.status == "failed")
-        self._push_event("workflow_end", {
-            "elapsed": elapsed,
-            "completed": completed,
-            "failed": failed,
-            "total": len(self.graph.nodes),
-        })
+        completed = sum(1 for n in self.graph.nodes.values() if n.status == TaskStatus.DONE)
+        failed = sum(1 for n in self.graph.nodes.values() if n.status == TaskStatus.FAILED)
+        if self._display:
+            try:
+                self._display.workflow_end(elapsed, completed, failed, len(self.graph.nodes))
+            except Exception:
+                self._push_event("workflow_end", {"elapsed": elapsed, "completed": completed, "failed": failed, "total": len(self.graph.nodes)})
 
         return self._summarize()
 
@@ -120,7 +123,7 @@ class Orchestrator:
         with self._condition:
             self._condition.wait_for(
                 lambda: bool(self._pending_results) or not any(
-                    n.status == "running" for n in self.graph.nodes.values()
+                    n.status == TaskStatus.RUNNING for n in self.graph.nodes.values()
                 ),
                 timeout=30,
             )
@@ -264,15 +267,10 @@ class Orchestrator:
         ]
 
         sub_display = None
-        if self.bus and hasattr(self.bus, '_on_send'):
+        if self._display:
             try:
-                from ..tools import _registry
-                lead_display = _registry._display
-                if lead_display and hasattr(lead_display, 'queue'):
-                    from ..web.display import WebDisplay
-                    sub_display = WebDisplay(lead_display.queue, lead_display.loop)
-                    sub_display.set_teammate(f"wf:{agent_name}")
-            except (ImportError, AttributeError) as exc:
+                sub_display = self._display.child(teammate=f"wf:{agent_name}")
+            except Exception as exc:
                 logger.debug(f"[Orchestrator] 创建队友 display 失败: {exc}")
 
         ctx = None
@@ -297,11 +295,11 @@ class Orchestrator:
     def _summarize(self) -> str:
         lines = [self.graph.render_status(), "", "## 结果汇总", ""]
         for node in self.graph.nodes.values():
-            if node.status == "done" and node.result:
+            if node.status == TaskStatus.DONE and node.result:
                 lines.append(f"### [{node.id}] ({node.agent})")
                 lines.append(node.result[:2000])
                 lines.append("")
-            elif node.status == "failed":
+            elif node.status == TaskStatus.FAILED:
                 lines.append(f"### [{node.id}] ({node.agent}) — 失败")
                 lines.append(node.error or "未知错误")
                 lines.append("")

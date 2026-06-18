@@ -1,12 +1,14 @@
 """终端 UI 渲染层：Markdown 渲染、思维链展示、工具调用展示"""
 import sys
 import time
+from typing import Any
 
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.rule import Rule
 from rich.text import Text
 
+from ..core.events import DisplayEventType
 from ..logger import logger
 
 _IS_TTY = sys.stdout.isatty()
@@ -62,11 +64,12 @@ _ALL_COMPLETIONS = _build_completions()
 
 
 class Display:
-    def __init__(self, thinking_mode: str = "collapsed", tool_detail: str = "summary", on_status_update=None):
+    def __init__(self, thinking_mode: str = "collapsed", tool_detail: str = "summary", on_status_update=None, todo_session_id: str = "default"):
         self.console = Console()
         self.thinking_mode = thinking_mode
         self.tool_detail = tool_detail
         self._on_status_update = on_status_update
+        self.todo_session_id = todo_session_id
         self._stream_buf = ""
         self._streaming = False
         self._stream_line_count = 0
@@ -78,6 +81,36 @@ class Display:
         self._had_thinking = False
         self._last_todos_render = ''
         self.show_banner()
+
+    def child(self, *, agent_id: str = "", teammate: str = "", suppress_text: bool | None = None):
+        # CLI 不需要新传输通道；复用当前 display 即可保持核心层协议一致。
+        return self
+
+    def emit(self, event: str, data: dict[str, Any] | None = None):
+        # CLI 只渲染高价值结构化事件，其他事件保持静默。
+        event_value = event.value if isinstance(event, DisplayEventType) else event
+        if event_value == DisplayEventType.AGENT_START.value and data:
+            label = data.get("agent_type") or data.get("role") or "agent"
+            task = data.get("task") or ""
+            self.info(f"🤖 {label} 开始执行" + (f": {task}" if task else ""))
+
+    def agent_start(self, agent_type: str, task: str = "", role: str = "", max_turns: int | None = None):
+        self.emit(DisplayEventType.AGENT_START, {"agent_type": agent_type, "task": task, "role": role, "max_turns": max_turns})
+
+    def workflow_start(self, tasks: list[dict[str, Any]], total: int):
+        self.info(f"▸ 工作流启动：{total} 个任务")
+
+    def workflow_task_start(self, task_id: str, agent: str, prompt: str):
+        self.info(f"  ▶ [{task_id}] {agent}: {prompt}")
+
+    def workflow_task_end(self, task_id: str, status: str, result_preview: str | None = None, error: str | None = None):
+        if status == "done":
+            self.info(f"  ✓ [{task_id}] 完成")
+        else:
+            self.error(f"  ✗ [{task_id}] {error or status}")
+
+    def workflow_end(self, elapsed: float, completed: int, failed: int, total: int):
+        self.info(f"▸ 工作流结束：{completed}/{total} 完成，失败 {failed}，耗时 {elapsed:.1f}s")
 
     def llm_round_start(self, model: str = ""):
         pass
@@ -274,6 +307,12 @@ class Display:
             logger.debug(f"[思考内容] {self._thinking_buf[:500]}")
         self._thinking_buf = ""
 
+    def thinking_full(self, text: str):
+        self.thinking_start()
+        if text:
+            self.thinking_chunk(text)
+        self.thinking_end()
+
     def tool_call_start(self, name: str, args_summary: str, tool_call_id: str = ""):
         self._tool_start_time = time.monotonic()
         if self.tool_detail == "minimal":
@@ -326,6 +365,24 @@ class Display:
     def info(self, text: str):
         self.console.print(Text(text, style="dim"))
 
+    def plan_event(self, kind: str, **data):
+        # CLI 的 plan 主流程已有命令层渲染；这里保持协议完整。
+        pass
+
+    def todos_updated(self, content: str):
+        if content == self._last_todos_render:
+            return
+        self._last_todos_render = content
+        self.console.print()
+        self.console.print(Rule("📋 任务计划", style="amber", characters="─"))
+        for line in content.split("\n"):
+            if "← 当前" in line:
+                self.console.print(Text(f"  {line}", style="bold yellow"))
+            elif line.startswith("[x]"):
+                self.console.print(Text(f"  {line}", style="dim"))
+            else:
+                self.console.print(Text(f"  {line}"))
+
     def show_thinking(self):
         if not self._last_thinking:
             self.info("暂无思考记录")
@@ -371,8 +428,12 @@ class Display:
 
     def todo_summary(self) -> str:
         try:
-            from ..tools import render_todos
-            text = render_todos()
+            from ..tools.update_todos import _current_session, render_current_todos
+            token = _current_session.set(self.todo_session_id or "default")
+            try:
+                text = render_current_todos()
+            finally:
+                _current_session.reset(token)
             if not text:
                 return ""
             lines = text.split("\n")

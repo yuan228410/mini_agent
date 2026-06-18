@@ -2,11 +2,14 @@
 import asyncio
 import time
 import threading
+from typing import Any
+
+from ..core.events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
 
 # 全局事件序号计数器（每个会话独立）
 _EVENT_SEQS: dict[str, int] = {}
 _EVENT_SEQS_LOCK = threading.Lock()
-_TERMINAL_EVENTS = {"error", "complete", "done", "aborted"}
+_TERMINAL_EVENTS = {e.value for e in TERMINAL_EVENT_TYPES}
 _MAX_PENDING_EVENTS = 2000
 
 
@@ -45,10 +48,32 @@ class WebDisplay:
     def set_agent_id(self, agent_id: str):
         self.agent_id = agent_id
 
-    def _push(self, event: str, data: dict | None = None):
+    def child(self, *, agent_id: str = "", teammate: str = "", suppress_text: bool | None = None):
+        child = WebDisplay(
+            self.queue,
+            self.loop,
+            session_id=self.session_id,
+            agent_id=agent_id or self.agent_id,
+            suppress_text=self.suppress_text if suppress_text is None else suppress_text,
+        )
+        child.thinking_mode = self.thinking_mode
+        child.tool_detail = self.tool_detail
+        if teammate:
+            child.set_teammate(teammate)
+        return child
+
+    def emit(self, event: str | DisplayEvent, data: dict[str, Any] | None = None):
+        if isinstance(event, DisplayEvent):
+            self._push(event.event.value, event.data)
+        else:
+            self._push(event, data)
+
+    def _push(self, event: str | DisplayEventType, data: dict | None = None):
+        if isinstance(event, DisplayEventType):
+            event = event.value
         from mini_ai.llm import get_global_usage
         usage = get_global_usage()
-        if event in ("error", "complete", "done", "aborted"):
+        if event in _TERMINAL_EVENTS:
             from ..logger import logger as _dlog
             _dlog.info(f'[Display] push: event={event} sid={self.session_id} has_err={bool(data and data.get("error"))}')
         if data is None:
@@ -145,7 +170,7 @@ class WebDisplay:
         data = {"model": model}
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("llm_round_start", data)
+        self._push(DisplayEventType.LLM_ROUND_START, data)
 
     def llm_round_end(self, prompt_tokens: int = 0, completion_tokens: int = 0, model: str = ""):
         """LLM 调用结束"""
@@ -158,7 +183,7 @@ class WebDisplay:
         }
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("llm_round_end", data)
+        self._push(DisplayEventType.LLM_ROUND_END, data)
 
     def thinking_start(self):
         self._thinking_buf = ""
@@ -166,14 +191,14 @@ class WebDisplay:
         data: dict = {}
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("thinking_start", data)
+        self._push(DisplayEventType.THINKING_START, data)
 
     def thinking_chunk(self, text: str):
         self._thinking_buf += text
         data = {"content": text}
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("thinking", data)
+        self._push(DisplayEventType.THINKING, data)
 
     def thinking_end(self):
         elapsed = time.monotonic() - self._thinking_start_time
@@ -184,8 +209,14 @@ class WebDisplay:
         data = {"chars": n_chars, "elapsed": round(elapsed, 1)}
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("thinking_end", data)
+        self._push(DisplayEventType.THINKING_END, data)
         self._thinking_buf = ""
+
+    def thinking_full(self, text: str):
+        self.thinking_start()
+        if text:
+            self.thinking_chunk(text)
+        self.thinking_end()
 
     def text_chunk(self, text: str):
         self._stream_buf += text
@@ -195,7 +226,7 @@ class WebDisplay:
         data = {"content": text}
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("text", data)
+        self._push(DisplayEventType.TEXT, data)
 
     def text_end(self, full_text: str | None = None):
         # 🔧 修复：先保存 _stream_buf，再清空（避免中断时丢失）
@@ -212,7 +243,7 @@ class WebDisplay:
             data = {"content": full_text}
             if self._teammate:
                 data["teammate"] = self._teammate
-            self._push("text", data)
+            self._push(DisplayEventType.TEXT, data)
         else:
             # 正常流式结束或中断：保留 saved_buf 供上层使用
             pass
@@ -227,43 +258,71 @@ class WebDisplay:
         data = {"name": name, "args": args_summary, "tool_call_id": tool_call_id}
         if self._teammate:
             data["teammate"] = self._teammate
-        self._push("tool_start", data)
+        self._push(DisplayEventType.TOOL_START, data)
 
     def tool_result(self, name: str, result: str, elapsed: float | None = None, tool_call_id: str = ""):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
         if result.startswith("📋TODO\n"):
-            self._push("todos", {"content": result[6:]})
-            rdata = {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id}
-            if self._teammate: rdata["teammate"] = self._teammate
-            self._push("tool_result", rdata)
-            return
+            self.todos_updated(result[6:])
         rdata = {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id}
         if self._teammate: rdata["teammate"] = self._teammate
-        self._push("tool_result", rdata)
+        self._push(DisplayEventType.TOOL_RESULT, rdata)
 
     def assistant_prefix(self):
         pass
 
     def teammate_status(self, name: str, status: str):
-        self._push("teammate_status", {"name": name, "status": status})
+        self._push(DisplayEventType.TEAMMATE_STATUS, {"name": name, "status": status})
 
     def blackboard_update(self, key: str, author: str):
-        self._push("blackboard_update", {"key": key, "author": author})
+        self._push(DisplayEventType.BLACKBOARD_UPDATE, {"key": key, "author": author})
 
     def inbox_message(self, to: str, from_user: str, count: int):
-        self._push("inbox_message", {"to": to, "from": from_user, "count": count})
+        self._push(DisplayEventType.INBOX_MESSAGE, {"to": to, "from": from_user, "count": count})
 
     def info(self, text: str):
-        self._push("info", {"message": text})
+        self._push(DisplayEventType.INFO, {"message": text})
 
     def plan_event(self, kind: str, **data):
         payload = {"kind": kind}
         payload.update(data)
-        self._push("plan_event", payload)
+        self._push(DisplayEventType.PLAN_EVENT, payload)
+
+    def todos_updated(self, content: str):
+        self._push(DisplayEventType.TODOS, {"content": content})
+
+    def agent_start(self, agent_type: str, task: str = "", role: str = "", max_turns: int | None = None):
+        payload = {"agent_type": agent_type}
+        if task:
+            payload["task"] = task
+        if role:
+            payload["role"] = role
+        if max_turns is not None:
+            payload["max_turns"] = max_turns
+        if self._teammate:
+            payload["teammate"] = self._teammate
+        self._push(DisplayEventType.AGENT_START, payload)
+
+    def workflow_start(self, tasks: list[dict[str, Any]], total: int):
+        self._push(DisplayEventType.WORKFLOW_START, {"tasks": tasks, "total": total})
+
+    def workflow_task_start(self, task_id: str, agent: str, prompt: str):
+        self._push(DisplayEventType.WORKFLOW_TASK_START, {"id": task_id, "agent": agent, "prompt": prompt})
+
+    def workflow_task_end(self, task_id: str, status: str, result_preview: str | None = None, error: str | None = None):
+        payload = {"id": task_id, "status": status}
+        if result_preview is not None:
+            payload["result_preview"] = result_preview
+        if error is not None:
+            payload["error"] = error
+        self._push(DisplayEventType.WORKFLOW_TASK_END, payload)
+
+    def workflow_end(self, elapsed: float, completed: int, failed: int, total: int):
+        self._push(DisplayEventType.WORKFLOW_END, {"elapsed": elapsed, "completed": completed, "failed": failed, "total": total})
 
     def error(self, text: str):
-        self._push("error", {"error": text})
+        self._push(DisplayEventType.ERROR, {"error": text})
 
     def show_banner(self):
         pass

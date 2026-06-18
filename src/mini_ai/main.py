@@ -13,19 +13,15 @@ from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
 from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
 from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
-from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions
+from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime
+from .core.runtime_context import SessionIdentity, SessionRuntimeContext
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
-from .tools import (ToolRegistry, get_definitions, register, register_subagents, register_team,
-                   inject_todos as _inject_todos,
-                    register_display, register_blackboard, register_memory_tools,
-                    register_history_tools, set_project_path,
-                    read_file, read_image, write_file, edit_file, delete_file, rename_file,
-                    run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
+from .tools import inject_todos as _inject_todos
 from .plan.artifact_parser import strip_artifact_blocks
 from .plan.prompts import build_plan_user_message
 from .plan.schema import PlanArtifact
@@ -71,10 +67,8 @@ def _init_mcp(ctx: AppContext):
     ctx.mcp_loader = MCPLoader()
     modules = ctx.mcp_loader.start_sync()
     if modules:
-        from .tools import _registry
-        _registry.add_tools(*modules)
         ctx.lead_tools_cache = None
-        logger.info(f"[MCP] 已注册 {len(modules)} 个 MCP 工具")
+        logger.info(f"[MCP] 已加载 {len(modules)} 个 MCP 工具")
 
 
 def _shutdown_mcp(ctx: AppContext):
@@ -87,13 +81,12 @@ def _shutdown_mcp(ctx: AppContext):
 # 工具辅助
 # ═══════════════════════════════════════════
 
-def _lead_tool_defs(ctx: AppContext) -> list[dict]:
-    if ctx.lead_tools_cache is None:
-        ctx.lead_tools_cache = [
-            d for d in get_definitions()
-            if d["function"]["name"] not in ("read_inbox", "list_teammates")
-        ]
-    return ctx.lead_tools_cache
+def _lead_tool_defs(ctx: AppContext, registry) -> list[dict]:
+    # 工具定义来自当前 session-local registry；不再读取模块级全局 registry。
+    return [
+        d for d in registry.get_definitions()
+        if d["function"]["name"] not in ("read_inbox", "list_teammates")
+    ]
 
 
 
@@ -114,8 +107,12 @@ class SessionContext:
     team_mgr: TeammateManager
     blackboard: Blackboard
     lead_event: threading.Event
-    tool_registry: object | None = None
+    runtime: SessionRuntimeContext | None = None
     cmd: CommandHandler = None  # 主循环 handler，reload 解包时赋予
+
+    @property
+    def tool_registry(self):
+        return self.runtime.tool_registry if self.runtime else None
 
 
 def _create_workspace_session(
@@ -144,10 +141,7 @@ def _create_workspace_session(
 
     logger.info(f"[Workspace] {ws_name} → {ws_dir} (project: {ws.project_path or Path.cwd()})")
 
-    set_project_path(ws.project_path or str(Path.cwd()))
-    tool_registry = ToolRegistry()
-    tool_registry.add_tools(read_file, read_image, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
-    tool_registry._project_path = ws.project_path or str(Path.cwd())
+    project_path = ws.project_path or str(Path.cwd())
 
     # ── 技能 ──
     user_skills_dir = user_data_dir(username) / "skills"
@@ -155,19 +149,11 @@ def _create_workspace_session(
     skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS,
                                user_skills_dir=user_skills_dir,
                                workspace_skills_dir=ws_skills_dir)
-    register(skill_loader)
-    tool_registry.register_skills(skill_loader)
-    register_subagents(_subagent_loader)
-    tool_registry.register_subagents(_subagent_loader)
 
     # ── Team + Bus ──
     bus = MessageBus(ws_dir / ".team" / "inbox")
     app_ctx.bus = bus
     team_mgr = TeammateManager(team_dir=ws_dir / ".team", bus=bus, project_dir=ws_dir)
-    register_team(bus, team_mgr)
-    tool_registry.register_team(bus, team_mgr)
-    register_display(disp)
-    tool_registry.register_display(disp)
 
     # ── MCP ──
     _init_mcp(app_ctx)
@@ -175,8 +161,6 @@ def _create_workspace_session(
     # ── Blackboard + Workflow ──
     bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
     workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
-    register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
-    tool_registry.register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
 
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
@@ -234,10 +218,8 @@ def _create_workspace_session(
         global_memory_dir=global_memory_dir,
         workspace_memory_dir=ws_memory_dir,
     )
-    register_memory_tools(store)
-    tool_registry.register_memory_tools(store)
-    register_history_tools(history_db, ws_name)
-    tool_registry.register_history_tools(history_db, ws_name)
+
+    identity = SessionIdentity(username=username, workspace=ws_name, session_id=session_id, project_path=project_path)
 
     # ── Context ──
     ctx_builder = ContextBuilder(DATA_DIR)
@@ -258,8 +240,26 @@ def _create_workspace_session(
         summary_dir=session_dir,
     )
 
-    # ── CommandHandler（含 run_loop 闭包）──
+    # ── Runtime + CommandHandler（含 run_loop 闭包）──
     req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
+    runtime = build_session_runtime(
+        identity=identity,
+        messages=[],
+        display=disp,
+        history_db=history_db,
+        memory_store=store,
+        skill_loader=skill_loader,
+        subagent_loader=_subagent_loader,
+        bus=bus,
+        team_mgr=team_mgr,
+        blackboard=bb,
+        workflow_dirs=workflow_dirs,
+        request_context=req_ctx,
+        mcp_loader=app_ctx.mcp_loader,
+        compactor=compactor,
+        context_builder=ctx_builder,
+    )
+    tool_registry = runtime.tool_registry
 
     def _run_loop(messages, tools, inject_fn, disp, ctx=None):
         msg, _ = run_tool_loop(
@@ -271,21 +271,25 @@ def _create_workspace_session(
             bus=app_ctx.bus,
             context_length=MODEL_CONFIG.get("context_length", 256000),
             compactor=compactor,
+            tool_registry=tool_registry,
         )
         return msg
 
+    disp.todo_session_id = session_id
     cmd = CommandHandler(
         disp=disp, store=store, compactor=compactor,
         inject_fn=_inject_todos, run_tool_fn=_run_loop,
-        lead_tools=_lead_tool_defs(app_ctx), ctx=req_ctx, workspace_mgr=ws_mgr,
+        lead_tools=_lead_tool_defs(app_ctx, tool_registry), ctx=req_ctx, workspace_mgr=ws_mgr,
         history_db=history_db, context_builder=ctx_builder, skill_loader=skill_loader,
         project_path=ws.project_path, username=username, session_id=session_id,
+        tool_registry=tool_registry,
     )
 
     # ── 构建消息 ──
     system_prompt = ctx_builder.build(memory_store=store, skill_loader=skill_loader,
                                        project_path=ws.project_path)
     messages = [{"role": "system", "content": system_prompt}]
+    runtime.messages = messages
     _inject_todos(messages)
 
     # 加载指定会话的历史消息
@@ -307,7 +311,7 @@ def _create_workspace_session(
         team_mgr=team_mgr,
         blackboard=bb,
         lead_event=lead_event,
-        tool_registry=tool_registry,
+        runtime=runtime,
         cmd=cmd,
     )
     return session, messages
@@ -518,6 +522,9 @@ def main():
                 cmd = session.cmd
                 bus = _app_ctx.bus
                 team_mgr = session.team_mgr
+                current_session_id = session.session_id
+                current_username = session.username
+                tool_registry = session.tool_registry
                 disp.info(f"工作空间 '{ws_name}' 已加载（{len(messages) - 1} 条历史）")
             continue
 
@@ -533,25 +540,17 @@ def main():
 
         try:
             planning_turn = cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')
-            tools = filter_tools(_lead_tool_defs(_app_ctx), ToolPolicy.PLAN_READONLY if planning_turn else ToolPolicy.EXECUTION)
+            tools = filter_tools(_lead_tool_defs(_app_ctx, tool_registry), ToolPolicy.PLAN_READONLY if planning_turn else ToolPolicy.EXECUTION)
 
             result = ApplicationService().run_turn(
-                messages=messages,
+                runtime=session.runtime,
                 tools=tools,
-                history_db=history_db,
-                workspace=_get_workspace_name(),
-                session_id=current_session_id,
-                compactor=compactor,
-                bus=bus,
                 plan_store=PlanStore(history_db, _get_workspace_name(), current_session_id) if planning_turn else None,
                 plan_state=cmd,
                 user_text_for_history=original_user_input,
                 options=RunTurnOptions(
                     streaming=STREAMING,
-                    display=disp,
-                    request_context=cmd.ctx,
                     plan_turn=planning_turn,
-                    tool_registry=tool_registry,
                     context_length=MODEL_CONFIG.get("context_length", 256000),
                     persist_user_history=False,
                 ),
@@ -573,7 +572,7 @@ def main():
             if not (cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')):
                 teammate_msg = wait_for_teammates(
                     bus, team_mgr, session.lead_event,
-                    cmd.run_tool_fn, messages, _lead_tool_defs(_app_ctx),
+                    cmd.run_tool_fn, messages, _lead_tool_defs(_app_ctx, tool_registry),
                     _inject_todos, disp, history_db=history_db, ctx=cmd.ctx,
                     workspace=_get_workspace_name(), session_id=current_session_id,
                 )

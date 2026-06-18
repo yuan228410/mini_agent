@@ -15,9 +15,10 @@ _last_graphs: dict[int, object] = {}  # thread_id → last TaskGraph
 
 _bus = None
 _manager = None
+_display = None
 
-def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None, manager=None):
-    global _blackboard, _workflow_dirs, _bus, _manager
+def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None, manager=None, display=None):
+    global _blackboard, _workflow_dirs, _bus, _manager, _display
     if blackboard is not None:
         _blackboard = blackboard
     if workflow_dirs is not None:
@@ -26,6 +27,8 @@ def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None
         _bus = bus
     if manager is not None:
         _manager = manager
+    if display is not None:
+        _display = display
 
 
 # ── run_workflow ──
@@ -85,18 +88,10 @@ def _run_exec(args: dict) -> str:
     _last_graphs[threading.current_thread().ident] = graph
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
-    # 获取 display 用于推送事件
-    display = None
-    try:
-        from ..tools import _registry
-        display = _registry._display
-    except (ImportError, AttributeError):
-        pass
-
     orch = Orchestrator(
         graph, _blackboard,
         context_length=MODEL_CONFIG.get("context_length", 256000),
-        bus=_bus, manager=_manager, display=display,
+        bus=_bus, manager=_manager, display=_display,
     )
     result = orch.run()
     return result

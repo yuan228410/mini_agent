@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
+from ..core.events import TERMINAL_EVENT_TYPES
 from ..logger import logger
 from ..plan.schema import PlanSessionState
 from ..utils import now_ts
@@ -337,13 +338,7 @@ class SessionManager:
     # ── 工具定义缓存 ──
 
     def lead_tool_defs(self) -> list[dict]:
-        if self._lead_tools_cache is None:
-            from ..tools import get_definitions
-            self._lead_tools_cache = [
-                d for d in get_definitions()
-                if d["function"]["name"] not in ("read_inbox", "list_teammates")
-            ]
-        return self._lead_tools_cache
+        raise RuntimeError("SessionManager.lead_tool_defs is compatibility-only; use SessionRuntimeContext.tool_registry")
 
     def invalidate_lead_tools(self):
         self._lead_tools_cache = None
@@ -364,7 +359,7 @@ def safe_queue_put(queue, item, loop=None):
 
     终止类事件会尽量腾出一个普通事件槽位；返回 bool 表示是否成功投递。
     """
-    terminal_events = {"error", "complete", "done", "aborted"}
+    terminal_events = {e.value for e in TERMINAL_EVENT_TYPES}
     result = {"ok": False}
 
     def _put():
@@ -411,7 +406,7 @@ def abort_all_sessions():
     SessionManager.instance().abort_all()
 
 def lead_tool_defs() -> list[dict]:
-    return SessionManager.instance().lead_tool_defs()
+    raise RuntimeError("lead_tool_defs is compatibility-only; use SessionRuntimeContext.tool_registry")
 
 def invalidate_lead_tools():
     SessionManager.instance().invalidate_lead_tools()

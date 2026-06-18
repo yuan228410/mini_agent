@@ -5,16 +5,12 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..config import DATA_DIR, MODEL_CONFIG, STREAMING, PACKAGE_DIR, RequestContext, get_model_config
+from ..config import DATA_DIR, MODEL_CONFIG, STREAMING, PACKAGE_DIR, get_model_config
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..runner import run_tool_loop
-from ..core import ApplicationService, RunTurnOptions
-from ..tools import (
-    ToolRegistry, register_memory_tools, register_history_tools, register, inject_todos as _inject_todos,
-    register_team, register_blackboard,
-    read_file, read_image, write_file, edit_file, delete_file, rename_file,
-    run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill,
-)
+from ..core import ApplicationService, RunTurnOptions, build_session_runtime
+from ..core.events import DisplayEvent, DisplayEventType
+from ..core.runtime_context import SessionIdentity
+from ..tools import inject_todos as _inject_todos
 from ..logger import logger, set_session_id
 from ..plan.artifact_parser import strip_artifact_blocks
 from ..plan.prompts import build_plan_user_message
@@ -25,7 +21,7 @@ from .display import WebDisplay
 from .session_manager import (
     SessionManager, cache_key, safe_queue_put,
     resolve_base, get_or_create_components, build_system_prompt,
-    lead_tool_defs, _save_session_name, _update_meta_cache,
+    _save_session_name, _update_meta_cache,
 )
 from ..utils import now_ts
 
@@ -33,6 +29,10 @@ from ..utils import now_ts
 _MAX_CONCURRENT_SESSIONS = 10
 _executor = ThreadPoolExecutor(max_workers=_MAX_CONCURRENT_SESSIONS, thread_name_prefix="chat-")
 _concurrent_semaphore = threading.Semaphore(_MAX_CONCURRENT_SESSIONS)
+
+
+def _ws_event(event: DisplayEventType, **data) -> dict:
+    return DisplayEvent(event, data).to_wire()
 
 
 def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
@@ -70,44 +70,42 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 base = resolve_base(username, workspace)
                 comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
                 comp = get_or_create_components(username, comp_key, base, workspace)
-                tool_registry = ToolRegistry()
-                tool_registry.add_tools(read_file, read_image, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
-                register_memory_tools(comp["store"])
-                tool_registry.register_memory_tools(comp["store"])
-                register_history_tools(comp["history_db"], workspace or "default")
-                tool_registry.register_history_tools(comp["history_db"], workspace or "default")
-                register(comp["skill_loader"])
-                tool_registry.register_skills(comp["skill_loader"])
-                if comp.get("project_path"):
-                    from ..tools import set_project_path
-                    set_project_path(comp["project_path"])
-                    tool_registry._project_path = comp["project_path"]
-                from .deps import SUBAGENT_LOADER, _MCP_LOADER
-                tool_registry.register_subagents(SUBAGENT_LOADER)
-                if _MCP_LOADER:
-                    tool_registry.add_tools(*_MCP_LOADER.get_tool_modules())
-                if comp.get("bus") and comp.get("team_mgr"):
-                    register_team(comp["bus"], comp["team_mgr"])
-                    tool_registry.register_team(comp["bus"], comp["team_mgr"])
-                if comp.get("blackboard"):
-                    workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
-                    register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
-                    tool_registry.register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
-
-                if tools is None:
-                    tools = [d for d in tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
-                all_tools = tools
 
                 if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
                     messages[0]["content"] = build_system_prompt(username, comp_key, base, workspace)
 
                 disp = WebDisplay(queue, loop, session_id=comp_key, suppress_text=plan_turn)
-                tool_registry.register_display(disp)
-                from ..tools import _registry
-                _registry.register_display(disp)
+                from .deps import SUBAGENT_LOADER, _MCP_LOADER
+                cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+                runtime = build_session_runtime(
+                    identity=SessionIdentity(
+                        username=username or "default",
+                        workspace=workspace or "default",
+                        session_id=comp_key,
+                        project_path=comp.get("project_path") or "",
+                    ),
+                    messages=messages,
+                    display=disp,
+                    history_db=comp.get("history_db"),
+                    memory_store=comp.get("store"),
+                    skill_loader=comp.get("skill_loader"),
+                    subagent_loader=SUBAGENT_LOADER,
+                    bus=comp.get("bus"),
+                    team_mgr=comp.get("team_mgr"),
+                    blackboard=comp.get("blackboard"),
+                    workflow_dirs=[DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
+                    abort_event=abort_event,
+                    model_config=cfg,
+                    mcp_loader=_MCP_LOADER,
+                    compactor=comp.get("compactor"),
+                    context_builder=comp.get("ctx_builder"),
+                )
+                tool_registry = runtime.tool_registry
+                ctx = runtime.request_context
 
-                if comp.get("team_mgr"):
-                    comp["team_mgr"].set_display(disp)
+                if tools is None:
+                    tools = [d for d in tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
+                all_tools = tools
 
                 plan_state = sm.get_plan_state(session_key)
                 if plan_turn:
@@ -126,9 +124,6 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         plan_svc = PlanService()
                         plan_svc.seed_execution_todos(artifact=approved_plan, session_key=session_key, display=disp)
                         messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": now_ts(), "_internal": True})
-
-                cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
-                ctx = RequestContext(model_config=cfg, display=disp)
 
                 user_msgs = [m for m in messages if m["role"] == "user" and not m.get("_internal")]
                 if user_msgs:
@@ -151,25 +146,17 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 logger.debug(f"[Web] run_tool_loop start key={session_key} plan_turn={plan_turn} tools={len(tools)}")
 
                 result = ApplicationService().run_turn(
-                    messages=messages,
+                    runtime=runtime,
                     tools=tools,
-                    history_db=comp["history_db"],
-                    workspace=workspace or "default",
-                    session_id=comp_key,
-                    compactor=comp.get("compactor"),
-                    bus=comp.get("bus"),
                     plan_store=PlanStore(comp["history_db"], workspace or "default", comp_key) if (plan_turn or approved_plan) else None,
                     plan_state=sm,
                     user_text_for_history=(user_msgs[-1].get("_plan_original_content", user_msgs[-1].get("content", "")) if user_msgs else None),
                     options=RunTurnOptions(
                         streaming=STREAMING,
-                        display=disp,
-                        request_context=ctx,
                         abort_event=abort_event,
                         max_turns=max_turns,
                         plan_turn=plan_turn,
                         approved_plan=approved_plan,
-                        tool_registry=tool_registry,
                         context_length=cfg.get("context_length", 256000),
                         persist_user_history=False,
                         plan_session_key=session_key,
@@ -211,17 +198,18 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         inbox = bus.read_inbox("lead")
                         if inbox:
                             if _inject_inbox(inbox):
-                                reset_usage()
-                                msg2, _ = run_tool_loop(
-                                    messages, tools,
-                                    streaming=STREAMING, display=disp,
-                                    inject_fn=_inject_todos, abort_event=abort_event,
-                                    max_turns=3, ctx=ctx, persist_fn=persister,
-                                    bus=bus, context_length=cfg.get("context_length", 256000),
-                                    compactor=comp.get("compactor"),
-                                    tool_registry=tool_registry,
+                                result2 = ApplicationService().run_turn(
+                                    runtime=runtime,
+                                    tools=tools,
+                                    options=RunTurnOptions(
+                                        streaming=STREAMING,
+                                        abort_event=abort_event,
+                                        max_turns=3,
+                                        context_length=cfg.get("context_length", 256000),
+                                        persist_user_history=False,
+                                    ),
                                 )
-                                persister.flush_deferred(messages)
+                                msg2 = result2.message
                                 if msg2 and msg2.get("content"):
                                     msg = msg2
                         if abort_event and abort_event.is_set():
@@ -264,16 +252,14 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
                     usage = get_usage()
                     logger.warning(f"[Web] error path: err={err_text[:80]}")
-                    safe_queue_put(queue, {
-                        "event": "complete",
-                        "data": {
-                            "prompt_tokens": usage["prompt_tokens"],
-                            "completion_tokens": usage["completion_tokens"],
-                            "error": err_text,
-                            "error_context": error_context,
-                            "session_id": session_key
-                        }
-                    }, loop)
+                    safe_queue_put(queue, _ws_event(
+                        DisplayEventType.COMPLETE,
+                        prompt_tokens=usage["prompt_tokens"],
+                        completion_tokens=usage["completion_tokens"],
+                        error=err_text,
+                        error_context=error_context,
+                        session_id=session_key,
+                    ), loop)
                     return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
                 # ── 正常流程 ──
@@ -283,7 +269,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         display_content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
                         msg["content"] = display_content
                         msg["kind"] = "plan_discussion"
-                        safe_queue_put(queue, {"event": "text", "data": {"content": display_content, "session_id": comp_key}}, loop)
+                        safe_queue_put(queue, _ws_event(DisplayEventType.TEXT, content=display_content, session_id=comp_key), loop)
                         for m in reversed(messages):
                             if m.get("role") == "assistant" and m.get("content") == raw_plan_text:
                                 m["content"] = display_content
@@ -297,7 +283,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts, "kind": "chat"})
 
                 usage = result.usage
-                safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}, loop)
+                safe_queue_put(queue, _ws_event(DisplayEventType.COMPLETE, prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"]), loop)
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
             finally:
@@ -311,10 +297,11 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
     except Exception as _sync_err:
         logger.error(f"[Web⚠] run_tool_loop_sync 异常: {_sync_err}", exc_info=True)
-        safe_queue_put(queue, {
-            "event": "complete",
-            "data": {"error": f"⚠ 内部错误: {type(_sync_err).__name__}", "session_id": session_key}
-        }, loop)
+        safe_queue_put(queue, _ws_event(
+            DisplayEventType.COMPLETE,
+            error=f"⚠ 内部错误: {type(_sync_err).__name__}",
+            session_id=session_key,
+        ), loop)
         return None, {}
 
     finally:

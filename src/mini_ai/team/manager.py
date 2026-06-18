@@ -138,17 +138,14 @@ class TeammateManager:
         ctx = None
         if lead_display:
             try:
-                from ..web.display import WebDisplay
-                tm_display = WebDisplay(lead_display.queue, lead_display.loop)
-                tm_display.set_teammate(name)
-                
-                # 推送 agent_start 事件
-                tm_display._push("agent_start", {
-                    "agent_type": name,
-                    "role": role,
-                    "task": prompt[:100] + "..." if len(prompt) > 100 else prompt,
-                })
-            except ImportError:
+                tm_display = lead_display.child(teammate=name)
+                tm_display.agent_start(
+                    agent_type=name,
+                    role=role,
+                    task=prompt[:100] + "..." if len(prompt) > 100 else prompt,
+                )
+            except Exception as exc:
+                logger.debug(f"[队友] 创建 display 失败: {exc}")
                 tm_display = None
             from ..config import RequestContext, MODEL_CONFIG as _MC
             ctx = RequestContext(model_config=_MC, display=tm_display)

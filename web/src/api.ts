@@ -1,3 +1,5 @@
+import type { PlanEventData } from './plan/types'
+
 const USERNAME_KEY = 'mini-ai-username'
 const _FETCH_TIMEOUT = 8000
 
@@ -64,10 +66,54 @@ export function hasUsername(): boolean {
   return !!localStorage.getItem(USERNAME_KEY)
 }
 
-export interface WsEvent {
-  event: string
-  data: any
+export type WsEventName =
+  | 'connected' | 'reconnected' | 'disconnected' | 'pong'
+  | 'llm_round_start' | 'llm_round_end'
+  | 'thinking_start' | 'thinking' | 'thinking_end'
+  | 'text' | 'tool_start' | 'tool_result' | 'todos'
+  | 'done' | 'complete' | 'plan_event' | 'mode_change' | 'aborted'
+  | 'teammate_status' | 'blackboard_update' | 'inbox_message'
+  | 'info' | 'error'
+  | 'workflow_start' | 'task_start' | 'task_end' | 'workflow_end'
+  | 'agent_start'
+
+export interface WsBaseData {
+  session_id?: string
+  agent_id?: string
+  teammate?: string
+  seq?: number
+  prompt_tokens?: number
+  completion_tokens?: number
+  event_id?: string
 }
+
+export type WsEvent =
+  | { event: 'connected' | 'reconnected'; data: WsBaseData }
+  | { event: 'disconnected'; data: WsBaseData & { code?: number; reason?: string } }
+  | { event: 'pong'; data: WsBaseData }
+  | { event: 'llm_round_start'; data: WsBaseData & { model?: string } }
+  | { event: 'llm_round_end'; data: WsBaseData & { model?: string; elapsed?: number } }
+  | { event: 'thinking_start'; data: WsBaseData }
+  | { event: 'thinking'; data: WsBaseData & { content: string } }
+  | { event: 'thinking_end'; data: WsBaseData & { chars?: number; elapsed?: number } }
+  | { event: 'text'; data: WsBaseData & { content: string } }
+  | { event: 'tool_start'; data: WsBaseData & { name: string; args?: string; tool_call_id?: string } }
+  | { event: 'tool_result'; data: WsBaseData & { name: string; result: string; elapsed?: number; tool_call_id?: string } }
+  | { event: 'todos'; data: WsBaseData & { content: string } }
+  | { event: 'done' | 'complete'; data: WsBaseData & { error?: string; error_context?: unknown } }
+  | { event: 'plan_event'; data: WsBaseData & PlanEventData }
+  | { event: 'mode_change'; data: WsBaseData & { mode?: string } }
+  | { event: 'aborted'; data: WsBaseData & { error?: string } }
+  | { event: 'teammate_status'; data: WsBaseData & { name: string; status: string } }
+  | { event: 'blackboard_update'; data: WsBaseData & { key: string; author: string } }
+  | { event: 'inbox_message'; data: WsBaseData & { to: string; from: string; count: number } }
+  | { event: 'info'; data: WsBaseData & { message: string } }
+  | { event: 'error'; data: WsBaseData & { error: string } }
+  | { event: 'workflow_start'; data: WsBaseData & { tasks: any[]; total: number } }
+  | { event: 'task_start'; data: WsBaseData & { id: string; agent: string; prompt: string } }
+  | { event: 'task_end'; data: WsBaseData & { id: string; status: string; result_preview?: string; error?: string } }
+  | { event: 'workflow_end'; data: WsBaseData & { elapsed?: number; completed?: number; failed?: number; total?: number } }
+  | { event: 'agent_start'; data: WsBaseData & { agent_type: string; task?: string; role?: string; max_turns?: number } }
 
 export interface ModelInfo {
   name: string
@@ -286,7 +332,7 @@ export async function ensureWs(): Promise<boolean> {
     ws.onmessage = (e) => {
       if (gen !== _wsGeneration) return
       try {
-        const evt = JSON.parse(e.data)
+        const evt = JSON.parse(e.data) as WsEvent
         
         // 处理 pong 响应
         if (evt.event === 'pong') {
@@ -730,8 +776,12 @@ export interface ToolsResponse {
   tool_names: string[]
 }
 
-export async function getTools(): Promise<ToolsResponse> {
-  const resp = await _fetch('/api/config/tools')
+export async function getTools(sessionId?: string, workspace?: string): Promise<ToolsResponse> {
+  const params = new URLSearchParams()
+  params.set('username', _username())
+  if (sessionId) params.set('session_id', sessionId)
+  if (workspace) params.set('workspace', workspace)
+  const resp = await _fetch(`/api/config/tools?${params.toString()}`)
   return resp.json()
 }
 

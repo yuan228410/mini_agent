@@ -9,29 +9,30 @@ from typing import Optional
 
 from ..utils import _UTC8
 from ..logger import logger
+from ..core.messages import ChatMessage
 from .async_db_writer import AsyncDBWriter
 
 
 def _process_multimodal_content(content: str | list, metadata: str = "") -> tuple[str, str]:
     """处理多模态消息内容，提取文本并保存完整结构到 metadata。
-    
+
     Args:
         content: 消息内容，可能是字符串或列表（多模态）
         metadata: 原有 metadata JSON 字符串
-    
+
     Returns:
         (text_content, updated_metadata): 处理后的文本内容和更新后的 metadata
     """
     if not isinstance(content, list):
         return content or "", metadata
-    
+
     # 提取文本内容用于搜索
     text_parts = []
     for part in content:
         if isinstance(part, dict) and part.get("type") == "text":
             text_parts.append(part.get("text", ""))
     text_content = "\n".join(text_parts)
-    
+
     # 保存完整结构到 metadata
     try:
         meta_dict = json.loads(metadata) if metadata else {}
@@ -39,8 +40,56 @@ def _process_multimodal_content(content: str | list, metadata: str = "") -> tupl
         metadata = json.dumps(meta_dict, ensure_ascii=False)
     except Exception:
         pass
-    
+
     return text_content, metadata
+
+
+def _metadata_to_dict(metadata: str | dict | None) -> dict:
+    if isinstance(metadata, dict):
+        return dict(metadata)
+    if not metadata:
+        return {}
+    try:
+        parsed = json.loads(metadata)
+        return parsed if isinstance(parsed, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
+def _metadata_to_json(metadata: str | dict | None) -> str:
+    if isinstance(metadata, str):
+        return metadata
+    if isinstance(metadata, dict) and metadata:
+        return json.dumps(metadata, ensure_ascii=False)
+    return ""
+
+
+def _history_row_from_message(message: ChatMessage | dict) -> dict:
+    """Normalize a runtime/history message through ChatMessage before DB writes."""
+    chat_msg = message if isinstance(message, ChatMessage) else ChatMessage.from_dict(message)
+    raw = chat_msg.to_dict(include_internal=True, include_tool_results=True)
+    metadata = _metadata_to_dict(raw.get("metadata"))
+    known = {"role", "content", "timestamp", "metadata"}
+    for key, value in raw.items():
+        if key not in known and value is not None:
+            metadata[key] = value
+    return {
+        "role": chat_msg.role.value,
+        "content": raw.get("content", ""),
+        "metadata": _metadata_to_json(metadata),
+    }
+
+
+def _message_from_history_row(role: str, content, metadata: str = "", timestamp: str = "") -> dict:
+    """Rehydrate DB row metadata through ChatMessage for a stable runtime shape."""
+    meta = _metadata_to_dict(metadata)
+    if "_multimodal_content" in meta:
+        content = meta.pop("_multimodal_content")
+    payload = {"role": role, "content": content}
+    if timestamp:
+        payload["timestamp"] = timestamp[:19]
+    payload.update({k: v for k, v in meta.items() if k not in ("role", "content")})
+    return ChatMessage.from_dict(payload).to_dict(include_internal=True, include_tool_results=True)
 
 
 class HistoryDB:
@@ -208,7 +257,7 @@ class HistoryDB:
             插入的消息ID（异步模式下返回任务ID）
         """
         content, metadata = _process_multimodal_content(content, metadata)
-        
+
         ts = datetime.now(_UTC8).isoformat()
         content_preview = (content or "")[:80].replace("\n", " ")
         logger.debug(f"[HistoryDB] append: workspace={workspace}, sid={session_id}, role={role}, len={len(content or '')}, preview={content_preview}")
@@ -252,13 +301,14 @@ class HistoryDB:
         """
         if not messages:
             return 0
-        
+
+        normalized_messages = [_history_row_from_message(msg) for msg in messages]
         ts = datetime.now(_UTC8).isoformat()
-        
+
         # 异步写入模式
         if self._async_write and self._async_writer:
-            return self._async_writer.submit_batch(workspace, session_id, messages)
-        
+            return self._async_writer.submit_batch(workspace, session_id, normalized_messages)
+
         # 同步写入模式
         count = 0
         
@@ -266,13 +316,14 @@ class HistoryDB:
             self._ensure_conn()
             try:
                 self._conn.execute("BEGIN")
-                for msg in messages:
-                    role = msg.get("role", "")
-                    content = msg.get("content", "")
-                    metadata = msg.get("metadata", "")
-                    
+                for msg in normalized_messages:
+                    row = _history_row_from_message(msg)
+                    role = row["role"]
+                    content = row.get("content", "")
+                    metadata = row.get("metadata", "")
+
                     content, metadata = _process_multimodal_content(content, metadata)
-                    
+
                     cur = self._conn.execute(
                         "INSERT INTO messages (workspace, session_id, ts, role, content, metadata) VALUES (?, ?, ?, ?, ?, ?)",
                         (workspace, session_id, ts, role, content, metadata),
@@ -384,26 +435,11 @@ class HistoryDB:
         
         results = []
         for workspace, session_id, role, content, metadata, ts in rows:
-            msg = {
-                "workspace": workspace,
-                "session_id": session_id,
-                "role": role,
-                "content": content,
-                "timestamp": ts[:19] if ts else ""
-            }
-            if metadata:
-                try:
-                    extra = json.loads(metadata)
-                    if "_multimodal_content" in extra:
-                        msg["content"] = extra["_multimodal_content"]
-                        del extra["_multimodal_content"]
-                    for k, v in extra.items():
-                        if k not in ("role", "content"):
-                            msg[k] = v
-                except json.JSONDecodeError:
-                    pass
+            msg = _message_from_history_row(role, content, metadata, ts)
+            msg["workspace"] = workspace
+            msg["session_id"] = session_id
             results.append(msg)
-        
+
         return results
     
     # === 搜索操作 ===
@@ -929,22 +965,7 @@ class HistoryDB:
     
     def _parse_messages(self, rows: list) -> list[dict]:
         """解析消息行"""
-        results = []
-        for role, content, metadata, ts in rows:
-            msg = {"role": role, "content": content, "timestamp": ts[:19] if ts else ""}
-            if metadata:
-                try:
-                    extra = json.loads(metadata)
-                    if "_multimodal_content" in extra:
-                        msg["content"] = extra["_multimodal_content"]
-                        del extra["_multimodal_content"]
-                    for k, v in extra.items():
-                        if k not in ("role", "content"):
-                            msg[k] = v
-                except json.JSONDecodeError:
-                    pass
-            results.append(msg)
-        return results
+        return [_message_from_history_row(role, content, metadata, ts) for role, content, metadata, ts in rows]
     
     def list_for_review(self, workspace: str, limit: int = 100) -> list[dict]:
         """列出消息供审核（含 id），用于选择性删除

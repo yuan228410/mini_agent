@@ -13,7 +13,6 @@ from .base import (
     _strip_internal_fields, commit_usage,
 )
 from ..logger import logger
-from ..tools import get_definitions
 from ..exceptions import LLMError
 from .retry import RetryStrategy
 
@@ -58,10 +57,7 @@ def _provider_tools(tools: list[dict]) -> list[dict]:
 def _attach_tools(payload: dict, tools) -> list[str] | None:
     tool_names = None
     if tools is True:
-        defs = get_definitions()
-        payload["tools"] = _provider_tools(defs)
-        payload["tool_choice"] = "auto"
-        tool_names = [d["function"]["name"] for d in defs]
+        raise ValueError("LLM provider requires explicit tool definitions; tools=True global lookup is not supported")
     elif tools:
         payload["tools"] = _provider_tools(tools)
         payload["tool_choice"] = "auto"

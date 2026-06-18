@@ -186,13 +186,12 @@ def _install_from_archive(name: str, source: str, dest_dir: Path) -> str:
             Path(archive_path).unlink(missing_ok=True)
 
 
-def execute(args: dict) -> str:
+def _execute_with_loader(loader, args: dict) -> str:
     name = args.get("name", "")
     source = args.get("source")
     content = args.get("content")
     level = args.get("level", "user")
 
-    loader = _get_loader()
     if not loader:
         return "Error: 技能加载器未配置"
 
@@ -212,3 +211,15 @@ def execute(args: dict) -> str:
     if content:
         return _install_from_content(name, content, dest_dir)
     return _install_from_archive(name, source, dest_dir)
+
+
+def _run_with_loader(loader, args: dict) -> str:
+    token = _loader_var.set(loader)
+    try:
+        return _execute_with_loader(loader, args)
+    finally:
+        _loader_var.reset(token)
+
+
+def execute(args: dict) -> str:
+    return _execute_with_loader(_get_loader(), args)

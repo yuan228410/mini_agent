@@ -6,6 +6,20 @@ from unittest.mock import patch, MagicMock
 from mini_ai.runner import run_tool_loop, run_agent
 
 
+class FakeToolRegistry:
+    def __init__(self, handler=None, definitions=None):
+        self.handler = handler or (lambda msg, messages, **kwargs: False)
+        self.definitions = definitions or []
+        self.call_count = 0
+
+    def get_definitions(self):
+        return self.definitions
+
+    def handle_tool_calls(self, msg, messages, **kwargs):
+        self.call_count += 1
+        return self.handler(msg, messages, **kwargs)
+
+
 class TestRunToolLoop:
     """测试工具循环"""
     
@@ -22,7 +36,8 @@ class TestRunToolLoop:
                 messages,
                 tools=None,
                 streaming=False,
-                max_turns=5
+                max_turns=5,
+                tool_registry=FakeToolRegistry(),
             )
             
             assert result is not None
@@ -52,19 +67,18 @@ class TestRunToolLoop:
         with patch("mini_ai.llm.chat") as mock_chat:
             mock_chat.side_effect = [tool_call_response, final_response]
             
-            with patch("mini_ai.tools.handle_tool_calls") as mock_handle:
-                mock_handle.return_value = False  # 未 spawn 队友
-                
-                result, spawned = run_tool_loop(
-                    messages,
-                    tools=[],
-                    streaming=False,
-                    max_turns=5
-                )
-                
-                assert result is not None
-                assert mock_chat.call_count == 2
-                assert mock_handle.call_count == 1
+            registry = FakeToolRegistry()
+            result, spawned = run_tool_loop(
+                messages,
+                tools=[],
+                streaming=False,
+                max_turns=5,
+                tool_registry=registry,
+            )
+
+            assert result is not None
+            assert mock_chat.call_count == 2
+            assert registry.call_count == 1
     
     def test_max_turns_limit(self):
         """达到最大轮次限制"""
@@ -85,18 +99,16 @@ class TestRunToolLoop:
             # 前 3 次返回工具调用，第 4 次返回总结
             mock_chat.side_effect = [tool_response] * 3 + [{"content": "Summary"}]
             
-            with patch("mini_ai.tools.handle_tool_calls") as mock_handle:
-                mock_handle.return_value = False
-                
-                result, spawned = run_tool_loop(
-                    messages,
-                    tools=[],
-                    streaming=False,
-                    max_turns=3
-                )
-                
-                # 应该在达到 max_turns 后强制退出
-                assert result is not None
+            result, spawned = run_tool_loop(
+                messages,
+                tools=[],
+                streaming=False,
+                max_turns=3,
+                tool_registry=FakeToolRegistry(),
+            )
+
+            # 应该在达到 max_turns 后强制退出
+            assert result is not None
     
     def test_abort_on_event(self):
         """通过 abort_event 中断循环"""
@@ -114,7 +126,8 @@ class TestRunToolLoop:
                 tools=None,
                 streaming=False,
                 abort_event=abort_event,
-                max_turns=10
+                max_turns=10,
+                tool_registry=FakeToolRegistry(),
             )
             
             assert result is None  # 被中断
@@ -137,27 +150,26 @@ class TestRunToolLoop:
         with patch("mini_ai.llm.chat") as mock_chat:
             mock_chat.side_effect = [tool_response] * 5 + [{"content": "I failed"}]
             
-            with patch("mini_ai.tools.handle_tool_calls") as mock_handle:
-                # 模拟工具执行失败：在 messages 中添加错误 tool 消息
-                def add_error_msg(msg, messages, **kwargs):
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": "call_1",
-                        "content": "Error: File not found"
-                    })
-                    return False
-                
-                mock_handle.side_effect = add_error_msg
-                
-                result, spawned = run_tool_loop(
-                    messages,
-                    tools=[],
-                    streaming=False,
-                    max_turns=10
-                )
-                
-                # 连续 3 次错误后应退出
-                assert mock_handle.call_count <= 4
+            # 模拟工具执行失败：在 messages 中添加错误 tool 消息
+            def add_error_msg(msg, messages, **kwargs):
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "content": "Error: File not found"
+                })
+                return False
+
+            registry = FakeToolRegistry(handler=add_error_msg)
+            result, spawned = run_tool_loop(
+                messages,
+                tools=[],
+                streaming=False,
+                max_turns=10,
+                tool_registry=registry,
+            )
+
+            # 连续 3 次错误后应退出
+            assert registry.call_count <= 4
 
 
 class TestRunAgent:
@@ -170,7 +182,7 @@ class TestRunAgent:
         with patch("mini_ai.runner.loop.run_tool_loop") as mock_loop:
             mock_loop.return_value = ({"content": "Hi!"}, False)
             
-            result = run_agent(messages, max_turns=5)
+            result = run_agent(messages, max_turns=5, tool_registry=FakeToolRegistry())
             
             assert result == "Hi!"
     
@@ -185,6 +197,6 @@ class TestRunAgent:
         with patch("mini_ai.runner.loop.run_tool_loop") as mock_loop:
             mock_loop.return_value = (None, False)
             
-            result = run_agent(messages, max_turns=5)
+            result = run_agent(messages, max_turns=5, tool_registry=FakeToolRegistry())
             
             assert result == "Previous response"

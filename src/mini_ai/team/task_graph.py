@@ -2,9 +2,21 @@
 from __future__ import annotations
 import threading
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from .blackboard import Blackboard
 from ..logger import logger
+
+
+class TaskStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+_TERMINAL_STATUSES = {TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.SKIPPED}
 
 
 @dataclass
@@ -14,7 +26,7 @@ class TaskNode:
     prompt: str
     depends_on: list[str] = field(default_factory=list)
     condition: str | None = None  # e.g. "search.status == 'done'" or "error in {search}"
-    status: str = "pending"
+    status: TaskStatus = TaskStatus.PENDING
     result: str | None = None
     error: str | None = None
     retry_count: int = 0
@@ -39,17 +51,17 @@ class TaskGraph:
         with self._lock:
             ready = []
             for node in self.nodes.values():
-                if node.status != "pending":
+                if node.status != TaskStatus.PENDING:
                     continue
                 
                 # 检查依赖状态
                 deps_done = all(
-                    self.nodes[dep].status == "done"
+                    self.nodes[dep].status == TaskStatus.DONE
                     for dep in node.depends_on
                     if dep in self.nodes
                 )
                 deps_failed = any(
-                    self.nodes[dep].status == "failed"
+                    self.nodes[dep].status == TaskStatus.FAILED
                     for dep in node.depends_on
                     if dep in self.nodes
                 )
@@ -58,8 +70,8 @@ class TaskGraph:
                 if deps_failed:
                     if node.fail_on_dep_failure:
                         # 标记为失败（传播失败）
-                        node.status = "failed"
-                        failed_deps = [dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == "failed"]
+                        node.status = TaskStatus.FAILED
+                        failed_deps = [dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == TaskStatus.FAILED]
                         node.error = f"依赖任务失败: {', '.join(failed_deps)}"
                         logger.warning(f"[DAG] {node.id} 因依赖失败而标记失败: {node.error}")
                         continue
@@ -71,7 +83,7 @@ class TaskGraph:
                 
                 # 检查条件
                 if node.condition and not self._evaluate_condition_locked(node):
-                    node.status = "skipped"
+                    node.status = TaskStatus.SKIPPED
                     logger.info(f"[DAG] {node.id} 条件不满足，跳过")
                     continue
                 
@@ -162,7 +174,7 @@ class TaskGraph:
         with self._lock:
             node = self.nodes.get(task_id)
             if node:
-                node.status = "running"
+                node.status = TaskStatus.RUNNING
                 logger.info(f"[DAG] {task_id} → running")
 
     def mark_done(self, task_id: str, result: str):
@@ -170,7 +182,7 @@ class TaskGraph:
             node = self.nodes.get(task_id)
             if not node:
                 return
-            node.status = "done"
+            node.status = TaskStatus.DONE
             node.result = result
         # blackboard.put 在锁外执行，避免嵌套锁
         node = self.nodes.get(task_id)
@@ -185,19 +197,19 @@ class TaskGraph:
                 return
             node.retry_count += 1
             if node.retry_count < node.max_retry:
-                node.status = "pending"
+                node.status = TaskStatus.PENDING
                 node.error = error
                 logger.warning(f"[DAG] {task_id} 失败，将重试 ({node.retry_count}/{node.max_retry}): {error[:100]}")
             else:
-                node.status = "failed"
+                node.status = TaskStatus.FAILED
                 node.error = error
                 logger.error(f"[DAG] {task_id} → failed: {error[:100]}")
 
     def is_complete(self) -> bool:
-        return all(n.status in ("done", "failed", "skipped") for n in self.nodes.values())
+        return all(n.status in (TaskStatus.DONE, TaskStatus.FAILED, TaskStatus.SKIPPED) for n in self.nodes.values())
 
     def has_runnable(self) -> bool:
-        return bool(self.get_ready()) or any(n.status == "running" for n in self.nodes.values())
+        return bool(self.get_ready()) or any(n.status == TaskStatus.RUNNING for n in self.nodes.values())
 
     def resolve_prompt(self, node: TaskNode) -> str:
         prompt = node.prompt
@@ -213,12 +225,12 @@ class TaskGraph:
         if not self.nodes:
             return "无工作流任务"
         lines = ["工作流状态:"]
-        status_icons = {"pending": "⏳", "running": "▶️", "done": "✅", "failed": "❌", "skipped": "⏭️"}
+        status_icons = {TaskStatus.PENDING: "⏳", TaskStatus.RUNNING: "▶️", TaskStatus.DONE: "✅", TaskStatus.FAILED: "❌", TaskStatus.SKIPPED: "⏭️"}
         for node in self.nodes.values():
             icon = status_icons.get(node.status, "?")
             deps = f" (依赖: {', '.join(node.depends_on)})" if node.depends_on else ""
             lines.append(f"  {icon} [{node.id}] {node.agent}{deps} — {node.status}")
-        done_count = sum(1 for n in self.nodes.values() if n.status == "done")
+        done_count = sum(1 for n in self.nodes.values() if n.status == TaskStatus.DONE)
         total = len(self.nodes)
         lines.append(f"  进度: {done_count}/{total}")
         return "\n".join(lines)

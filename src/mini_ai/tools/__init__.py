@@ -10,6 +10,7 @@ from ..logger import logger
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 from .cache import ToolCache, get_tool_cache
 from .metadata import metadata_for, normalize_tool_definition
+from ..core.tool_models import ToolCall, ToolResult
 from ..utils import now_ts
 
 _MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
@@ -110,8 +111,11 @@ class ToolRegistry:
                 (_m._registry_ctx, self),
             ], _m.execute, args),
         ))
-        register_subagent.configure(loader=subagent_loader)
-        self.add_tools(register_subagent)
+        register_subagent.configure(loader=subagent_loader, registry=self)
+        self.add_tools(_BoundTool(
+            register_subagent.definition,
+            lambda args, _m=register_subagent: _run_with_context([(_m._registry_ctx, self)], _m.execute, args),
+        ))
 
     def register_team(self, bus, manager):
         from . import team_tools
@@ -150,6 +154,10 @@ class ToolRegistry:
             dispatch_subagent.configure(display=display, registry=self)
             if "dispatch_subagent" in self._by_name:
                 self.register_subagents(dispatch_subagent._loader)
+            # 重新绑定 workflow 工具，让事件通过当前 session display 推送。
+            if "run_workflow" in self._by_name:
+                from . import workflow_tools
+                workflow_tools.configure(display=display)
         except Exception:
             pass
 
@@ -164,11 +172,15 @@ class ToolRegistry:
 
     def dispatch(self, name: str, args: dict) -> str | None:
         mod = self._by_name.get(name)
-        return mod.execute(args) if mod else None
+        if not mod:
+            return None
+        if mod is config_tool:
+            return _run_with_context([(config_tool._registry_ctx, self)], mod.execute, args)
+        return mod.execute(args)
 
     def handle_tool_calls(self, msg: dict, messages: list[dict], display=None, persist_fn=None) -> bool:
-        calls = msg["tool_calls"]
-        asst_msg = {"role": "assistant", "content": None, "tool_calls": calls, "timestamp": now_ts()}
+        calls = [ToolCall.from_dict(tc) for tc in msg["tool_calls"]]
+        asst_msg = {"role": "assistant", "content": None, "tool_calls": [tc.to_dict() for tc in calls], "timestamp": now_ts()}
         messages.append(asst_msg)
         if persist_fn:
             persist_fn(asst_msg)
@@ -182,7 +194,7 @@ class ToolRegistry:
         serial_calls = []
         
         for tc in calls:
-            name = tc["function"]["name"]
+            name = tc.function.name
             if name == "spawn_teammate":
                 spawned = True
             if self._is_parallel_safe(name):
@@ -202,17 +214,29 @@ class ToolRegistry:
 
         return spawned
 
-    def _execute_one(self, tc: dict, messages: list[dict], display=None, persist_fn=None) -> None:
-        name = tc["function"]["name"]
-        raw_args = tc["function"].get("arguments", "")
+    def _as_tool_call(self, tc: ToolCall | dict) -> ToolCall:
+        return tc if isinstance(tc, ToolCall) else ToolCall.from_dict(tc)
+
+    def _tool_message(self, tool_call_id: str, name: str, content: str) -> dict:
+        return ToolResult(tool_call_id=tool_call_id, name=name, content=content).to_message(timestamp=now_ts())
+
+    def _persist_tool_message(self, persist_fn, tool_call_id: str, name: str, content: str) -> None:
+        if persist_fn:
+            persist_fn(self._tool_message(tool_call_id, name, content))
+
+    def _execute_one(self, tc: ToolCall | dict, messages: list[dict], display=None, persist_fn=None) -> None:
+        tc = self._as_tool_call(tc)
+        name = tc.function.name
+        raw_args = tc.function.arguments
         try:
             args = json.loads(raw_args) if raw_args else {}
         except (json.JSONDecodeError, TypeError) as e:
             # JSON 解析失败，返回详细错误给 LLM
             args = {}
             error_msg = f"⚠ 工具调用失败：参数 JSON 解析错误\n\n工具: {name}\n原始参数: {raw_args[:200]}\n错误: {type(e).__name__}: {e}\n\n请检查参数格式是否正确。"
-            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": error_msg, "timestamp": now_ts()}
+            tool_msg = self._tool_message(tc.id, name, error_msg)
             messages.append(tool_msg)
+            self._persist_tool_message(persist_fn, tc.id, name, error_msg)
             logger.warning(f"[工具✗] {name} JSON解析失败: {raw_args[:200]}")
             return
         
@@ -229,18 +253,17 @@ class ToolRegistry:
             full_output = output if output is not None else ""
             logger.debug(f"[工具←] {name} (cached) len={len(full_output)}")
             truncated = _truncate(full_output)
-            tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": now_ts()}
-            if persist_fn:
-                persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": now_ts()})
+            tool_msg = self._tool_message(tc.id, name, truncated)
+            self._persist_tool_message(persist_fn, tc.id, name, full_output)
             messages.append(tool_msg)
             if display:
-                display.tool_result(name, full_output, 0, tc["id"])  # elapsed=0 for cache hit
+                display.tool_result(name, full_output, 0, tc.id)  # elapsed=0 for cache hit
             return  # 缓存命中直接返回
         
         logger.info(f"[工具→] {name}({json.dumps(args, ensure_ascii=False)})")
         args_summary = json.dumps(args, ensure_ascii=False)
         if display:
-            display.tool_call_start(name, args_summary, tc["id"])
+            display.tool_call_start(name, args_summary, tc.id)
         t0 = time.monotonic()
         try:
             output = self.dispatch(name, args)
@@ -270,7 +293,7 @@ class ToolRegistry:
             logger.error(f"[工具✗] {name} 异常: {e}", exc_info=True)
         elapsed = time.monotonic() - t0
         if display:
-            display.tool_result(name, output or "", elapsed, tc["id"])
+            display.tool_result(name, output or "", elapsed, tc.id)
 
         # OpenAI 规范：assistant.tool_calls 中的每个 tool_call_id 都必须有
         # 对应的 role=tool 消息响应。即使工具返回 None（或执行成功但无输出），
@@ -278,12 +301,12 @@ class ToolRegistry:
         full_output = output if output is not None else ""
         logger.debug(f"[工具←] {name} len={len(full_output)}")
         truncated = _truncate(full_output)
-        tool_msg = {"role": "tool", "tool_call_id": tc["id"], "name": name, "content": truncated, "timestamp": now_ts()}
-        if persist_fn:
-            persist_fn({"role": "tool", "tool_call_id": tc["id"], "name": name, "content": full_output, "timestamp": now_ts()})
+        tool_msg = self._tool_message(tc.id, name, truncated)
+        self._persist_tool_message(persist_fn, tc.id, name, full_output)
         messages.append(tool_msg)
 
-    def _execute_parallel(self, calls: list[dict], messages: list[dict], display=None, persist_fn=None) -> None:
+    def _execute_parallel(self, calls: list[ToolCall | dict], messages: list[dict], display=None, persist_fn=None) -> None:
+        calls = [self._as_tool_call(tc) for tc in calls]
         results = {}
         cache = self._cache
 
@@ -291,17 +314,17 @@ class ToolRegistry:
         import contextvars as _cv
         _ctx_copies = [_cv.copy_context() for _ in calls]
 
-        def _run(tc, ctx_copy):
+        def _run(tc: ToolCall, ctx_copy):
             try:
-                name = tc["function"]["name"]
-                args_str = tc["function"]["arguments"] or ""
+                name = tc.function.name
+                args_str = tc.function.arguments or ""
                 
                 # JSON 解析
                 try:
                     args = json.loads(args_str) if args_str else {}
                 except (json.JSONDecodeError, TypeError) as e:
                     error_msg = f"⚠ 工具调用失败：参数 JSON 解析错误\n\n工具: {name}\n原始参数: {args_str[:200]}\n错误: {type(e).__name__}: {e}\n\n请检查参数格式是否正确。"
-                    return tc["id"], error_msg
+                    return tc.id, error_msg
                 
                 # 检查缓存（并发安全：首个线程执行，其余等待）
                 cached_result, hit = cache.get_or_wait(name, args)
@@ -309,17 +332,17 @@ class ToolRegistry:
                     logger.info(f"[并行缓存命中] {name}")
                     # 缓存命中也需要推送 tool_result
                     if display and cached_result is not None:
-                        display.tool_result(name, cached_result, 0, tc["id"])
-                    return tc["id"], cached_result
+                        display.tool_result(name, cached_result, 0, tc.id)
+                    return tc.id, cached_result
                 
                 logger.info(f"[并行→] {name}({json.dumps(args, ensure_ascii=False)})")
                 if display:
-                    display.tool_call_start(name, json.dumps(args, ensure_ascii=False), tc["id"])
+                    display.tool_call_start(name, json.dumps(args, ensure_ascii=False), tc.id)
                 t0 = time.monotonic()
                 result = ctx_copy.run(self.dispatch, name, args)
                 elapsed = time.monotonic() - t0
                 if display and result is not None:
-                    display.tool_result(name, result, elapsed, tc["id"])
+                    display.tool_result(name, result, elapsed, tc.id)
                 # 写入缓存并通知等待线程
                 cache.mark_done(name, args, result)
                 # 🔧 新增：打印工具执行结果摘要
@@ -328,7 +351,7 @@ class ToolRegistry:
                     logger.info(f"[并行←] {name} len={len(result)} preview={result_preview}")
                 else:
                     logger.info(f"[并行←] {name} len=0 output=None")
-                return tc["id"], result
+                return tc.id, result
             except Exception as e:
                 # 使用异常体系生成详细错误信息
                 from ..exceptions import MiniAIError
@@ -349,9 +372,9 @@ class ToolRegistry:
                 # 异常时也要推送 tool_result，避免前端占位符不更新
                 if display:
                     elapsed = time.monotonic() - t0 if 't0' in locals() else 0
-                    display.tool_result(name if 'name' in locals() else 'unknown', error_msg, elapsed, tc["id"])
+                    display.tool_result(name if 'name' in locals() else 'unknown', error_msg, elapsed, tc.id)
                 
-                return tc["id"], error_msg
+                return tc.id, error_msg
 
         with ThreadPoolExecutor(max_workers=len(calls)) as pool:
             futures = {pool.submit(_run, tc, _ctx_copies[i]): i for i, tc in enumerate(calls)}
@@ -366,13 +389,12 @@ class ToolRegistry:
 
         # 每个 tool_call_id 都必须写入对应 tool 消息
         for tc in calls:
-            tc_id = tc["id"]
+            tc_id = tc.id
             full_output = results.get(tc_id, "")
-            name = tc["function"]["name"]
+            name = tc.function.name
             truncated = _truncate(full_output)
-            tool_msg = {"role": "tool", "tool_call_id": tc_id, "name": name, "content": truncated, "timestamp": now_ts()}
-            if persist_fn:
-                persist_fn({"role": "tool", "tool_call_id": tc_id, "name": name, "content": full_output, "timestamp": now_ts()})
+            tool_msg = self._tool_message(tc_id, name, truncated)
+            self._persist_tool_message(persist_fn, tc_id, name, full_output)
             messages.append(tool_msg)
 
     def render_todos(self) -> str:
@@ -382,7 +404,7 @@ class ToolRegistry:
         from . import blackboard_tools, workflow_tools
         from .team_tools import _sender
         blackboard_tools.configure(blackboard=blackboard)
-        workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs, bus=bus, manager=manager)
+        workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs, bus=bus, manager=manager, display=self._display)
 
         self.add_tools(
             _BoundTool(blackboard_tools._write_def, lambda args, _bb=blackboard: _bb.put(args.get("key", ""), args.get("value", ""), author=_sender())),

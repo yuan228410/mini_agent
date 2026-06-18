@@ -58,6 +58,9 @@ def run_tool_loop(
     Returns:
         (final_msg, spawned_teammate)
     """
+    if tool_registry is None:
+        raise ValueError("run_tool_loop requires an explicit session-local tool_registry")
+
     # 初始化状态
     if max_turns <= 0:
         max_turns = RUNNER.get("max_turns", 20)
@@ -143,12 +146,8 @@ def run_tool_loop(
                 executor.finalize_response(msg, messages)
                 return msg, state.spawned_teammate
             
-            # 执行工具（优先使用会话级 ToolRegistry）
-            if tool_registry is not None:
-                tool_spawned = tool_registry.handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
-            else:
-                from ..tools import handle_tool_calls
-                tool_spawned = handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
+            # 执行工具：运行时必须显式使用 session-local ToolRegistry。
+            tool_spawned = tool_registry.handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
             
             # 检查工具错误
             # 注意：这里检测的是 execute_tools 内部处理的字符串格式错误（⚠ 开头）
@@ -402,10 +401,11 @@ def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abo
     Returns:
         最终响应文本
     """
-    from ..tools import get_definitions
+    if tool_registry is None:
+        return "⚠ Agent 执行失败: 缺少 session-local tool_registry"
 
     try:
-        definitions = tool_registry.get_definitions() if tool_registry is not None else get_definitions()
+        definitions = tool_registry.get_definitions()
         if tool_names:
             # 根据工具名过滤
             tools = [d for d in definitions if d.get("function", {}).get("name") in tool_names]

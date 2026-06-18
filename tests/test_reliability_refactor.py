@@ -1,14 +1,19 @@
+import json
 import sqlite3
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
+from mini_ai.core.persister import HistoryPersister
 from mini_ai.memory.async_db_writer import AsyncDBWriter
+from mini_ai.memory.history_db import HistoryDB
 from mini_ai.tools import ToolRegistry
 from mini_ai.tools.metadata import normalize_tool_definition
 from mini_ai.web.display import WebDisplay
 from mini_ai.config import RequestContext
+from mini_ai.tools import config_tool
 
 
 class SlowCommitWriter(AsyncDBWriter):
@@ -166,3 +171,123 @@ def test_web_display_preserves_terminal_event_when_queue_full():
         events.append(queue.get_nowait()["event"])
     assert "complete" in events
     loop.close()
+
+
+def test_history_persister_uses_structured_tool_call_payload(tmp_path):
+    db = HistoryDB(tmp_path / "history.db", async_write=False)
+    persister = HistoryPersister(db, "ws", "sid")
+
+    assistant = {
+        "role": "assistant",
+        "content": "I will call a tool",
+        "thinking": "hidden reasoning",
+        "tool_calls": [{
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": "{\"path\": \"a.py\"}"},
+        }],
+    }
+    tool = {"role": "tool", "tool_call_id": "call-1", "name": "read_file", "content": "file content"}
+
+    persister(assistant)
+    persister(tool)
+    persister.flush_deferred([assistant, tool])
+
+    loaded = db.load_session("ws", "sid")
+    assert loaded[0]["role"] == "tool"
+    assert loaded[0]["name"] == "read_file"
+    assert loaded[1]["role"] == "assistant"
+    assert loaded[1]["thinking"] == "hidden reasoning"
+    assert loaded[1]["tool_calls"][0]["_result"] == "file content"
+    db.close()
+
+
+def test_history_db_batch_normalizes_message_metadata(tmp_path):
+    db = HistoryDB(tmp_path / "history.db", async_write=False)
+    count = db.append_batch("ws", "sid", [{
+        "role": "assistant",
+        "content": "plan text",
+        "kind": "plan_discussion",
+        "plan": {"plan_id": "p1"},
+        "tool_calls": [{
+            "id": "call-2",
+            "function": {"name": "config", "arguments": "{}"},
+            "_result": "ok",
+        }],
+    }])
+
+    assert count == 1
+    row = db._conn.execute("SELECT role, content, metadata FROM messages").fetchone()
+    metadata = json.loads(row[2])
+    assert row[:2] == ("assistant", "plan text")
+    assert metadata["kind"] == "plan_discussion"
+    assert metadata["plan"] == {"plan_id": "p1"}
+    assert metadata["tool_calls"][0]["_result"] == "ok"
+
+    loaded = db.load_session("ws", "sid")
+    assert loaded[0]["kind"] == "plan_discussion"
+    assert loaded[0]["tool_calls"][0]["function"]["name"] == "config"
+    db.close()
+
+
+def test_core_modules_do_not_import_web_display():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    forbidden_roots = [root / "core", root / "runner", root / "team", root / "tools"]
+    offenders = []
+    for base in forbidden_roots:
+        for path in base.rglob("*.py"):
+            if path == root / "tools" / "__init__.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "web.display" in text or "WebDisplay" in text:
+                offenders.append(str(path.relative_to(root)))
+    assert offenders == []
+
+
+def test_llm_providers_reject_global_tools_true():
+    from mini_ai.llm import openai, anthropic
+
+    with pytest.raises(ValueError, match="explicit tool definitions"):
+        openai._attach_tools({}, True)
+    with pytest.raises(ValueError, match="explicit tool definitions"):
+        anthropic.chat([{"role": "user", "content": "hi"}], tools=True, ctx=RequestContext({"model": "claude-test"}))
+
+
+def test_config_tool_lists_session_bound_registry_tools_only():
+    class LocalTool:
+        definition = {
+            "type": "function",
+            "function": {"name": "local_only", "description": "", "parameters": {"type": "object", "properties": {}}},
+        }
+        @staticmethod
+        def execute(args):
+            return "ok"
+
+    registry = ToolRegistry()
+    registry.add_tools(LocalTool, config_tool)
+    output = registry.dispatch("config", {"action": "list"})
+    assert "local_only" in output
+    assert "read_file" not in output
+
+
+def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}
+    forbidden_patterns = (
+        "from ..tools import get_definitions",
+        "from ...tools import get_definitions",
+        "from ..tools import dispatch",
+        "from ...tools import dispatch",
+        "from ..tools import render_todos",
+        "from ...tools import render_todos",
+        "from . import render_todos",
+    )
+    offenders = []
+    for path in root.rglob("*.py"):
+        if path in allowed:
+            continue
+        text = path.read_text(encoding="utf-8")
+        hits = [pattern for pattern in forbidden_patterns if pattern in text]
+        if hits:
+            offenders.append({"path": str(path.relative_to(root)), "hits": hits})
+    assert offenders == []

@@ -8,7 +8,7 @@ from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config, _raw, _config_path, AVAILABLE_MODELS, switch_model as _switch_model
 from ...llm.base import estimate_tokens
 from ...logger import logger
-from ..session_manager import SessionManager, cache_key, resolve_base, get_or_create_session, lead_tool_defs, _load_session_model
+from ..session_manager import SessionManager, cache_key, resolve_base, get_or_create_session, get_or_create_components, _load_session_model
 
 router = APIRouter()
 
@@ -87,9 +87,35 @@ async def get_system_prompt(username: str = Query(default=""), workspace: str = 
 
 
 @router.get("/config/tools")
-async def get_tools():
-    """获取工具定义（含字符数和 token 估算）"""
-    tools = lead_tool_defs()
+async def get_tools(username: str = Query(default=""), workspace: str = Query(default=""), session_id: str = Query(default="default")):
+    """获取当前会话工具定义（含字符数和 token 估算）。"""
+    from ...core import build_session_runtime
+    from ...core.runtime_context import SessionIdentity
+    from ..deps import SUBAGENT_LOADER, _MCP_LOADER
+
+    ws = workspace or None
+    base = resolve_base(username or "default", ws)
+    comp = get_or_create_components(username or "default", session_id or "default", base, ws)
+    runtime = build_session_runtime(
+        identity=SessionIdentity(
+            username=username or "default",
+            workspace=workspace or "default",
+            session_id=session_id or "default",
+            project_path=comp.get("project_path") or "",
+        ),
+        messages=[],
+        history_db=comp.get("history_db"),
+        memory_store=comp.get("store"),
+        skill_loader=comp.get("skill_loader"),
+        subagent_loader=SUBAGENT_LOADER,
+        bus=comp.get("bus"),
+        team_mgr=comp.get("team_mgr"),
+        blackboard=comp.get("blackboard"),
+        mcp_loader=_MCP_LOADER,
+        compactor=comp.get("compactor"),
+        context_builder=comp.get("ctx_builder"),
+    )
+    tools = [d for d in runtime.tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
     import json
     tools_json = json.dumps(tools, ensure_ascii=False)
     chars = len(tools_json)

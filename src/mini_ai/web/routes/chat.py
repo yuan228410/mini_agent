@@ -15,13 +15,14 @@ from pathlib import Path
 from fastapi import APIRouter, Query, WebSocket
 
 from ...config import MODEL_CONFIG, RequestContext, get_model_config
+from ...core.events import DisplayEvent, DisplayEventType
 from ...logger import logger
 from ...tools import inject_todos as _inject_todos
 from ...utils import now_ts
 from ..session_manager import (
     SessionManager, cache_key, ws_key, safe_queue_put,
     resolve_base, get_or_create_session, get_or_create_components,
-    build_system_prompt, lead_tool_defs,
+    build_system_prompt,
     _load_session_name, _save_session_name,
     _update_meta_cache, _build_meta,
 )
@@ -42,12 +43,30 @@ async def chat_ws_endpoint(ws: WebSocket):
     _write_lock = asyncio.Lock()
     _ws_username: str | None = None
 
-    async def _send(data: dict):
+    def _ws_event(event: DisplayEventType | str, **data) -> dict:
+        event_type = event if isinstance(event, DisplayEventType) else DisplayEventType(event)
+        return DisplayEvent(event_type, data).to_wire()
+
+    def _error_event(error: str, session_id: str | None = None) -> dict:
+        payload = {"error": error}
+        if session_id:
+            payload["session_id"] = session_id
+        return DisplayEvent(DisplayEventType.ERROR, payload).to_wire()
+
+    def _plan_event(kind: str, session_id: str | None = None, **data) -> dict:
+        payload = {"kind": kind}
+        payload.update(data)
+        if session_id:
+            payload["session_id"] = session_id
+        return DisplayEvent(DisplayEventType.PLAN_EVENT, payload).to_wire()
+
+    async def _send(data: dict | DisplayEvent):
+        wire = data.to_wire() if isinstance(data, DisplayEvent) else data
         async with _write_lock:
             try:
-                await ws.send_json(data)
+                await ws.send_json(wire)
             except Exception as e:
-                logger.warning(f'[Web] _send failed: {e}, event={data.get("event")}')
+                logger.warning(f'[Web] _send failed: {e}, event={wire.get("event")}')
 
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list | None = None, plan_turn: bool = False, approved_plan: dict | None = None):
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")
@@ -135,11 +154,11 @@ async def chat_ws_endpoint(ws: WebSocket):
                         break
         except Exception as e:
             logger.error(f"[Web] WS chat task error: {e}", exc_info=True)
-            await _send({"event": "error", "data": {"error": str(e), "session_id": sid}})
+            await _send(_error_event(str(e), sid))
 
         if aborted:
             logger.info(f"[Web] chat aborted sid={sid}")
-            await _send({"event": "aborted", "data": {"session_id": sid}})
+            await _send(_ws_event(DisplayEventType.ABORTED, session_id=sid))
             try:
                 future.cancel()
             except Exception:
@@ -155,13 +174,15 @@ async def chat_ws_endpoint(ws: WebSocket):
                 future.result()
             except Exception as e:
                 logger.error(f"[Web] chat runner ended without terminal event: {e}", exc_info=True)
-                await _send({"event": "error", "data": {"error": str(e), "session_id": sid}})
+                await _send(_error_event(str(e), sid))
             else:
                 logger.debug(f"[Web] sending done sid={sid} usage={usage}")
-                await _send({
-                    "event": "done",
-                    "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"], "session_id": sid}
-                })
+                await _send(_ws_event(
+                    DisplayEventType.DONE,
+                    prompt_tokens=usage["prompt_tokens"],
+                    completion_tokens=usage["completion_tokens"],
+                    session_id=sid,
+                ))
 
         current_task = asyncio.current_task()
         sm.release_active_task(session_key, current_task)
@@ -175,7 +196,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                     try:
                         data = json.loads(raw)
                     except json.JSONDecodeError:
-                        await _send({"event": "error", "data": {"error": "无效 JSON"}})
+                        await _send(_error_event("无效 JSON"))
                         continue
 
                     msg_type = data.get("type")
@@ -187,11 +208,11 @@ async def chat_ws_endpoint(ws: WebSocket):
                         continue
 
                     if msg_type == "ping":
-                        await _send({"event": "pong", "data": {}})
+                        await _send(_ws_event(DisplayEventType.PONG))
                         continue
 
                     if not _ws_username:
-                        await _send({"event": "error", "data": {"error": "请先发送 login 消息"}})
+                        await _send(_error_event("请先发送 login 消息"))
                         continue
 
                     if msg_type == "abort":
@@ -211,7 +232,7 @@ async def chat_ws_endpoint(ws: WebSocket):
 
                     if msg_type and msg_type.startswith("plan."):
                         if not session_id:
-                            await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                            await _send(_error_event("请先选择会话"))
                             continue
                         base = resolve_base(username, ws_name)
                         sid, messages = get_or_create_session(username, session_id, base, ws_name)
@@ -224,13 +245,13 @@ async def chat_ws_endpoint(ws: WebSocket):
                         try:
                             if msg_type == "plan.start":
                                 artifact = plan_svc.start(session_key=session_key, sm=sm, store=store, goal=data.get("goal", ""))
-                                await _send({"event": "plan_event", "data": {"kind": "state.changed", "state": artifact.status, "mode": "plan", "session_id": sid}})
-                                await _send({"event": "plan_event", "data": {"kind": "artifact.updated", "plan": artifact.to_dict(), "session_id": sid}})
+                                await _send(_plan_event("state.changed", sid, state=artifact.status, mode="plan"))
+                                await _send(_plan_event("artifact.updated", sid, plan=artifact.to_dict()))
                                 continue
                             if msg_type == "plan.select_option":
                                 artifact = plan_svc.select_option(session_key=session_key, sm=sm, store=store, plan_id=data.get("plan_id", ""), option_id=data.get("option_id", ""))
-                                await _send({"event": "plan_event", "data": {"kind": "option.selected", "option_id": artifact.selected_option_id, "plan": artifact.to_dict(), "session_id": sid}})
-                                await _send({"event": "plan_event", "data": {"kind": "approval.required", "plan": artifact.to_dict(), "plan_id": artifact.plan_id, "revision": artifact.revision, "session_id": sid}})
+                                await _send(_plan_event("option.selected", sid, option_id=artifact.selected_option_id, plan=artifact.to_dict()))
+                                await _send(_plan_event("approval.required", sid, plan=artifact.to_dict(), plan_id=artifact.plan_id, revision=artifact.revision))
                                 continue
                             if msg_type == "plan.apply_decision":
                                 artifact = plan_svc.apply_decision(
@@ -244,37 +265,37 @@ async def chat_ws_endpoint(ws: WebSocket):
                                     custom_value=data.get("custom_value", ""),
                                     revision=int(data["revision"]) if data.get("revision") is not None else None,
                                 )
-                                await _send({"event": "plan_event", "data": {"kind": "decision.applied", "plan": artifact.to_dict(), "step_id": data.get("step_id", ""), "decision_id": data.get("decision_id", ""), "session_id": sid}})
-                                await _send({"event": "plan_event", "data": {"kind": "artifact.updated", "plan": artifact.to_dict(), "session_id": sid}})
+                                await _send(_plan_event("decision.applied", sid, plan=artifact.to_dict(), step_id=data.get("step_id", ""), decision_id=data.get("decision_id", "")))
+                                await _send(_plan_event("artifact.updated", sid, plan=artifact.to_dict()))
                                 if artifact.status == "awaiting_approval":
-                                    await _send({"event": "plan_event", "data": {"kind": "approval.required", "plan": artifact.to_dict(), "plan_id": artifact.plan_id, "revision": artifact.revision, "session_id": sid}})
+                                    await _send(_plan_event("approval.required", sid, plan=artifact.to_dict(), plan_id=artifact.plan_id, revision=artifact.revision))
                                 continue
                             if msg_type == "plan.cancel":
                                 plan_svc.cancel(session_key=session_key, sm=sm, store=store)
-                                await _send({"event": "plan_event", "data": {"kind": "cancelled", "mode": "chat", "session_id": sid}})
+                                await _send(_plan_event("cancelled", sid, mode="chat"))
                                 continue
                             if msg_type == "plan.approve":
                                 artifact = plan_svc.approve(session_key=session_key, sm=sm, store=store, plan_id=data.get("plan_id", ""), revision=int(data.get("revision") or 0))
                                 executing_artifact = plan_svc.mark_executing(session_key=session_key, sm=sm, store=store, artifact=artifact)
-                                await _send({"event": "plan_event", "data": {"kind": "approved", "plan": artifact.to_dict(), "session_id": sid}})
-                                await _send({"event": "plan_event", "data": {"kind": "execution.started", "plan": executing_artifact.to_dict(), "mode": "execute", "session_id": sid}})
+                                await _send(_plan_event("approved", sid, plan=artifact.to_dict()))
+                                await _send(_plan_event("execution.started", sid, plan=executing_artifact.to_dict(), mode="execute"))
                                 task = asyncio.create_task(_run_chat(sid, username, "", ws_name, None, False, executing_artifact.to_dict()))
                                 if not sm.claim_active_task(session_key, task):
                                     task.cancel()
-                                    await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                                    await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
                                 continue
                             if msg_type in ("plan.message", "plan.revise"):
                                 user_message = data.get("message", "").strip()
                                 if not user_message:
-                                    await _send({"event": "error", "data": {"error": "计划消息不能为空", "session_id": sid}})
+                                    await _send(_error_event("计划消息不能为空", sid))
                                     continue
                                 task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, data.get("images"), True, None))
                                 if not sm.claim_active_task(session_key, task):
                                     task.cancel()
-                                    await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                                    await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
                                 continue
                         except Exception as e:
-                            await _send({"event": "plan_event", "data": {"kind": "error", "error": str(e), "session_id": sid}})
+                            await _send(_plan_event("error", sid, error=str(e)))
                             continue
 
                     if msg_type != "chat":
@@ -287,19 +308,19 @@ async def chat_ws_endpoint(ws: WebSocket):
                     if user_message == "/compact":
                         ws_name = data.get("workspace")
                         if not session_id:
-                            await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                            await _send(_error_event("请先选择会话"))
                             continue
 
                         sid, messages = get_or_create_session(username, session_id, workspace=ws_name, create=False)
                         if messages is None:
-                            await _send({"event": "error", "data": {"error": f"会话 {session_id} 不存在"}})
+                            await _send(_error_event(f"会话 {session_id} 不存在"))
                             continue
 
                         comp = get_or_create_components(username, sid, resolve_base(username, ws_name), ws_name)
                         non_system = [m for m in messages if m["role"] != "system"]
 
                         if len(non_system) <= comp["compactor"].keep_recent:
-                            await _send({"event": "info", "data": {"message": f"消息数({len(non_system)})未超过保留阈值({comp['compactor'].keep_recent})，无需压缩", "session_id": sid}})
+                            await _send(_ws_event(DisplayEventType.INFO, message=f"消息数({len(non_system)})未超过保留阈值({comp['compactor'].keep_recent})，无需压缩", session_id=sid))
                             continue
 
                         before = len(non_system)
@@ -313,16 +334,16 @@ async def chat_ws_endpoint(ws: WebSocket):
                             from ...llm import chat
                             messages[:] = comp["compactor"].compact(chat, messages, ctx=ctx)
                             after = len([m for m in messages if m["role"] != "system"])
-                            await _send({"event": "info", "data": {"message": f"✅ 压缩完成：{before} → {after} 条消息", "session_id": sid}})
+                            await _send(_ws_event(DisplayEventType.INFO, message=f"✅ 压缩完成：{before} → {after} 条消息", session_id=sid))
                         except Exception as e:
-                            await _send({"event": "error", "data": {"error": f"压缩失败: {e}", "session_id": sid}})
+                            await _send(_error_event(f"压缩失败: {e}", sid))
                         continue
 
                     # 处理 /act 命令（批准当前计划并执行）
                     if user_message == "/act":
                         ws_name = data.get("workspace")
                         if not session_id:
-                            await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                            await _send(_error_event("请先选择会话"))
                             continue
                         base = resolve_base(username, ws_name)
                         sid, _ = get_or_create_session(username, session_id, base, ws_name)
@@ -332,7 +353,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         store = PlanStore(comp["history_db"], ws_name or "default", sid)
                         artifact_dict = sm.get_plan_state(session_key).current_plan or store.current()
                         if not artifact_dict:
-                            await _send({"event": "plan_event", "data": {"kind": "error", "error": "当前没有可审批的计划", "session_id": sid}})
+                            await _send(_plan_event("error", sid, error="当前没有可审批的计划"))
                             continue
                         try:
                             plan_svc = PlanService()
@@ -344,18 +365,18 @@ async def chat_ws_endpoint(ws: WebSocket):
                                 revision=int(artifact_dict.get("revision") or 0),
                             )
                             executing_artifact = plan_svc.mark_executing(session_key=session_key, sm=sm, store=store, artifact=artifact)
-                            await _send({"event": "plan_event", "data": {"kind": "approved", "plan": artifact.to_dict(), "session_id": sid}})
-                            await _send({"event": "plan_event", "data": {"kind": "execution.started", "plan": executing_artifact.to_dict(), "mode": "execute", "session_id": sid}})
+                            await _send(_plan_event("approved", sid, plan=artifact.to_dict()))
+                            await _send(_plan_event("execution.started", sid, plan=executing_artifact.to_dict(), mode="execute"))
                             task = asyncio.create_task(_run_chat(sid, username, "", ws_name, None, False, executing_artifact.to_dict()))
                             if not sm.claim_active_task(session_key, task):
                                 task.cancel()
-                                await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                                await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
                         except Exception as e:
-                            await _send({"event": "plan_event", "data": {"kind": "error", "error": str(e), "session_id": sid}})
+                            await _send(_plan_event("error", sid, error=str(e)))
                         continue
 
                     if not session_id:
-                        await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                        await _send(_error_event("请先选择会话"))
                         continue
 
                     ws_name = data.get("workspace")
@@ -369,7 +390,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                     )
                     if not sm.claim_active_task(session_key, task):
                         task.cancel()
-                        await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                        await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
                         continue
 
                 except asyncio.TimeoutError:

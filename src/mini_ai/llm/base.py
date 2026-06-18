@@ -4,6 +4,7 @@ import threading
 import requests
 
 from ..config import MODEL_CONFIG
+from ..core.messages import to_provider_messages
 
 
 def get_config(ctx=None):
@@ -46,73 +47,8 @@ def get_reasoning_effort(ctx=None):
 _INTERNAL_FIELDS = frozenset(("_pruned", "_prune_level", "_is_summary", "thinking"))
 
 def _strip_internal_fields(messages: list[dict]) -> list[dict]:
-    """剥离内部标记字段，返回清理后的消息列表（不修改原列表）
-
-    清理内容：
-    - _pruned / _prune_level / _is_summary：裁剪增量标记
-    - thinking：思考过程（仅供前端显示，LLM 不需要，每轮省 ~165-660 token）
-    - tool_calls[]. _result：工具执行结果缓存（已通过 tool 消息传给 LLM，重复浪费 token）
-    """
-    needs_strip = False
-    for m in messages:
-        if _INTERNAL_FIELDS & m.keys():
-            needs_strip = True
-            break
-        tcs = m.get("tool_calls")
-        if tcs and any(tc.get("_result") is not None for tc in tcs if isinstance(tc, dict)):
-            needs_strip = True
-            break
-        if m.get("role") == "tool":
-            needs_strip = True
-            break
-    if not needs_strip:
-        return messages
-    result = []
-    for m in messages:
-        d = {k: v for k, v in m.items() if k not in _INTERNAL_FIELDS}
-        tcs = d.get("tool_calls")
-        if tcs:
-            has_result = any(isinstance(tc, dict) and tc.get("_result") is not None for tc in tcs)
-            if has_result:
-                d["tool_calls"] = [
-                    {k: v for k, v in tc.items() if k != "_result"} if isinstance(tc, dict) and "_result" in tc else tc
-                    for tc in tcs
-                ]
-        result.append(d)
-
-    # 结构校验：删除孤立的 tool 消息（没有对应 assistant.tool_calls 的 tool 消息）
-    has_assistant_tool_calls = any(
-        m.get("role") == "assistant" and m.get("tool_calls") for m in result
-    )
-    if has_assistant_tool_calls:
-        valid_tool_ids: set[str] = set()
-        for m in result:
-            if m.get("role") == "assistant" and m.get("tool_calls"):
-                for tc in m["tool_calls"]:
-                    if isinstance(tc, dict) and tc.get("id"):
-                        valid_tool_ids.add(tc["id"])
-        cleaned = []
-        orphan_count = 0
-        for m in result:
-            if m.get("role") == "tool":
-                tc_id = m.get("tool_call_id", "")
-                if tc_id and tc_id not in valid_tool_ids:
-                    orphan_count += 1
-                    continue
-            cleaned.append(m)
-        if orphan_count:
-            from ..logger import logger as _log
-            _log.warning(f"[strip] removed {orphan_count} orphan tool messages")
-        result = cleaned
-    else:
-        # 没有 assistant.tool_calls → 所有 tool 消息都是孤立的，全部删除
-        tool_count = sum(1 for m in result if m.get("role") == "tool")
-        if tool_count:
-            result = [m for m in result if m.get("role") != "tool"]
-            from ..logger import logger as _log
-            _log.warning(f"[strip] removed {tool_count} orphan tool messages (no assistant.tool_calls)")
-
-    return result
+    """剥离内部标记字段，返回 provider-safe 消息列表（不修改原列表）。"""
+    return to_provider_messages(messages)
 
 
 

@@ -111,6 +111,11 @@ def get_todos(session_id: str | None = None) -> list[dict]:
         return list(_get_store().items)
 
 
+def render_current_todos() -> str:
+    """Render todos for the current context-bound session without touching ToolRegistry."""
+    return _get_store().render()
+
+
 def set_todos(session_id: str, todos: list[dict]) -> str:
     """直接设置指定会话的 todos，供计划审批/执行入口快速初始化。"""
     with _stores_lock:
@@ -140,8 +145,7 @@ def cleanup_session(sid: str):
 
 def inject_todos(messages: list[dict]):
     """将当前任务计划注入 system prompt 的尾部（供 main.py 和 chat.py 共用）"""
-    from . import render_todos
-    todos_text = render_todos()
+    todos_text = render_current_todos()
     base = messages[0]["content"]
     marker = "\n\n## 当前任务计划"
     if marker in base:

@@ -6,8 +6,9 @@ HistoryPersister 封装 tool/assistant/deferred-assistant 三种消息的持久�
 from __future__ import annotations
 import json
 
-from ..logger import logger
 from ..plan.artifact_parser import strip_artifact_blocks
+from .messages import ChatMessage, MessageRole
+from .tool_models import ToolCall, ToolResult
 
 
 class HistoryPersister:
@@ -26,7 +27,26 @@ class HistoryPersister:
         self._ws = workspace
         self._sid = session_id
         self._sanitize_plan_artifacts = sanitize_plan_artifacts
-        self._deferred_assistant: list[dict] = []
+        self._deferred_assistant: list[ChatMessage] = []
+
+    def _assistant_persistence_payload(self, msg: ChatMessage, *, tool_calls: list[ToolCall] | None = None) -> tuple[str, str]:
+        """Return DB content/metadata for an assistant message via DTO fields."""
+        meta: dict = {}
+        if msg.extra.get("thinking"):
+            meta["thinking"] = msg.extra["thinking"]
+        if msg.extra.get("kind"):
+            meta["kind"] = msg.extra["kind"]
+        if msg.extra.get("plan"):
+            meta["plan"] = msg.extra["plan"]
+        if tool_calls:
+            meta["tool_calls"] = [tc.to_dict(include_result=True) for tc in tool_calls]
+
+        content = msg.content or ""
+        if self._sanitize_plan_artifacts:
+            content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
+        elif msg.extra.get("kind") == "plan_discussion":
+            content = strip_artifact_blocks(content)
+        return content, json.dumps(meta, ensure_ascii=False) if meta else ""
 
     def __call__(self, msg: dict) -> None:
         """persist_fn 回调：根据 role 写入 DB
@@ -35,34 +55,22 @@ class HistoryPersister:
         - assistant 消息（无 tool_calls）：立即写入
         - assistant 消息（有 tool_calls）：延迟写入（等 _result 回填后一起写）
         """
-        if msg["role"] == "tool":
+        chat_msg = ChatMessage.from_dict(msg)
+        if chat_msg.role is MessageRole.TOOL:
+            tool_result = ToolResult.from_message(chat_msg.to_dict())
             self._db.append(
-                self._ws, self._sid, "tool", msg.get("content", ""),
+                self._ws, self._sid, MessageRole.TOOL.value, tool_result.content,
                 metadata=json.dumps({
-                    "name": msg.get("name", ""),
-                    "tool_call_id": msg.get("tool_call_id", ""),
-                }),
+                    "name": tool_result.name,
+                    "tool_call_id": tool_result.tool_call_id,
+                }, ensure_ascii=False),
             )
-        elif msg["role"] == "assistant":
-            if msg.get("tool_calls"):
-                self._deferred_assistant.append(msg)
+        elif chat_msg.role is MessageRole.ASSISTANT:
+            if chat_msg.tool_calls:
+                self._deferred_assistant.append(chat_msg)
             else:
-                meta = {}
-                if msg.get("thinking"):
-                    meta["thinking"] = msg["thinking"]
-                if msg.get("kind"):
-                    meta["kind"] = msg["kind"]
-                if msg.get("plan"):
-                    meta["plan"] = msg["plan"]
-                content = msg.get("content", "")
-                if self._sanitize_plan_artifacts:
-                    content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
-                elif msg.get("kind") == "plan_discussion":
-                    content = strip_artifact_blocks(content)
-                self._db.append(
-                    self._ws, self._sid, "assistant", content,
-                    metadata=json.dumps(meta) if meta else "",
-                )
+                content, metadata = self._assistant_persistence_payload(chat_msg)
+                self._db.append(self._ws, self._sid, MessageRole.ASSISTANT.value, content, metadata=metadata)
 
     def flush_deferred(self, messages: list[dict]) -> None:
         """将 deferred assistant 消息的 _result 回填并持久化
@@ -81,32 +89,18 @@ class HistoryPersister:
 
         for am in self._deferred_assistant:
             enriched_tcs = []
-            if am.get("tool_calls"):
-                for tc in am["tool_calls"]:
-                    tc_id = tc.get("id", "")
-                    result = tool_results.get(tc_id, "")
-                    tc["_result"] = result
-                    enriched_tcs.append(tc)
+            for tc in am.tool_calls:
+                result = tool_results.get(tc.id, "")
+                enriched_tcs.append(ToolCall(
+                    id=tc.id,
+                    function=tc.function,
+                    type=tc.type,
+                    result_preview=result,
+                    extra=dict(tc.extra),
+                ))
 
-            meta = {}
-            if am.get("thinking"):
-                meta["thinking"] = am["thinking"]
-            if am.get("kind"):
-                meta["kind"] = am["kind"]
-            if am.get("plan"):
-                meta["plan"] = am["plan"]
-            if enriched_tcs:
-                meta["tool_calls"] = enriched_tcs
-
-            content = am.get("content", "")
-            if self._sanitize_plan_artifacts:
-                content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
-            elif am.get("kind") == "plan_discussion":
-                content = strip_artifact_blocks(content)
-            self._db.append(
-                self._ws, self._sid, "assistant", content,
-                metadata=json.dumps(meta) if meta else "",
-            )
+            content, metadata = self._assistant_persistence_payload(am, tool_calls=enriched_tcs)
+            self._db.append(self._ws, self._sid, MessageRole.ASSISTANT.value, content, metadata=metadata)
 
         self._deferred_assistant.clear()
 

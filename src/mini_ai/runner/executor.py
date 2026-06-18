@@ -95,9 +95,7 @@ class ToolExecutor:
         
         # 处理 thinking
         if msg and msg.get("thinking") and self.display:
-            self.display.thinking_start()
-            self.display._thinking_buf = msg["thinking"]
-            self.display.thinking_end()
+            self.display.thinking_full(msg["thinking"])
         
         return msg
     

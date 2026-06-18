@@ -16,6 +16,7 @@ from ..runner import run_tool_loop
 from ..tools import inject_todos as _inject_todos
 from ..utils import now_ts
 from .persister import HistoryPersister
+from .runtime_context import SessionRuntimeContext
 
 
 @dataclass
@@ -51,19 +52,35 @@ class ApplicationService:
     def run_turn(
         self,
         *,
-        messages: list[dict],
-        tools: list[dict],
-        history_db,
-        workspace: str,
-        session_id: str,
+        messages: list[dict] | None = None,
+        tools: list[dict] | None = None,
+        history_db=None,
+        workspace: str | None = None,
+        session_id: str | None = None,
         compactor=None,
         bus=None,
         plan_store: PlanStore | None = None,
         plan_state: Any = None,
         user_text_for_history: str | None = None,
         options: RunTurnOptions | None = None,
+        runtime: SessionRuntimeContext | None = None,
     ) -> RunTurnResult:
+        if runtime is not None:
+            messages = runtime.messages
+            history_db = runtime.history_db
+            workspace = runtime.identity.workspace
+            session_id = runtime.identity.session_id
+            compactor = runtime.compactor
+            bus = runtime.bus
+            options = options or RunTurnOptions()
+            options.display = options.display if options.display is not None else runtime.tool_context.display
+            options.request_context = options.request_context or runtime.request_context
+            options.tool_registry = options.tool_registry or runtime.tool_registry
         options = options or RunTurnOptions()
+        if messages is None or tools is None or history_db is None or workspace is None or session_id is None:
+            raise ValueError("ApplicationService.run_turn requires messages/tools/history_db/workspace/session_id or runtime")
+        if options.tool_registry is None:
+            raise ValueError("ApplicationService.run_turn requires a session-local tool_registry")
         ctx = options.request_context
         owns_ctx = ctx is None
         if ctx is None:

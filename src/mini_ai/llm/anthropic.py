@@ -14,7 +14,6 @@ from .base import (
     _strip_internal_fields, commit_usage,
 )
 from ..logger import logger
-from ..tools import get_definitions
 from ..exceptions import LLMError
 from .retry import RetryStrategy
 
@@ -203,7 +202,7 @@ def chat(messages, tools=True, ctx=None):
         payload["temperature"] = 1
 
     if tools is True:
-        payload["tools"] = _tools_openai_to_anthropic(get_definitions())
+        raise ValueError("LLM provider requires explicit tool definitions; tools=True global lookup is not supported")
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 
@@ -337,7 +336,7 @@ def chat_stream(messages, tools=True, ctx=None, abort_event=None):
         payload["temperature"] = 1
 
     if tools is True:
-        payload["tools"] = _tools_openai_to_anthropic(get_definitions())
+        raise ValueError("LLM provider requires explicit tool definitions; tools=True global lookup is not supported")
     elif tools:
         payload["tools"] = _tools_openai_to_anthropic(tools)
 

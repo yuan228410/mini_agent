@@ -34,7 +34,8 @@ class ChatSession:
     def __init__(self, messages: list[dict], compactor, history_db,
                  bus=None, team_mgr=None, lead_event: threading.Event | None = None,
                  context_length: int = 256000,
-                 workspace: str = "", session_id: str = ""):
+                 workspace: str = "", session_id: str = "",
+                 tool_registry=None):
         self.messages = messages
         self.compactor = compactor
         self.history_db = history_db
@@ -44,13 +45,15 @@ class ChatSession:
         self.context_length = context_length
         self.workspace = workspace
         self.session_id = session_id
+        self.tool_registry = tool_registry
         self._persister = HistoryPersister(history_db, workspace, session_id)
 
     def run(self, user_input: str, tools: list[dict],
             *, streaming: bool = False, display=None, inject_fn=None,
             abort_event: threading.Event | None = None,
             max_turns: int = 0, ctx=None,
-            persist_fn=None) -> dict | None:
+            persist_fn=None,
+            tool_registry=None) -> dict | None:
         """执行一轮对话
 
         Args:
@@ -90,6 +93,7 @@ class ChatSession:
             bus=self.bus,
             context_length=self.context_length,
             compactor=self.compactor,
+            tool_registry=tool_registry or self.tool_registry,
         )
 
         # flush deferred assistant

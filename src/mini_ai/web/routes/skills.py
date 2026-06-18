@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ...config import DATA_DIR, SKILL_PATHS, user_data_dir
 from ...skills import SkillLoader
+from ...tools import install_skill as install_skill_tool
 
 router = APIRouter()
 
@@ -80,9 +81,9 @@ async def install_skill(
     workspace: str = Query(default=""),
 ):
     """安装技能"""
-    from ...tools import dispatch
-    result = dispatch("install_skill", {"source": source, "level": level})
-    
+    loader = _get_skill_loader(username, workspace)
+    result = install_skill_tool._run_with_loader(loader, {"source": source, "level": level})
+
     if result.startswith("Error:") or "失败" in result:
         return {"ok": False, "error": result}
     

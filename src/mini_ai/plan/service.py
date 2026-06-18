@@ -206,8 +206,11 @@ class PlanService:
             return ""
         from ..tools.update_todos import set_todos
         result = set_todos(session_key, todos)
-        if display and hasattr(display, "tool_result") and result:
-            display.tool_result("update_todos", result, 0, "")
+        if display and result:
+            try:
+                display.todos_updated(result[6:] if result.startswith("📋TODO\n") else result)
+            except Exception:
+                pass
         return result
 
     def _has_unresolved_interactions(self, artifact: PlanArtifact) -> bool:
@@ -235,5 +238,8 @@ class PlanService:
         )
 
     def _emit(self, display, kind: str, **data) -> None:
-        if display and hasattr(display, "plan_event"):
-            display.plan_event(kind, **data)
+        if display:
+            try:
+                display.plan_event(kind, **data)
+            except Exception:
+                pass

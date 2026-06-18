@@ -5,15 +5,19 @@ from pathlib import Path
 from ..config import PACKAGE_DIR
 from ..logger import logger
 
+_contextvars = __import__("contextvars")
 _loader = None
 _subagents_dir = None
+_registry_ctx = _contextvars.ContextVar("register_subagent_registry", default=None)
 
 
-def configure(loader=None):
+def configure(loader=None, registry=None):
     global _loader, _subagents_dir
     if loader is not None:
         _loader = loader
         _subagents_dir = loader.subagents_dir
+    if registry is not None:
+        _registry_ctx.set(registry)
 
 
 definition = {
@@ -43,9 +47,9 @@ def _rebuild_dispatch_definition():
     new_def = dsa.build_definition(subagent_list)
     dsa._definition = new_def
     dsa.definition = new_def
-    # 同步更新 ToolRegistry 中的缓存定义
-    from ..tools import _registry
-    _registry._by_name["dispatch_subagent"] = dsa
+    registry = _registry_ctx.get()
+    if registry is not None and "dispatch_subagent" in getattr(registry, "_by_name", {}):
+        registry._by_name["dispatch_subagent"] = dsa
     logger.info(f"[注册子代理] 已刷新 dispatch_subagent 工具定义")
 
 

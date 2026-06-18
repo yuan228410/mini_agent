@@ -1211,7 +1211,7 @@ async function sendMessage(text: string, images?: ImageFile[]) {
   }
   if (text === '/tools') {
     try {
-      const resp = await getTools()
+      const resp = await getTools(activeSessionId.value, props.workspace || undefined)
       const toolNames = resp.tool_names.join(', ')
       const content = '🔧 工具定义（' + resp.count + ' 个工具, ' + resp.chars + ' 字符, ~' + resp.tokens + ' tokens）：\n\n工具列表：' + toolNames + '\n\n完整定义：\n\n```json\n' + JSON.stringify(resp.tools, null, 2) + '\n```'
       s.messages = [...s.messages, { role: 'assistant', content: content, timestamp: _localTs() }]
