@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { marked } from 'marked'
-import hljs from 'highlight.js'
+import hljs from '../highlight'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
 import PlanArtifactCard from './PlanArtifactCard.vue'

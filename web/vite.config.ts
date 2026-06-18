@@ -8,13 +8,4 @@ export default defineConfig({
       '/api': 'http://localhost:8765',
     },
   },
-  build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          'highlight': ['highlight.js'],
-        },
-      },
-    },
-  },
 })

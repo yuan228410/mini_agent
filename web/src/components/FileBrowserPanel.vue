@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onUnmounted, computed } from 'vue'
-import hljs from 'highlight.js'
+import hljs from '../highlight'
 
 interface FileItem {
   name: string
