@@ -230,6 +230,45 @@ def test_history_db_batch_normalizes_message_metadata(tmp_path):
     db.close()
 
 
+def test_team_state_boundaries_use_structured_models(tmp_path):
+    from mini_ai.team.blackboard import Blackboard
+    from mini_ai.team.bus import MessageBus
+    from mini_ai.team.task_graph import TaskGraph, TaskNode, TaskStatus
+
+    bb_path = tmp_path / "blackboard.json"
+    bb = Blackboard(bb_path)
+    bb.put("dep", "value", author="researcher")
+    detailed = bb.snapshot(detailed=True)
+    assert detailed["dep"]["author"] == "researcher"
+    assert json.loads(bb_path.read_text())["dep"]["value"] == "value"
+    assert Blackboard(bb_path).get("dep") == "value"
+
+    bus = MessageBus(tmp_path / "inbox")
+    assert bus.send("lead", "worker", "hello") == "已送达 worker 的 inbox"
+    inbox = bus.read_inbox("worker")
+    assert inbox == [{
+        "type": "message",
+        "from": "lead",
+        "content": "hello",
+        "timestamp": inbox[0]["timestamp"],
+    }]
+
+    graph = TaskGraph(bb)
+    task = TaskNode(id="task", agent="subagent:tester", prompt="x" * 120, depends_on=["dep"])
+    graph.add_task(task)
+    assert task.workflow_info().to_dict() == {
+        "id": "task",
+        "agent": "subagent:tester",
+        "prompt": "x" * 100 + "...",
+        "depends_on": ["dep"],
+    }
+    graph.mark_running("task")
+    graph.mark_done("task", "r" * 220)
+    end = graph.nodes["task"].workflow_end_event().to_dict()
+    assert end["status"] == TaskStatus.DONE.value
+    assert end["result_preview"] == "r" * 200 + "..."
+
+
 def test_core_modules_do_not_import_web_display():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     forbidden_roots = [root / "core", root / "runner", root / "team", root / "tools"]

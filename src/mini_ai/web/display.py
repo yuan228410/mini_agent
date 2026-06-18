@@ -5,6 +5,7 @@ import threading
 from typing import Any
 
 from ..core.events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
+from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
 
 # 全局事件序号计数器（每个会话独立）
 _EVENT_SEQS: dict[str, int] = {}
@@ -304,19 +305,21 @@ class WebDisplay:
             payload["teammate"] = self._teammate
         self._push(DisplayEventType.AGENT_START, payload)
 
-    def workflow_start(self, tasks: list[dict[str, Any]], total: int):
-        self._push(DisplayEventType.WORKFLOW_START, {"tasks": tasks, "total": total})
+    def workflow_start(self, tasks: list[WorkflowTaskInfo | dict[str, Any]], total: int):
+        payload_tasks = [task.to_dict() if isinstance(task, WorkflowTaskInfo) else task for task in tasks]
+        self._push(DisplayEventType.WORKFLOW_START, {"tasks": payload_tasks, "total": total})
 
     def workflow_task_start(self, task_id: str, agent: str, prompt: str):
-        self._push(DisplayEventType.WORKFLOW_TASK_START, {"id": task_id, "agent": agent, "prompt": prompt})
+        self.workflow_task_start_event(WorkflowTaskStart(id=task_id, agent=agent, prompt=prompt))
+
+    def workflow_task_start_event(self, task: WorkflowTaskStart):
+        self._push(DisplayEventType.WORKFLOW_TASK_START, task.to_dict())
 
     def workflow_task_end(self, task_id: str, status: str, result_preview: str | None = None, error: str | None = None):
-        payload = {"id": task_id, "status": status}
-        if result_preview is not None:
-            payload["result_preview"] = result_preview
-        if error is not None:
-            payload["error"] = error
-        self._push(DisplayEventType.WORKFLOW_TASK_END, payload)
+        self.workflow_task_end_event(WorkflowTaskEnd(id=task_id, status=status, result_preview=result_preview, error=error))
+
+    def workflow_task_end_event(self, task: WorkflowTaskEnd):
+        self._push(DisplayEventType.WORKFLOW_TASK_END, task.to_dict())
 
     def workflow_end(self, elapsed: float, completed: int, failed: int, total: int):
         self._push(DisplayEventType.WORKFLOW_END, {"elapsed": elapsed, "completed": completed, "failed": failed, "total": total})

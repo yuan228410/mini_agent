@@ -9,6 +9,7 @@ from rich.rule import Rule
 from rich.text import Text
 
 from ..core.events import DisplayEventType
+from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
 from ..logger import logger
 
 _IS_TTY = sys.stdout.isatty()
@@ -97,17 +98,25 @@ class Display:
     def agent_start(self, agent_type: str, task: str = "", role: str = "", max_turns: int | None = None):
         self.emit(DisplayEventType.AGENT_START, {"agent_type": agent_type, "task": task, "role": role, "max_turns": max_turns})
 
-    def workflow_start(self, tasks: list[dict[str, Any]], total: int):
+    def workflow_start(self, tasks: list[WorkflowTaskInfo | dict[str, Any]], total: int):
         self.info(f"▸ 工作流启动：{total} 个任务")
 
     def workflow_task_start(self, task_id: str, agent: str, prompt: str):
-        self.info(f"  ▶ [{task_id}] {agent}: {prompt}")
+        self.workflow_task_start_event(WorkflowTaskStart(id=task_id, agent=agent, prompt=prompt))
+
+    def workflow_task_start_event(self, task: WorkflowTaskStart):
+        self.info(f"  ▶ [{task.id}] {task.agent}: {task.prompt}")
 
     def workflow_task_end(self, task_id: str, status: str, result_preview: str | None = None, error: str | None = None):
-        if status == "done":
-            self.info(f"  ✓ [{task_id}] 完成")
+        self.workflow_task_end_event(WorkflowTaskEnd(id=task_id, status=status, result_preview=result_preview, error=error))
+
+    def workflow_task_end_event(self, task: WorkflowTaskEnd):
+        if task.status == "done":
+            self.info(f"  ✓ [{task.id}] 完成")
+        elif task.status == "skipped":
+            self.info(f"  ⏭ [{task.id}] 跳过：{task.error or task.status}")
         else:
-            self.error(f"  ✗ [{task_id}] {error or status}")
+            self.error(f"  ✗ [{task.id}] {task.error or task.status}")
 
     def workflow_end(self, elapsed: float, completed: int, failed: int, total: int):
         self.info(f"▸ 工作流结束：{completed}/{total} 完成，失败 {failed}，耗时 {elapsed:.1f}s")

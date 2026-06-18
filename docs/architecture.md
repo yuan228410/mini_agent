@@ -156,7 +156,7 @@ Web 端由 `src/mini_ai/web/display.py` 将协议调用转换为 WebSocket 事�
 
 前端 `web/src/api.ts` 使用 `WsEvent` discriminated union 镜像后端事件类型，`ChatView.vue` 等组件按事件类型安全分发，减少后端事件字符串和前端处理逻辑漂移。
 
-核心消息和工具调用使用 DTO 作为边界：
+核心消息、工具调用和 team/workflow 状态使用 DTO 作为边界：
 
 - `src/mini_ai/core/messages.py`
   - `MessageRole`
@@ -167,8 +167,13 @@ Web 端由 `src/mini_ai/web/display.py` 将协议调用转换为 WebSocket 事�
   - `ToolFunctionCall`
   - `ToolCall`
   - `ToolResult`
+- `src/mini_ai/team/models.py`
+  - `InboxMessageType` / `InboxMessage`
+  - `BlackboardEntry`
+  - `WorkflowTaskInfo`
+  - `WorkflowTaskStart` / `WorkflowTaskEnd`
 
-当前仍允许 provider/persistence wire 层使用 `dict`，但新逻辑应先转换为 DTO，再由 DTO 输出 provider-safe 或 persistence-safe 字典。
+当前仍允许 provider/persistence/WebSocket/tool 输出层使用 `dict` wire 格式，但新逻辑应先转换为 DTO，再由 DTO 输出 provider-safe、persistence-safe 或 frontend-safe 字典。
 
 ---
 
@@ -349,7 +354,7 @@ src/mini_ai/
 ├── memory/              # 记忆系统（store + compactor + context_pruner + history_db）
 ├── runner/              # Agent 执行循环（state + executor + error_handler + loop）
 ├── tools/               # 工具系统（ToolBase + ToolRegistry + ToolMetadata + registry-local cache + 25+ 工具模块）
-├── team/                # 多 Agent 编排（bus + manager + blackboard + task_graph + orchestrator）
+├── team/                # 多 Agent 编排（models + bus + manager + blackboard + task_graph + orchestrator）
 ├── subagents/           # 子代理定义（coder/researcher/reviewer/tester/planner）
 ├── web/                 # Web 界面
 │   ├── session_manager.py   # SessionState + SessionManager（统一会话状态管理）

@@ -22,6 +22,7 @@ class Orchestrator:
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
+        self._emitted_task_end: set[str] = set()
 
     def _push_event(self, event: str, data: dict):
         """通过 DisplayProtocol 推送工作流事件。"""
@@ -34,20 +35,32 @@ class Orchestrator:
         else:
             logger.debug(f"[Orchestrator] display 为空，跳过事件: {event}")
 
+    def _emit_task_end(self, task: TaskNode) -> None:
+        if task.id in self._emitted_task_end:
+            return
+        self._emitted_task_end.add(task.id)
+        if not self._display:
+            return
+        end_event = task.workflow_end_event()
+        try:
+            if hasattr(self._display, "workflow_task_end_event"):
+                self._display.workflow_task_end_event(end_event)
+            else:
+                self._display.workflow_task_end(
+                    end_event.id,
+                    end_event.status,
+                    result_preview=end_event.result_preview,
+                    error=end_event.error,
+                )
+        except Exception:
+            self._push_event("task_end", end_event.to_dict())
+
     def run(self, timeout: int = 1800) -> str:
         logger.info(f"[Orchestrator] 启动，{len(self.graph.nodes)} 个任务，超时 {timeout}s")
         start = time.monotonic()
 
         # 推送 workflow_start 事件
-        tasks_info = [
-            {
-                "id": t.id,
-                "agent": t.agent,
-                "prompt": t.prompt[:100] + "..." if len(t.prompt) > 100 else t.prompt,
-                "depends_on": t.depends_on,
-            }
-            for t in self.graph.nodes.values()
-        ]
+        tasks_info = [t.workflow_info().to_dict() for t in self.graph.nodes.values()]
         if self._display:
             try:
                 self._display.workflow_start(tasks_info, len(self.graph.nodes))
@@ -64,15 +77,21 @@ class Orchestrator:
                 logger.warning("[Orchestrator] 无可执行任务且无运行中任务，退出")
                 break
 
+            for terminal in [n for n in self.graph.nodes.values() if n.status in (TaskStatus.FAILED, TaskStatus.SKIPPED)]:
+                self._emit_task_end(terminal)
+
             for task in ready:
                 self.graph.mark_running(task.id)
                 # 推送 task_start 事件
-                task_prompt = task.prompt[:100] + "..." if len(task.prompt) > 100 else task.prompt
+                task_start = task.workflow_start_event()
                 if self._display:
                     try:
-                        self._display.workflow_task_start(task.id, task.agent, task_prompt)
+                        if hasattr(self._display, "workflow_task_start_event"):
+                            self._display.workflow_task_start_event(task_start)
+                        else:
+                            self._display.workflow_task_start(task_start.id, task_start.agent, task_start.prompt)
                     except Exception:
-                        self._push_event("task_start", {"id": task.id, "agent": task.agent, "prompt": task_prompt})
+                        self._push_event("task_start", task_start.to_dict())
                 prompt = self.graph.resolve_prompt(task)
                 # 捕获当前上下文（包含 ContextVar）
                 ctx = contextvars.copy_context()
@@ -89,23 +108,13 @@ class Orchestrator:
                 for task_id, (result, error) in list(self._pending_results.items()):
                     if result is not None:
                         self.graph.mark_done(task_id, result)
-                        # 推送 task_end 事件
-                        result_preview = result[:200] + "..." if result and len(result) > 200 else result
-                        if self._display:
-                            try:
-                                self._display.workflow_task_end(task_id, TaskStatus.DONE.value, result_preview=result_preview)
-                            except Exception:
-                                self._push_event("task_end", {"id": task_id, "status": TaskStatus.DONE.value, "result_preview": result_preview})
                     else:
                         self.graph.mark_failed(task_id, error or "执行失败")
-                        # 推送 task_end 事件
-                        err_text = error or "执行失败"
-                        if self._display:
-                            try:
-                                self._display.workflow_task_end(task_id, TaskStatus.FAILED.value, error=err_text)
-                            except Exception:
-                                self._push_event("task_end", {"id": task_id, "status": TaskStatus.FAILED.value, "error": err_text})
+                    self._emit_task_end(self.graph.nodes[task_id])
                     del self._pending_results[task_id]
+
+        for terminal in [n for n in self.graph.nodes.values() if n.status in (TaskStatus.FAILED, TaskStatus.SKIPPED)]:
+            self._emit_task_end(terminal)
 
         # 推送 workflow_end 事件
         elapsed = round(time.monotonic() - start, 1)

@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from ..logger import logger
+from .models import BlackboardEntry
 
 
 _MAX_ENTRIES = 500
@@ -12,7 +13,7 @@ _MAX_ENTRIES = 500
 class Blackboard:
 
     def __init__(self, persist_path: Path | None = None, max_entries: int = _MAX_ENTRIES):
-        self._data: dict[str, dict] = {}
+        self._data: dict[str, BlackboardEntry] = {}
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)  # 使用 Condition 替代 Event
         self._persist_path = persist_path
@@ -24,14 +25,10 @@ class Blackboard:
     def put(self, key: str, value: str, author: str = "") -> str:
         with self._condition:
             if key not in self._data and len(self._data) >= self._max_entries:
-                oldest_key = min(self._data, key=lambda k: self._data[k].get("ts", 0))
+                oldest_key = min(self._data, key=lambda k: self._data[k].ts)
                 del self._data[oldest_key]
                 logger.debug(f"[Blackboard] 淘汰最旧条目: {oldest_key}")
-            self._data[key] = {
-                "value": value,
-                "author": author,
-                "ts": time.time(),
-            }
+            self._data[key] = BlackboardEntry(value=value, author=author, ts=time.time())
             self._version += 1  # 增加版本号
             self._persist()
             logger.info(f"[Blackboard] put {key} ({len(value)} chars) by {author or '?'}")
@@ -44,8 +41,8 @@ class Blackboard:
         if entry is None:
             logger.debug(f"[Blackboard] get {key} → miss")
             return default
-        logger.debug(f"[Blackboard] get {key} → {len(entry['value'])} chars")
-        return entry["value"]
+        logger.debug(f"[Blackboard] get {key} → {len(entry.value)} chars")
+        return entry.value
 
     def list_keys(self, prefix: str = "") -> list[str]:
         with self._lock:
@@ -55,8 +52,8 @@ class Blackboard:
     def snapshot(self, detailed: bool = False) -> dict:
         with self._lock:
             if detailed:
-                return {k: {"value": v["value"], "author": v.get("author", ""), "ts": v.get("ts", 0)} for k, v in self._data.items()}
-            return {k: v["value"] for k, v in self._data.items()}
+                return {k: v.to_dict() for k, v in self._data.items()}
+            return {k: v.value for k, v in self._data.items()}
 
     def clear(self):
         with self._condition:
@@ -87,8 +84,8 @@ class Blackboard:
                 return "黑板为空"
             lines = []
             for k, v in self._data.items():
-                preview = v["value"][:100]
-                author = f" (by {v['author']})" if v.get("author") else ""
+                preview = v.value[:100]
+                author = f" (by {v.author})" if v.author else ""
                 lines.append(f"  {k}{author}: {preview}")
             return "\n".join(lines)
 
@@ -101,7 +98,7 @@ class Blackboard:
             # 写入临时文件
             temp_path = self._persist_path.with_suffix('.tmp')
             temp_path.write_text(
-                json.dumps(self._data, ensure_ascii=False, indent=2),
+                json.dumps({k: v.to_dict() for k, v in self._data.items()}, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             # 原子替换（跨平台）
@@ -112,6 +109,7 @@ class Blackboard:
 
     def _load(self):
         try:
-            self._data = json.loads(self._persist_path.read_text(encoding="utf-8"))
+            raw = json.loads(self._persist_path.read_text(encoding="utf-8"))
+            self._data = {str(k): BlackboardEntry.from_dict(v) for k, v in raw.items()}
         except (json.JSONDecodeError, OSError):
             self._data = {}

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 
 from .blackboard import Blackboard
+from .models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart, preview_text
 from ..logger import logger
 
 
@@ -33,6 +34,29 @@ class TaskNode:
     max_retry: int = 1
     timeout: int = 0  # 单任务超时秒数，0 表示使用默认 600s
     fail_on_dep_failure: bool = True  # 依赖失败时是否标记为失败（True=失败，False=仍可执行）
+
+    def prompt_preview(self, limit: int = 100) -> str:
+        return preview_text(self.prompt, limit)
+
+    def workflow_info(self, limit: int = 100) -> WorkflowTaskInfo:
+        return WorkflowTaskInfo(
+            id=self.id,
+            agent=self.agent,
+            prompt=self.prompt_preview(limit),
+            depends_on=list(self.depends_on),
+        )
+
+    def workflow_start_event(self, limit: int = 100) -> WorkflowTaskStart:
+        return WorkflowTaskStart(id=self.id, agent=self.agent, prompt=self.prompt_preview(limit))
+
+    def workflow_end_event(self, *, result_preview_limit: int = 200) -> WorkflowTaskEnd:
+        result_preview = preview_text(self.result, result_preview_limit) if self.result is not None else None
+        return WorkflowTaskEnd(
+            id=self.id,
+            status=self.status.value,
+            result_preview=result_preview,
+            error=self.error,
+        )
 
 
 class TaskGraph:
@@ -70,10 +94,7 @@ class TaskGraph:
                 if deps_failed:
                     if node.fail_on_dep_failure:
                         # 标记为失败（传播失败）
-                        node.status = TaskStatus.FAILED
-                        failed_deps = [dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == TaskStatus.FAILED]
-                        node.error = f"依赖任务失败: {', '.join(failed_deps)}"
-                        logger.warning(f"[DAG] {node.id} 因依赖失败而标记失败: {node.error}")
+                        self._set_failed_locked(node, f"依赖任务失败: {', '.join(dep for dep in node.depends_on if dep in self.nodes and self.nodes[dep].status == TaskStatus.FAILED)}")
                         continue
                     # 否则继续检查是否可以执行
                 
@@ -83,8 +104,7 @@ class TaskGraph:
                 
                 # 检查条件
                 if node.condition and not self._evaluate_condition_locked(node):
-                    node.status = TaskStatus.SKIPPED
-                    logger.info(f"[DAG] {node.id} 条件不满足，跳过")
+                    self._set_skipped_locked(node, "条件不满足，跳过")
                     continue
                 
                 ready.append(node)
@@ -170,6 +190,16 @@ class TaskGraph:
         with self._lock:
             return self._evaluate_condition_locked(node)
 
+    def _set_failed_locked(self, node: TaskNode, error: str) -> None:
+        node.status = TaskStatus.FAILED
+        node.error = error
+        logger.warning(f"[DAG] {node.id} → failed: {error[:100]}")
+
+    def _set_skipped_locked(self, node: TaskNode, reason: str) -> None:
+        node.status = TaskStatus.SKIPPED
+        node.error = reason
+        logger.info(f"[DAG] {node.id} → skipped: {reason}")
+
     def mark_running(self, task_id: str):
         with self._lock:
             node = self.nodes.get(task_id)
@@ -218,7 +248,7 @@ class TaskGraph:
             prompt = prompt.replace(f"{{{dep_id}}}", dep_result)
         all_keys = self.blackboard.snapshot()
         for key, val in all_keys.items():
-            prompt = prompt.replace(f"{{blackboard.{key}}}", val)
+            prompt = prompt.replace(f"{{blackboard.{key}}}", str(val))
         return prompt
 
     def render_status(self) -> str:

@@ -9,9 +9,10 @@ import time
 from pathlib import Path
 
 from ..logger import logger
+from .models import InboxMessage, InboxMessageType
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_VALID_TYPES = {"message", "broadcast", "shutdown_request", "shutdown_response", "task_handoff"}
+_VALID_TYPES = {msg_type.value for msg_type in InboxMessageType}
 _MAX_INBOX_CHARS = 100000
 
 
@@ -54,10 +55,12 @@ class MessageBus:
 
         logger.info(f"[MSG→] {sender} -> {to} ({msg_type})")
         logger.debug(f"[MSG详情] {sender} -> {to}: {content}")
-        msg = {
-            "type": msg_type, "from": sender,
-            "content": content, "timestamp": time.time()
-        }
+        msg = InboxMessage(
+            msg_type=InboxMessageType(msg_type),
+            sender=sender,
+            content=content,
+            timestamp=time.time(),
+        )
         inbox_path = self.dir / f"{to}.jsonl"
         with self._lock:
             if inbox_path.exists() and inbox_path.stat().st_size > _MAX_INBOX_CHARS:
@@ -65,7 +68,7 @@ class MessageBus:
             with inbox_path.open("a", encoding="utf-8") as f:
                 fcntl.flock(f.fileno(), fcntl.LOCK_EX)
                 try:
-                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                    f.write(json.dumps(msg.to_dict(), ensure_ascii=False) + "\n")
                 finally:
                     fcntl.flock(f.fileno(), fcntl.LOCK_UN)
             on_send = self._on_send
@@ -109,8 +112,8 @@ class MessageBus:
             if not line.strip():
                 continue
             try:
-                messages.append(json.loads(line))
-            except json.JSONDecodeError:
+                messages.append(InboxMessage.from_dict(json.loads(line)).to_dict())
+            except (json.JSONDecodeError, TypeError, ValueError):
                 continue
         return messages
 
