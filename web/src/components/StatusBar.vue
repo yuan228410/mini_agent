@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import type { PlanState } from '../plan/types'
 
 const props = defineProps<{
   model: string
@@ -7,7 +8,7 @@ const props = defineProps<{
   prompt_tokens: number
   completion_tokens: number
   history_count: number
-  planState?: string
+  planState?: PlanState
 }>()
 
 const modelShort = computed(() => {
@@ -35,7 +36,8 @@ const planLabel = computed(() => {
     default: return 'CHAT 对话'
   }
 })
-const isPlanActive = computed(() => !['idle', 'completed', 'cancelled', 'superseded', undefined].includes(props.planState as any))
+const inactivePlanStates: Array<PlanState | undefined> = ['idle', 'completed', 'cancelled', 'superseded', undefined]
+const isPlanActive = computed(() => !inactivePlanStates.includes(props.planState))
 </script>
 
 <template>

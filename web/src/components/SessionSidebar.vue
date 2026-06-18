@@ -9,6 +9,10 @@ import {
   type SessionInfo, type WorkspaceInfo, type BrowseDir,
 } from '../api'
 
+function _errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
 const props = defineProps<{ width: number; collapsed: boolean }>()
 const emit = defineEmits(['switch-session', 'status-change', 'toggle', 'workspace-change'])
 
@@ -281,8 +285,8 @@ async function doExport(sid: string) {
   const tools = parts[2] === 'true'
   try {
     await exportSession(sid, ws || undefined, limit, thinking, tools)
-  } catch (e: any) {
-    alert(e.message || '导出失败')
+  } catch (e: unknown) {
+    alert(_errorMessage(e, '导出失败'))
   }
 }
 

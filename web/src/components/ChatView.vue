@@ -17,6 +17,10 @@ import { usePlanSession } from '../plan/usePlanSession'
 import { hasUnresolvedPlanInteractions, isFinalPlan, nextPlanInteraction } from '../plan/interactions'
 import type { PlanArtifact, PlanChoiceConfirmPayload, PlanChoiceMode, PlanChoiceOption, PlanDecision, PlanDecisionOpenPayload, PlanInteraction, PlanState } from '../plan/types'
 
+function _errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
 interface Message {
   role: 'user' | 'assistant'
   content: string
@@ -1169,8 +1173,8 @@ function _processEvent(s: SessionState, event: WsEvent) {
 async function doExport() {
   try {
     await exportSession(activeSessionId.value, props.workspace || undefined, 0, false, false)
-  } catch (e: any) {
-    alert(e.message || '导出失败')
+  } catch (e: unknown) {
+    alert(_errorMessage(e, '导出失败'))
   }
 }
 
@@ -1210,7 +1214,7 @@ async function sendMessage(text: string, images?: ImageFile[]) {
       const promptContent = '📋 系统提示词（' + resp.chars + ' 字符, ~' + resp.tokens + ' tokens）：\n\n' + resp.system_prompt
       s.messages = [...s.messages, { role: 'assistant', content: promptContent, timestamp: _localTs() }]
       _updateUI(s)
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('getSystemPrompt failed', e)
     }
     return
@@ -1222,7 +1226,7 @@ async function sendMessage(text: string, images?: ImageFile[]) {
       const content = '🔧 工具定义（' + resp.count + ' 个工具, ' + resp.chars + ' 字符, ~' + resp.tokens + ' tokens）：\n\n工具列表：' + toolNames + '\n\n完整定义：\n\n```json\n' + JSON.stringify(resp.tools, null, 2) + '\n```'
       s.messages = [...s.messages, { role: 'assistant', content: content, timestamp: _localTs() }]
       _updateUI(s)
-    } catch (e: any) {
+    } catch (e: unknown) {
       console.error('getTools failed', e)
     }
     return
