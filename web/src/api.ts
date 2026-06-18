@@ -326,7 +326,88 @@ function _username(): string {
   return getUsername() || 'default'
 }
 
-function _usernameBody(): object {
+interface UsernamePayload {
+  username?: string
+}
+
+interface WsSessionPayload extends UsernamePayload {
+  session_id?: string
+  workspace?: string
+}
+
+interface WsClientMessage {
+  type: string
+  client_message_id?: string
+}
+
+export interface ChatWsMessage extends WsClientMessage, WsSessionPayload {
+  type: 'chat'
+  message: string
+  images?: ImageData[]
+}
+
+export interface AbortWsMessage extends WsClientMessage, WsSessionPayload {
+  type: 'abort'
+}
+
+export interface PlanStartWsMessage extends WsClientMessage, WsSessionPayload {
+  type: 'plan.start'
+  goal: string
+}
+
+export interface PlanMessageWsMessage extends WsClientMessage, WsSessionPayload {
+  type: 'plan.message'
+  message: string
+  images?: ImageData[]
+}
+
+export interface PlanSelectOptionWsMessage extends WsClientMessage, UsernamePayload {
+  type: 'plan.select_option'
+  session_id: string
+  plan_id: string
+  option_id: string
+  workspace?: string
+}
+
+export interface PlanApproveWsMessage extends WsClientMessage, UsernamePayload {
+  type: 'plan.approve'
+  session_id: string
+  plan_id: string
+  revision: number
+  workspace?: string
+}
+
+export interface PlanApplyDecisionWsMessage extends WsClientMessage, UsernamePayload {
+  type: 'plan.apply_decision'
+  session_id: string
+  plan_id: string
+  revision: number
+  step_id: string
+  decision_id: string
+  selected_option_ids: string[]
+  custom_value: string
+  workspace?: string
+}
+
+export interface PlanReviseWsMessage extends WsClientMessage, UsernamePayload {
+  type: 'plan.revise'
+  session_id: string
+  plan_id: string
+  message: string
+  workspace?: string
+}
+
+export interface PlanCancelWsMessage extends WsClientMessage, UsernamePayload {
+  type: 'plan.cancel'
+  session_id: string
+  plan_id: string
+  workspace?: string
+}
+
+type QueueableWsMessage = ChatWsMessage | PlanStartWsMessage | PlanMessageWsMessage | PlanSelectOptionWsMessage | PlanApproveWsMessage | PlanApplyDecisionWsMessage
+type SendableWsMessage = QueueableWsMessage | AbortWsMessage | PlanReviseWsMessage | PlanCancelWsMessage
+
+function _usernameBody(): UsernamePayload {
   const u = getUsername()
   return u ? { username: u } : {}
 }
@@ -341,12 +422,16 @@ const _eventHandlers: ((event: WsEvent) => void)[] = []
 interface PendingWsMessage {
   id: string
   createdAt: number
-  payload: any
+  payload: QueueableWsMessage
 }
 const _pendingMessages: PendingWsMessage[] = []
 const _PENDING_MAX = 50
 const _PENDING_TTL_MS = 2 * 60 * 1000
-const _QUEUEABLE_WS_TYPES = new Set(['chat', 'plan.start', 'plan.message', 'plan.select_option', 'plan.approve', 'plan.apply_decision'])
+const _QUEUEABLE_WS_TYPES = new Set<QueueableWsMessage['type']>(['chat', 'plan.start', 'plan.message', 'plan.select_option', 'plan.approve', 'plan.apply_decision'])
+
+function _isQueueableWsMessage(msg: SendableWsMessage): msg is QueueableWsMessage {
+  return _QUEUEABLE_WS_TYPES.has(msg.type as QueueableWsMessage['type'])
+}
 
 // 导出连接状态查询函数
 export function isWsConnected(): boolean {
@@ -538,7 +623,7 @@ export function onWsEvent(handler: (event: WsEvent) => void): () => void {
   }
 }
 
-export function wsSend(data: object) {
+export function wsSend(data: SendableWsMessage | { type: 'ping' } | { type: 'login'; username: string }) {
   if (_ws && _ws.readyState === WebSocket.OPEN) {
     _ws.send(JSON.stringify(data))
   }
@@ -561,9 +646,9 @@ export interface ImageData {
   size: number
 }
 
-function _sendOrQueue(msg: any) {
+function _sendOrQueue(msg: SendableWsMessage) {
   if (!_ws || _ws.readyState !== WebSocket.OPEN) {
-    if (!_QUEUEABLE_WS_TYPES.has(msg.type)) {
+    if (!_isQueueableWsMessage(msg)) {
       console.warn(`[WS] Dropped non-queueable offline message: ${msg.type}`)
       return
     }
@@ -578,7 +663,7 @@ function _sendOrQueue(msg: any) {
 }
 
 export function wsChat(message: string, sessionId?: string, workspace?: string, images?: ImageData[]) {
-  const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
+  const chatMsg: ChatWsMessage = { type: 'chat', message, ..._usernameBody() }
   if (sessionId) chatMsg.session_id = sessionId
   if (workspace) chatMsg.workspace = workspace
   if (images && images.length > 0) chatMsg.images = images
@@ -586,21 +671,21 @@ export function wsChat(message: string, sessionId?: string, workspace?: string, 
 }
 
 export function abortChat(sessionId?: string, workspace?: string) {
-  const msg: any = { type: 'abort', ..._usernameBody() }
+  const msg: AbortWsMessage = { type: 'abort', ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
   if (workspace) msg.workspace = workspace
   wsSend(msg)
 }
 
 export function startPlan(sessionId?: string, workspace?: string, initialGoal?: string) {
-  const msg: any = { type: 'plan.start', goal: initialGoal || '', ..._usernameBody() }
+  const msg: PlanStartWsMessage = { type: 'plan.start', goal: initialGoal || '', ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
   if (workspace) msg.workspace = workspace
   _sendOrQueue(msg)
 }
 
 export function sendPlanMessage(message: string, sessionId?: string, workspace?: string, images?: ImageData[]) {
-  const msg: any = { type: 'plan.message', message, ..._usernameBody() }
+  const msg: PlanMessageWsMessage = { type: 'plan.message', message, ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
   if (workspace) msg.workspace = workspace
   if (images && images.length > 0) msg.images = images
@@ -608,13 +693,13 @@ export function sendPlanMessage(message: string, sessionId?: string, workspace?:
 }
 
 export function selectPlanOption(sessionId: string, planId: string, optionId: string, workspace?: string) {
-  const msg: any = { type: 'plan.select_option', session_id: sessionId, plan_id: planId, option_id: optionId, ..._usernameBody() }
+  const msg: PlanSelectOptionWsMessage = { type: 'plan.select_option', session_id: sessionId, plan_id: planId, option_id: optionId, ..._usernameBody() }
   if (workspace) msg.workspace = workspace
   _sendOrQueue(msg)
 }
 
 export function approvePlan(sessionId: string, planId: string, revision: number, workspace?: string) {
-  const msg: any = { type: 'plan.approve', session_id: sessionId, plan_id: planId, revision, ..._usernameBody() }
+  const msg: PlanApproveWsMessage = { type: 'plan.approve', session_id: sessionId, plan_id: planId, revision, ..._usernameBody() }
   if (workspace) msg.workspace = workspace
   _sendOrQueue(msg)
 }
@@ -629,7 +714,7 @@ export function applyPlanDecision(
   customValue: string,
   workspace?: string,
 ) {
-  const msg: any = {
+  const msg: PlanApplyDecisionWsMessage = {
     type: 'plan.apply_decision',
     session_id: sessionId,
     plan_id: planId,
@@ -645,13 +730,13 @@ export function applyPlanDecision(
 }
 
 export function revisePlan(sessionId: string, planId: string, instruction: string, workspace?: string) {
-  const msg: any = { type: 'plan.revise', session_id: sessionId, plan_id: planId, message: instruction, ..._usernameBody() }
+  const msg: PlanReviseWsMessage = { type: 'plan.revise', session_id: sessionId, plan_id: planId, message: instruction, ..._usernameBody() }
   if (workspace) msg.workspace = workspace
   _sendOrQueue(msg)
 }
 
 export function cancelPlan(sessionId: string, planId?: string, workspace?: string) {
-  const msg: any = { type: 'plan.cancel', session_id: sessionId, plan_id: planId || '', ..._usernameBody() }
+  const msg: PlanCancelWsMessage = { type: 'plan.cancel', session_id: sessionId, plan_id: planId || '', ..._usernameBody() }
   if (workspace) msg.workspace = workspace
   _sendOrQueue(msg)
 }
