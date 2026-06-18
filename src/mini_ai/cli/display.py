@@ -338,21 +338,6 @@ class Display:
             elapsed = time.monotonic() - self._tool_start_time
         if self._on_status_update:
             self._on_status_update()
-        if result.startswith("📋TODO\n"):
-            if result == self._last_todos_render:
-                return
-            self._last_todos_render = result
-            self.console.print()
-            self.console.print(Rule("📋 任务计划", style="amber", characters="─"))
-            todo_text = result[6:]
-            for line in todo_text.split("\n"):
-                if "← 当前" in line:
-                    self.console.print(Text(f"  {line}", style="bold yellow"))
-                elif line.startswith("[x]"):
-                    self.console.print(Text(f"  {line}", style="dim"))
-                else:
-                    self.console.print(Text(f"  {line}"))
-            return
         if self.tool_detail == "minimal":
             self.console.print(Text(f"    ✓ {elapsed:.1f}s", style="green"))
         elif self.tool_detail == "full":

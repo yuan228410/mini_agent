@@ -5,6 +5,7 @@ import time
 
 from .blackboard import Blackboard
 from ..config import TEAMMATE
+from ..core import events
 from ..logger import logger
 from .prompts import build_team_prompt
 from .task_graph import TaskGraph, TaskNode, TaskStatus
@@ -24,16 +25,16 @@ class Orchestrator:
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
         self._emitted_task_end: set[str] = set()
 
-    def _push_event(self, event: str, data: dict):
-        """通过 DisplayProtocol 推送工作流事件。"""
+    def _push_event(self, event):
+        """通过 DisplayProtocol 推送结构化工作流事件。"""
         if self._display:
             try:
-                self._display.emit(event, data)
-                logger.info(f"[Orchestrator] 推送事件成功: {event}")
+                self._display.emit(event)
+                logger.info(f"[Orchestrator] 推送事件成功: {event.event.value}")
             except Exception as e:
                 logger.warning(f"[Orchestrator] 推送事件失败: {e}")
         else:
-            logger.debug(f"[Orchestrator] display 为空，跳过事件: {event}")
+            logger.debug(f"[Orchestrator] display 为空，跳过事件: {event.event.value}")
 
     def _emit_task_end(self, task: TaskNode) -> None:
         if task.id in self._emitted_task_end:
@@ -43,29 +44,26 @@ class Orchestrator:
             return
         end_event = task.workflow_end_event()
         try:
-            if hasattr(self._display, "workflow_task_end_event"):
-                self._display.workflow_task_end_event(end_event)
-            else:
-                self._display.workflow_task_end(
-                    end_event.id,
-                    end_event.status,
-                    result_preview=end_event.result_preview,
-                    error=end_event.error,
-                )
+            self._display.workflow_task_end(
+                end_event.id,
+                end_event.status,
+                result_preview=end_event.result_preview,
+                error=end_event.error,
+            )
         except Exception:
-            self._push_event("task_end", end_event.to_dict())
+            self._push_event(events.workflow_task_end_event(end_event))
 
     def run(self, timeout: int = 1800) -> str:
         logger.info(f"[Orchestrator] 启动，{len(self.graph.nodes)} 个任务，超时 {timeout}s")
         start = time.monotonic()
 
         # 推送 workflow_start 事件
-        tasks_info = [t.workflow_info().to_dict() for t in self.graph.nodes.values()]
+        tasks_info = [t.workflow_info() for t in self.graph.nodes.values()]
         if self._display:
             try:
                 self._display.workflow_start(tasks_info, len(self.graph.nodes))
             except Exception:
-                self._push_event("workflow_start", {"tasks": tasks_info, "total": len(self.graph.nodes)})
+                self._push_event(events.workflow_start(tasks_info, len(self.graph.nodes)))
 
         while not self.graph.is_complete():
             if time.monotonic() - start > timeout:
@@ -86,12 +84,9 @@ class Orchestrator:
                 task_start = task.workflow_start_event()
                 if self._display:
                     try:
-                        if hasattr(self._display, "workflow_task_start_event"):
-                            self._display.workflow_task_start_event(task_start)
-                        else:
-                            self._display.workflow_task_start(task_start.id, task_start.agent, task_start.prompt)
+                        self._display.workflow_task_start(task_start.id, task_start.agent, task_start.prompt)
                     except Exception:
-                        self._push_event("task_start", task_start.to_dict())
+                        self._push_event(events.workflow_task_start_event(task_start))
                 prompt = self.graph.resolve_prompt(task)
                 # 捕获当前上下文（包含 ContextVar）
                 ctx = contextvars.copy_context()
@@ -124,7 +119,7 @@ class Orchestrator:
             try:
                 self._display.workflow_end(elapsed, completed, failed, len(self.graph.nodes))
             except Exception:
-                self._push_event("workflow_end", {"elapsed": elapsed, "completed": completed, "failed": failed, "total": len(self.graph.nodes)})
+                self._push_event(events.workflow_end(elapsed, completed, failed, len(self.graph.nodes)))
 
         return self._summarize()
 

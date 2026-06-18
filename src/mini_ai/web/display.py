@@ -4,6 +4,7 @@ import time
 import threading
 from typing import Any
 
+from ..core import events
 from ..core.events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
 from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
 
@@ -264,8 +265,6 @@ class WebDisplay:
     def tool_result(self, name: str, result: str, elapsed: float | None = None, tool_call_id: str = ""):
         if elapsed is None:
             elapsed = time.monotonic() - self._tool_start_time
-        if result.startswith("📋TODO\n"):
-            self.todos_updated(result[6:])
         rdata = {"name": name, "result": result, "elapsed": round(elapsed, 1), "tool_call_id": tool_call_id}
         if self._teammate: rdata["teammate"] = self._teammate
         self._push(DisplayEventType.TOOL_RESULT, rdata)
@@ -306,23 +305,22 @@ class WebDisplay:
         self._push(DisplayEventType.AGENT_START, payload)
 
     def workflow_start(self, tasks: list[WorkflowTaskInfo | dict[str, Any]], total: int):
-        payload_tasks = [task.to_dict() if isinstance(task, WorkflowTaskInfo) else task for task in tasks]
-        self._push(DisplayEventType.WORKFLOW_START, {"tasks": payload_tasks, "total": total})
+        self.emit(events.workflow_start(tasks, total))
 
     def workflow_task_start(self, task_id: str, agent: str, prompt: str):
-        self.workflow_task_start_event(WorkflowTaskStart(id=task_id, agent=agent, prompt=prompt))
+        self.emit(events.workflow_task_start(task_id, agent, prompt))
 
     def workflow_task_start_event(self, task: WorkflowTaskStart):
-        self._push(DisplayEventType.WORKFLOW_TASK_START, task.to_dict())
+        self.emit(events.workflow_task_start_event(task))
 
     def workflow_task_end(self, task_id: str, status: str, result_preview: str | None = None, error: str | None = None):
-        self.workflow_task_end_event(WorkflowTaskEnd(id=task_id, status=status, result_preview=result_preview, error=error))
+        self.emit(events.workflow_task_end(task_id, status, result_preview=result_preview, error=error))
 
     def workflow_task_end_event(self, task: WorkflowTaskEnd):
-        self._push(DisplayEventType.WORKFLOW_TASK_END, task.to_dict())
+        self.emit(events.workflow_task_end_event(task))
 
     def workflow_end(self, elapsed: float, completed: int, failed: int, total: int):
-        self._push(DisplayEventType.WORKFLOW_END, {"elapsed": elapsed, "completed": completed, "failed": failed, "total": total})
+        self.emit(events.workflow_end(elapsed, completed, failed, total))
 
     def error(self, text: str):
         self._push(DisplayEventType.ERROR, {"error": text})

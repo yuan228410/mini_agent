@@ -208,7 +208,7 @@ class PlanService:
         result = set_todos(session_key, todos)
         if display and result:
             try:
-                display.todos_updated(result[6:] if result.startswith("📋TODO\n") else result)
+                display.todos_updated(result)
             except Exception:
                 pass
         return result

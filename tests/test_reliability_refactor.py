@@ -330,3 +330,63 @@ def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
         if hits:
             offenders.append({"path": str(path.relative_to(root)), "hits": hits})
     assert offenders == []
+
+
+def test_module_level_tool_registry_apis_fail_fast():
+    from mini_ai import tools
+
+    with pytest.raises(RuntimeError, match="session-local ToolRegistry"):
+        tools.get_definitions()
+    with pytest.raises(RuntimeError, match="session-local ToolRegistry"):
+        tools.dispatch("read_file", {})
+    with pytest.raises(RuntimeError, match="session-local ToolRegistry"):
+        tools.handle_tool_calls({"tool_calls": []}, [])
+
+
+def test_update_todos_display_event_does_not_depend_on_sentinel():
+    from mini_ai.tools import update_todos
+
+    class FakeDisplay:
+        def __init__(self):
+            self.todos = []
+            self.tool_results = []
+
+        def todos_updated(self, content):
+            self.todos.append(content)
+
+        def tool_call_start(self, name, args_summary, tool_call_id=""):
+            pass
+
+        def tool_result(self, name, result, elapsed=None, tool_call_id=""):
+            self.tool_results.append((name, result))
+
+    registry = ToolRegistry()
+    registry.add_tools(update_todos)
+    display = FakeDisplay()
+    messages = []
+    registry._execute_one({
+        "id": "call-todos",
+        "function": {
+            "name": "update_todos",
+            "arguments": json.dumps({"todos": [{"id": 1, "content": "实现架构边界", "status": "in_progress"}]}, ensure_ascii=False),
+        },
+    }, messages, display=display)
+
+    assert display.todos == ["[~] **1. 实现架构边界** ← 当前"]
+    assert display.tool_results == [("update_todos", "[~] **1. 实现架构边界** ← 当前")]
+    assert "📋TODO" not in messages[-1]["content"]
+
+
+def test_workflow_display_events_use_structured_payload_helpers():
+    from mini_ai.core import events
+    from mini_ai.team.models import WorkflowTaskInfo
+    from mini_ai.team.task_graph import TaskStatus
+
+    start = events.workflow_start([WorkflowTaskInfo(id="t1", agent="reviewer", prompt="检查", depends_on=["dep"])], 1).to_wire()
+    assert start == {
+        "event": "workflow_start",
+        "data": {"tasks": [{"id": "t1", "agent": "reviewer", "prompt": "检查", "depends_on": ["dep"]}], "total": 1},
+    }
+
+    end = events.workflow_task_end("t1", TaskStatus.SKIPPED.value, error="条件不满足").to_wire()
+    assert end == {"event": "task_end", "data": {"id": "t1", "status": "skipped", "error": "条件不满足"}}

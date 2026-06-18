@@ -267,6 +267,8 @@ class ToolRegistry:
         t0 = time.monotonic()
         try:
             output = self.dispatch(name, args)
+            if name == "update_todos" and display and output and not output.startswith("Error:"):
+                display.todos_updated(output)
             # 写入缓存
             cache.set(name, args, output)
             # 🔧 新增：打印工具执行结果摘要
@@ -341,6 +343,8 @@ class ToolRegistry:
                 t0 = time.monotonic()
                 result = ctx_copy.run(self.dispatch, name, args)
                 elapsed = time.monotonic() - t0
+                if name == "update_todos" and display and result and not result.startswith("Error:"):
+                    display.todos_updated(result)
                 if display and result is not None:
                     display.tool_result(name, result, elapsed, tc.id)
                 # 写入缓存并通知等待线程
@@ -491,50 +495,63 @@ class ToolRegistry:
             _BoundTool(history_tools._manage_def, lambda args, _m=history_tools: _run_with_context(bindings, _m._manage_exec, args)),
         )
 
-# ── 模块级默认实例 ──
+# ── 禁止运行时模块级 registry fallback ──
 
-_registry = ToolRegistry()
-_registry.add_tools(read_file, read_image, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
+_GLOBAL_REGISTRY_ERROR = "模块级 ToolRegistry 已禁用；请使用 session-local ToolRegistry 或 build_tool_registry()"
 
-# ── 向后兼容的模块级函数 ──
 
+def _raise_global_registry_error():
+    raise RuntimeError(_GLOBAL_REGISTRY_ERROR)
+
+
+# 这些函数保留名称以便错误显式暴露，但内部运行路径不得依赖它们。
 def register(skill_loader) -> None:
-    _registry.register_skills(skill_loader)
+    _raise_global_registry_error()
+
 
 def register_subagents(subagent_loader) -> None:
-    _registry.register_subagents(subagent_loader)
+    _raise_global_registry_error()
+
 
 def set_project_path(path: str) -> None:
-    from . import dispatch_subagent
-    _registry._project_path = path
-    dispatch_subagent.configure(project_path=path)
+    _raise_global_registry_error()
+
 
 def register_team(bus, manager) -> None:
-    _registry.register_team(bus, manager)
+    _raise_global_registry_error()
+
 
 def register_display(display) -> None:
-    _registry.register_display(display)
+    _raise_global_registry_error()
+
 
 def register_blackboard(blackboard, workflow_dirs=None, bus=None, manager=None) -> None:
-    _registry.register_blackboard(blackboard, workflow_dirs, bus=bus, manager=manager)
+    _raise_global_registry_error()
+
 
 def register_memory_tools(memory_store) -> None:
-    _registry.register_memory_tools(memory_store)
+    _raise_global_registry_error()
+
 
 def register_history_tools(history_db, workspace: str = "default") -> None:
-    _registry.register_history_tools(history_db, workspace)
+    _raise_global_registry_error()
+
 
 def get_definitions() -> list[dict]:
-    return _registry.get_definitions()
+    _raise_global_registry_error()
+
 
 def dispatch(name: str, args: dict) -> str | None:
-    return _registry.dispatch(name, args)
+    _raise_global_registry_error()
+
 
 def handle_tool_calls(msg: dict, messages: list[dict], display=None, persist_fn=None) -> bool:
-    return _registry.handle_tool_calls(msg, messages, display, persist_fn)
+    _raise_global_registry_error()
+
 
 def render_todos() -> str:
-    return _registry.render_todos()
+    from .update_todos import render_current_todos
+    return render_current_todos()
 
 
 def inject_todos(messages: list[dict]):

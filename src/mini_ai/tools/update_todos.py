@@ -64,6 +64,9 @@ class TodoStore:
         return self.render()
 
     def render(self) -> str:
+        return self.render_body()
+
+    def render_body(self) -> str:
         with self._lock:
             items = list(self.items)
         if not items:
@@ -75,7 +78,7 @@ class TodoStore:
                 lines.append(f"{icon} **{t['id']}. {t['content']}** ← 当前")
             else:
                 lines.append(f"{icon} {t['id']}. {t['content']}")
-        return "📋TODO\n" + "\n".join(lines)
+        return "\n".join(lines)
 
 
 _stores_lock = threading.Lock()
@@ -93,6 +96,7 @@ def _get_store() -> TodoStore:
 # 兼容：CLI 模式和 render_todos() 使用
 _store = type("_StoreProxy", (), {
     "render": staticmethod(lambda: _get_store().render()),
+    "render_body": staticmethod(lambda: _get_store().render_body()),
     "update": staticmethod(lambda todos: _get_store().update(todos)),
 })()
 
@@ -114,6 +118,11 @@ def get_todos(session_id: str | None = None) -> list[dict]:
 def render_current_todos() -> str:
     """Render todos for the current context-bound session without touching ToolRegistry."""
     return _get_store().render()
+
+
+def render_current_todo_body() -> str:
+    """Render todos without transport/UI sentinels."""
+    return _get_store().render_body()
 
 
 def set_todos(session_id: str, todos: list[dict]) -> str:
