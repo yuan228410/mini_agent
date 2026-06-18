@@ -1,15 +1,15 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { getTeamStatus, getBlackboard, dismissTeammate, clearBlackboard } from '../api'
+import type { BlackboardEntry, TeammateInfo, TeammateStatus, WsEvent } from '../api'
 
-interface Teammate { name: string; role: string; status: string }
-interface BbEntry { value: string; author: string; ts: number }
+type TeamWsEvent = Extract<WsEvent, { event: 'teammate_status' | 'blackboard_update' }>
 
 const props = defineProps<{ visible?: boolean, username?: string, workspace?: string, embedded?: boolean }>()
 const emit = defineEmits(['close'])
 
-const teammates = ref<Teammate[]>([])
-const bbEntries = ref<Record<string, BbEntry>>({})
+const teammates = ref<TeammateInfo[]>([])
+const bbEntries = ref<Record<string, BlackboardEntry>>({})
 const hasTeam = ref(false)
 const activeTab = ref<'teammates' | 'blackboard'>('teammates')
 const expandedKeys = ref<Set<string>>(new Set())
@@ -38,16 +38,16 @@ async function refresh() {
 let _wsHandler: ((e: Event) => void) | null = null
 function setupWsListener() {
   if (_wsHandler) window.removeEventListener('ws-message', _wsHandler)
-  _wsHandler = ((e: CustomEvent) => {
-    const data = e.detail
-    if (!data) return
-    if (data.event === 'teammate_status' && data.data) {
-      const { name, status } = data.data
+  _wsHandler = ((e: CustomEvent<TeamWsEvent>) => {
+    const event = e.detail
+    if (!event) return
+    if (event.event === 'teammate_status') {
+      const { name, status } = event.data
       const idx = teammates.value.findIndex(t => t.name === name)
       if (idx >= 0) teammates.value[idx].status = status
       else teammates.value.push({ name, role: '', status })
     }
-    if (data.event === 'blackboard_update' && data.data) {
+    if (event.event === 'blackboard_update') {
       refresh()
     }
   }) as EventListener
@@ -76,7 +76,7 @@ function toggleExpand(key: string) {
   else expandedKeys.value.add(key)
 }
 
-function statusColor(s: string) {
+function statusColor(s: TeammateStatus) {
   if (s === 'working') return '#4caf50'
   if (s === 'idle') return '#ff9800'
   if (s === 'offline') return '#9e9e9e'
@@ -84,7 +84,7 @@ function statusColor(s: string) {
   return '#9e9e9e'
 }
 
-function statusLabel(s: string) {
+function statusLabel(s: TeammateStatus) {
   if (s === 'working') return '工作中'
   if (s === 'idle') return '空闲'
   if (s === 'offline') return '离线'

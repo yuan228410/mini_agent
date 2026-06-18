@@ -79,6 +79,51 @@ export type WsEventName =
 
 export type WorkflowTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
 export type WorkflowStatus = 'idle' | 'running' | 'done' | 'failed'
+export type TeammateStatus = 'idle' | 'working' | 'offline' | 'shutdown'
+
+export interface TeammateInfo {
+  name: string
+  role: string
+  status: TeammateStatus
+}
+
+export interface TeamStatusResponse {
+  teammates: TeammateInfo[]
+  has_team: boolean
+}
+
+export interface BlackboardEntry {
+  value: string
+  author: string
+  ts: number
+}
+
+export interface BlackboardResponse {
+  entries: Record<string, BlackboardEntry>
+  has_blackboard: boolean
+}
+
+export interface TeamMutationResponse {
+  status?: 'ok'
+  message?: string
+  error?: string
+}
+
+export interface TeammateStatusData extends WsBaseData {
+  name: string
+  status: TeammateStatus
+}
+
+export interface BlackboardUpdateData extends WsBaseData {
+  key: string
+  author: string
+}
+
+export interface InboxMessageData extends WsBaseData {
+  to: string
+  from: string
+  count: number
+}
 
 export interface WorkflowTaskInfo {
   id: string
@@ -153,9 +198,9 @@ export type WsEvent =
   | { event: 'plan_event'; data: WsBaseData & PlanEventData }
   | { event: 'mode_change'; data: WsBaseData & { mode?: string } }
   | { event: 'aborted'; data: WsBaseData & { error?: string } }
-  | { event: 'teammate_status'; data: WsBaseData & { name: string; status: string } }
-  | { event: 'blackboard_update'; data: WsBaseData & { key: string; author: string } }
-  | { event: 'inbox_message'; data: WsBaseData & { to: string; from: string; count: number } }
+  | { event: 'teammate_status'; data: TeammateStatusData }
+  | { event: 'blackboard_update'; data: BlackboardUpdateData }
+  | { event: 'inbox_message'; data: InboxMessageData }
   | { event: 'info'; data: WsBaseData & { message: string } }
   | { event: 'error'; data: WsBaseData & { error: string } }
   | { event: 'workflow_start'; data: WorkflowStartData }
@@ -1035,7 +1080,7 @@ export async function exportSession(sessionId: string, workspace?: string, limit
   URL.revokeObjectURL(url)
 }
 
-export async function getTeamStatus(username: string, workspace: string): Promise<any> {
+export async function getTeamStatus(username: string, workspace: string): Promise<TeamStatusResponse> {
   const params = new URLSearchParams()
   params.set('username', username)
   if (workspace) params.set('workspace', workspace)
@@ -1044,7 +1089,7 @@ export async function getTeamStatus(username: string, workspace: string): Promis
   return resp.json()
 }
 
-export async function getBlackboard(username: string, workspace: string): Promise<any> {
+export async function getBlackboard(username: string, workspace: string): Promise<BlackboardResponse> {
   const params = new URLSearchParams()
   params.set('username', username)
   if (workspace) params.set('workspace', workspace)
@@ -1053,7 +1098,7 @@ export async function getBlackboard(username: string, workspace: string): Promis
   return resp.json()
 }
 
-export async function dismissTeammate(username: string, workspace: string, name: string): Promise<any> {
+export async function dismissTeammate(username: string, workspace: string, name: string): Promise<TeamMutationResponse> {
   const resp = await _origFetch('/api/team/dismiss', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1063,7 +1108,7 @@ export async function dismissTeammate(username: string, workspace: string, name:
   return resp.json()
 }
 
-export async function clearBlackboard(username: string, workspace: string): Promise<any> {
+export async function clearBlackboard(username: string, workspace: string): Promise<TeamMutationResponse> {
   const resp = await _origFetch('/api/team/blackboard/clear', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
