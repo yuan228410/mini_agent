@@ -8,10 +8,10 @@ const _origFetch = window.fetch.bind(window)
 
 export class ApiError extends Error {
   status: number
-  data: any
+  data: unknown
   url: string
 
-  constructor(message: string, status: number, data: any, url: string) {
+  constructor(message: string, status: number, data: unknown, url: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
@@ -20,7 +20,7 @@ export class ApiError extends Error {
   }
 }
 
-async function _parseErrorBody(resp: Response): Promise<any> {
+async function _parseErrorBody(resp: Response): Promise<unknown> {
   const text = await resp.text().catch(() => '')
   if (!text) return null
   try { return JSON.parse(text) } catch { return text }
@@ -33,9 +33,14 @@ async function _fetch(url: string, init?: RequestInit & { timeout?: number }): P
     const resp = await _origFetch(url, { ...init, signal: controller.signal })
     if (!resp.ok) {
       const data = await _parseErrorBody(resp)
+      const errorData = data && typeof data === 'object' ? data as { error?: unknown; message?: unknown } : null
       const message = typeof data === 'string'
         ? data
-        : data?.error || data?.message || `HTTP ${resp.status}`
+        : typeof errorData?.error === 'string'
+          ? errorData.error
+          : typeof errorData?.message === 'string'
+            ? errorData.message
+            : `HTTP ${resp.status}`
       throw new ApiError(message, resp.status, data, url)
     }
     return resp
@@ -220,6 +225,17 @@ export interface ModelsResponse {
   models: ModelInfo[]
 }
 
+export interface SwitchModelResponse extends ApiMutationResponse {
+  status?: 'ok'
+  active_name: string
+  model: string
+}
+
+export interface ResetChatResponse extends ApiMutationResponse {
+  status?: 'ok'
+  session_id: string
+}
+
 export interface ConfigResponse {
   model: string
   context_length: number
@@ -377,6 +393,12 @@ interface WsSessionPayload extends UsernamePayload {
   session_id?: string
   workspace?: string
 }
+
+interface SwitchModelRequestBody extends WsSessionPayload {
+  name: string
+}
+
+interface ResetChatRequestBody extends WsSessionPayload {}
 
 interface WsClientMessage {
   type: string
@@ -954,8 +976,8 @@ export async function getModels(sessionId?: string, workspace?: string): Promise
   return resp.json()
 }
 
-export async function switchModel(name: string, sessionId?: string, workspace?: string): Promise<any> {
-  const body: any = { name, ..._usernameBody() }
+export async function switchModel(name: string, sessionId?: string, workspace?: string): Promise<SwitchModelResponse> {
+  const body: SwitchModelRequestBody = { name, ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
   if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/models/switch', {
@@ -985,8 +1007,8 @@ export async function getSystemPrompt(workspace?: string): Promise<{system_promp
   return resp.json()
 }
 
-export async function resetChat(sessionId?: string, workspace?: string): Promise<any> {
-  const body: any = { ..._usernameBody() }
+export async function resetChat(sessionId?: string, workspace?: string): Promise<ResetChatResponse> {
+  const body: ResetChatRequestBody = { ..._usernameBody() }
   if (sessionId) body.session_id = sessionId
   if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/chat/reset', {
@@ -1013,7 +1035,13 @@ export async function getSkills(username?: string, workspace?: string): Promise<
   return resp.json()
 }
 
-export async function deleteSkill(name: string, username?: string, workspace?: string, level?: string): Promise<any> {
+export interface DeleteSkillResponse {
+  ok: boolean
+  message?: string
+  error?: string
+}
+
+export async function deleteSkill(name: string, username?: string, workspace?: string, level?: string): Promise<DeleteSkillResponse> {
   const params = new URLSearchParams()
   if (username) params.set('username', username)
   if (workspace) params.set('workspace', workspace)
@@ -1028,8 +1056,15 @@ export async function getCommands(): Promise<CommandsResponse> {
   return resp.json()
 }
 
+export interface ToolDefinition {
+  name?: string
+  description?: string
+  parameters?: unknown
+  [key: string]: unknown
+}
+
 export interface ToolsResponse {
-  tools: any[]
+  tools: ToolDefinition[]
   count: number
   chars: number
   tokens: number
@@ -1089,31 +1124,143 @@ export async function searchHistory(keyword: string, sessionId?: string, workspa
 
 // ── Settings APIs ──
 
+export type ApiMode = 'openai' | 'anthropic'
+export type McpServerType = 'stdio' | 'streamable_http' | 'sse'
+
+export interface ThinkingSettings {
+  enabled?: boolean
+  budget_tokens?: number
+  type?: string
+}
+
+export interface SettingsModelInfo {
+  api_url: string
+  api_mode: ApiMode | string
+  model: string
+  context_length: number
+  temperature?: number | null
+  max_tokens?: number | null
+  top_p?: number | null
+  reasoning_effort?: string | null
+  thinking?: ThinkingSettings | null
+}
+
+export interface DisplaySettings {
+  thinking_mode?: string
+  tool_detail?: string
+}
+
+export interface CompactorSettings {
+  context_limit?: number
+  keep_recent?: number
+  keep_budget_ratio?: number
+  early_compact_ratio?: number
+  max_cached_summaries?: number
+  [key: string]: unknown
+}
+
+export interface RunnerSettings {
+  max_turns?: number
+  context_usage_limit?: number
+  [key: string]: unknown
+}
+
+export interface PlanSettings {
+  approval?: boolean
+  [key: string]: unknown
+}
+
+export interface ToolSettings {
+  max_result_chars?: number
+  [key: string]: unknown
+}
+
+export interface WebSettings {
+  history_limit?: number
+  [key: string]: unknown
+}
+
+export interface LoggingSettings {
+  level?: string
+  [key: string]: unknown
+}
+
+export interface McpSettings {
+  enabled?: boolean
+  servers?: Record<string, McpServerConfig>
+}
+
+export interface TeammateSettings {
+  max_teammates?: number
+  max_turns?: number
+  idle_timeout?: number
+  max_history?: number
+  [key: string]: unknown
+}
+
 export interface SettingsResponse {
   active_model: string
-  models: Record<string, {
-    api_url: string
-    api_mode: string
-    model: string
-    context_length: number
-    temperature?: number | null
-    max_tokens?: number | null
-    top_p?: number | null
-    reasoning_effort?: string | null
-    thinking?: { enabled?: boolean; budget_tokens?: number; type?: string } | null
-  }>
+  models: Record<string, SettingsModelInfo>
   streaming: boolean
-  thinking: { enabled: boolean; budget_tokens: number; type: string }
-  display: { thinking_mode: string; tool_detail: string }
-  compactor: Record<string, any>
-  timeouts: Record<string, any>
-  runner: Record<string, any>
-  plan: Record<string, any>
-  tool: Record<string, any>
-  web: Record<string, any>
-  logging: Record<string, any>
-  mcp: { enabled: boolean; servers?: Record<string, any> }
-  teammate: Record<string, any>
+  thinking: ThinkingSettings
+  display: DisplaySettings
+  compactor: CompactorSettings
+  timeouts: Record<string, unknown>
+  runner: RunnerSettings
+  plan: PlanSettings
+  tool: ToolSettings
+  web: WebSettings
+  logging: LoggingSettings
+  mcp: McpSettings
+  teammate: TeammateSettings
+}
+
+export interface ModelConfigUpdate extends Partial<Omit<SettingsModelInfo, 'api_url' | 'api_mode' | 'model'>> {
+  name: string
+  thinking?: ThinkingSettings | null
+}
+
+export interface SettingsUpdatePayload {
+  active_model?: string
+  model_config?: ModelConfigUpdate
+  streaming?: boolean
+  thinking?: ThinkingSettings
+  display?: DisplaySettings
+  runner?: RunnerSettings
+  plan?: PlanSettings
+  web?: WebSettings
+  compactor?: CompactorSettings
+  tool?: ToolSettings
+  teammate?: TeammateSettings
+  logging?: LoggingSettings
+  mcp?: McpSettings
+}
+
+export interface UpdateSettingsResponse extends ApiMutationResponse {
+  status?: 'ok'
+  updated: string[]
+}
+
+export interface AddModelRequest {
+  name: string
+  api_key: string
+  api_url: string
+  api_mode: ApiMode
+  model: string
+  context_length?: number
+  temperature?: number
+  headers?: Record<string, string>
+}
+
+export interface AddModelResponse extends ApiMutationResponse {
+  status?: 'ok'
+  name?: string
+}
+
+export interface RemoveModelResponse extends ApiMutationResponse {
+  status?: 'ok'
+  removed?: string
+  new_active?: string | null
 }
 
 export async function getSettings(): Promise<SettingsResponse> {
@@ -1121,7 +1268,7 @@ export async function getSettings(): Promise<SettingsResponse> {
   return resp.json()
 }
 
-export async function updateSettings(updates: Record<string, any>): Promise<any> {
+export async function updateSettings(updates: SettingsUpdatePayload): Promise<UpdateSettingsResponse> {
   const resp = await _fetch('/api/settings', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
@@ -1131,16 +1278,7 @@ export async function updateSettings(updates: Record<string, any>): Promise<any>
 }
 
 
-export async function addModel(model: {
-  name: string
-  api_key: string
-  api_url: string
-  api_mode: 'openai' | 'anthropic'
-  model: string
-  context_length?: number
-  temperature?: number
-  headers?: Record<string, string>
-}): Promise<any> {
+export async function addModel(model: AddModelRequest): Promise<AddModelResponse> {
   const resp = await _fetch('/api/settings/add_model', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1149,7 +1287,7 @@ export async function addModel(model: {
   return resp.json()
 }
 
-export async function removeModel(name: string): Promise<any> {
+export async function removeModel(name: string): Promise<RemoveModelResponse> {
   const resp = await _fetch('/api/settings/remove_model', {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
@@ -1164,6 +1302,29 @@ export async function removeModel(name: string): Promise<any> {
 export interface McpToolInfo {
   name: string
   description: string
+}
+
+export interface McpServerConfig {
+  name?: string
+  type: McpServerType
+  command?: string
+  args?: string[]
+  url?: string
+  headers?: Record<string, string>
+}
+
+export interface AddMcpServerRequest extends McpServerConfig {
+  name: string
+}
+
+export interface AddMcpServerResponse extends ApiMutationResponse {
+  status?: 'ok'
+  name?: string
+}
+
+export interface RemoveMcpServerResponse extends ApiMutationResponse {
+  status?: 'ok'
+  removed?: string
 }
 
 export interface McpConnectedServer {
@@ -1189,14 +1350,7 @@ export async function getMcpStatus(): Promise<McpStatusResponse> {
   return resp.json()
 }
 
-export async function addMcpServer(server: {
-  name: string
-  type: 'stdio' | 'streamable_http' | 'sse'
-  command?: string
-  args?: string[]
-  url?: string
-  headers?: Record<string, string>
-}): Promise<any> {
+export async function addMcpServer(server: AddMcpServerRequest): Promise<AddMcpServerResponse> {
   const resp = await _fetch('/api/settings/mcp/add', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1205,7 +1359,7 @@ export async function addMcpServer(server: {
   return resp.json()
 }
 
-export async function removeMcpServer(name: string): Promise<any> {
+export async function removeMcpServer(name: string): Promise<RemoveMcpServerResponse> {
   const resp = await _fetch(`/api/settings/mcp/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })

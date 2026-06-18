@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted, computed } from 'vue'
-import { getSettings, updateSettings, addModel, removeModel, getMcpStatus, addMcpServer, removeMcpServer, type SettingsResponse, type McpConnectedServer, type McpConfiguredServer } from '../api'
+import { getSettings, updateSettings, addModel, removeModel, getMcpStatus, addMcpServer, removeMcpServer, type AddMcpServerRequest, type SettingsResponse, type SettingsUpdatePayload, type McpConnectedServer, type McpConfiguredServer } from '../api'
 
 const props = defineProps<{ visible?: boolean, embedded?: boolean }>()
 const emit = defineEmits(['close'])
@@ -184,7 +184,7 @@ function onModelSwitch(name: string) {
 async function onAddMcpServer() {
   if (!newMcp.name.trim()) return
   try {
-    const body: any = { name: newMcp.name, type: newMcp.type }
+    const body: AddMcpServerRequest = { name: newMcp.name, type: newMcp.type }
     if (newMcp.type === 'stdio') {
       body.command = newMcp.command
       if (newMcp.args.trim()) body.args = newMcp.args.split(/\s+/)
@@ -211,7 +211,7 @@ async function onRemoveMcpServer(name: string) {
 async function save() {
   saving.value = true
   try {
-    const updates: Record<string, any> = {}
+    const updates: SettingsUpdatePayload = {}
 
     if (selectedModelName.value !== activeModel.value) {
       updates.active_model = selectedModelName.value
