@@ -65,7 +65,7 @@ def _attach_tools(payload: dict, tools) -> list[str] | None:
     return tool_names
 
 
-def chat(messages, tools=True, ctx=None):
+def chat(messages, tools=None, ctx=None):
     ensure_session_openai(ctx)
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs}
@@ -217,7 +217,7 @@ def chat(messages, tools=True, ctx=None):
             response.close()
 
 
-def chat_stream(messages, tools=True, ctx=None, abort_event=None):
+def chat_stream(messages, tools=None, ctx=None, abort_event=None):
     ensure_session_openai(ctx)
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs, "stream": True, "stream_options": {"include_usage": True}}

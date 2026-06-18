@@ -3,9 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
-from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
+
+class WirePayload(Protocol):
+    def to_dict(self) -> dict[str, Any]: ...
 
 
 class DisplayEventType(StrEnum):
@@ -108,28 +110,37 @@ def agent_start(agent_type: str, *, task: str = "", role: str = "", max_turns: i
     return DisplayEvent(DisplayEventType.AGENT_START, payload)
 
 
-def workflow_start(tasks: list[WorkflowTaskInfo | dict[str, Any]], total: int) -> DisplayEvent:
+def _wire_dict(payload: WirePayload | dict[str, Any]) -> dict[str, Any]:
+    return payload.to_dict() if hasattr(payload, "to_dict") else payload
+
+
+def workflow_start(tasks: list[WirePayload | dict[str, Any]], total: int) -> DisplayEvent:
     return event_payload(
         DisplayEventType.WORKFLOW_START,
-        tasks=[task.to_dict() if isinstance(task, WorkflowTaskInfo) else task for task in tasks],
+        tasks=[_wire_dict(task) for task in tasks],
         total=total,
     )
 
 
 def workflow_task_start(task_id: str, agent: str, prompt: str) -> DisplayEvent:
-    return workflow_task_start_event(WorkflowTaskStart(id=task_id, agent=agent, prompt=prompt))
+    return event_payload(DisplayEventType.WORKFLOW_TASK_START, id=task_id, agent=agent, prompt=prompt)
 
 
-def workflow_task_start_event(task: WorkflowTaskStart) -> DisplayEvent:
-    return DisplayEvent(DisplayEventType.WORKFLOW_TASK_START, task.to_dict())
+def workflow_task_start_event(task: WirePayload | dict[str, Any]) -> DisplayEvent:
+    return DisplayEvent(DisplayEventType.WORKFLOW_TASK_START, _wire_dict(task))
 
 
 def workflow_task_end(task_id: str, status: str, *, result_preview: str | None = None, error: str | None = None) -> DisplayEvent:
-    return workflow_task_end_event(WorkflowTaskEnd(id=task_id, status=status, result_preview=result_preview, error=error))
+    payload: dict[str, Any] = {"id": task_id, "status": status}
+    if result_preview is not None:
+        payload["result_preview"] = result_preview
+    if error is not None:
+        payload["error"] = error
+    return DisplayEvent(DisplayEventType.WORKFLOW_TASK_END, payload)
 
 
-def workflow_task_end_event(task: WorkflowTaskEnd) -> DisplayEvent:
-    return DisplayEvent(DisplayEventType.WORKFLOW_TASK_END, task.to_dict())
+def workflow_task_end_event(task: WirePayload | dict[str, Any]) -> DisplayEvent:
+    return DisplayEvent(DisplayEventType.WORKFLOW_TASK_END, _wire_dict(task))
 
 
 def workflow_end(elapsed: float, completed: int, failed: int, total: int) -> DisplayEvent:

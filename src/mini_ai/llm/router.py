@@ -6,7 +6,7 @@ provider-specific arguments.
 """
 
 
-def chat(messages, tools=True, ctx=None):
+def chat(messages, tools=None, ctx=None):
     from .base import get_api_mode
 
     if get_api_mode(ctx) == "anthropic":
@@ -19,7 +19,7 @@ def chat(messages, tools=True, ctx=None):
     return openai_chat(messages, tools, ctx=ctx)
 
 
-def chat_stream(messages, tools=True, ctx=None, abort_event=None):
+def chat_stream(messages, tools=None, ctx=None, abort_event=None):
     from .base import get_api_mode
 
     if get_api_mode(ctx) == "anthropic":

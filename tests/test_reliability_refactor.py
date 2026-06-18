@@ -1,3 +1,4 @@
+import inspect
 import json
 import sqlite3
 import threading
@@ -290,6 +291,42 @@ def test_llm_providers_reject_global_tools_true():
         openai._attach_tools({}, True)
     with pytest.raises(ValueError, match="explicit tool definitions"):
         anthropic.chat([{"role": "user", "content": "hi"}], tools=True, ctx=RequestContext({"model": "claude-test"}))
+
+
+def test_llm_router_and_providers_default_to_no_tools():
+    from mini_ai.llm import anthropic, openai, router
+
+    assert inspect.signature(router.chat).parameters["tools"].default is None
+    assert inspect.signature(router.chat_stream).parameters["tools"].default is None
+    assert inspect.signature(openai.chat).parameters["tools"].default is None
+    assert inspect.signature(openai.chat_stream).parameters["tools"].default is None
+    assert inspect.signature(anthropic.chat).parameters["tools"].default is None
+    assert inspect.signature(anthropic.chat_stream).parameters["tools"].default is None
+
+
+def test_provider_message_conversion_strips_internal_fields_and_orphans():
+    from mini_ai.core.messages import to_provider_messages
+
+    messages = [
+        {"role": "system", "content": "sys", "thinking": "hidden", "_pruned": True},
+        {"role": "assistant", "content": None, "tool_calls": [{
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "read_file", "arguments": "{}"},
+            "_result": "cached result",
+        }]},
+        {"role": "tool", "tool_call_id": "call-1", "name": "read_file", "content": "ok"},
+        {"role": "tool", "tool_call_id": "orphan", "name": "read_file", "content": "drop me"},
+    ]
+
+    converted = to_provider_messages(messages)
+    assert converted[0] == {"role": "system", "content": "sys"}
+    assert converted[1]["tool_calls"][0] == {
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "read_file", "arguments": "{}"},
+    }
+    assert [m.get("tool_call_id") for m in converted if m.get("role") == "tool"] == ["call-1"]
 
 
 def test_config_tool_lists_session_bound_registry_tools_only():

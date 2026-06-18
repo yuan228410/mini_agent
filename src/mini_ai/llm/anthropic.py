@@ -178,7 +178,7 @@ def _apply_model_params(payload: dict, ctx=None):
         payload["output_config"] = {"effort": effort}
 
 
-def chat(messages, tools=True, ctx=None):
+def chat(messages, tools=None, ctx=None):
     """非流式请求，返回 OpenAI 格式的 msg dict"""
 
     clean_msgs = _strip_internal_fields(messages)
@@ -312,7 +312,7 @@ def chat(messages, tools=True, ctx=None):
             response.close()
 
 
-def chat_stream(messages, tools=True, ctx=None, abort_event=None):
+def chat_stream(messages, tools=None, ctx=None, abort_event=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
 
     clean_msgs = _strip_internal_fields(messages)
