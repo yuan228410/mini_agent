@@ -75,6 +75,20 @@ export interface PlanInteractionOption {
   recommended?: boolean
 }
 
+export type PlanChoiceMode = 'option' | 'decision'
+export type PlanChoiceOption = PlanOption | PlanDecisionOption | PlanInteractionOption
+
+export interface PlanChoiceConfirmPayload {
+  selectedIds: string[]
+  customValue: string
+}
+
+export interface PlanDecisionOpenPayload {
+  decision: PlanDecision
+  stepId?: string
+  stepTitle?: string
+}
+
 export interface PlanInteraction {
   id: string
   planId: string

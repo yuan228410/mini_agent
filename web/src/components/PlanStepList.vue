@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { PlanStep } from '../plan/types'
+import type { PlanDecisionOpenPayload, PlanStep } from '../plan/types'
 import PlanDecisionPicker from './PlanDecisionPicker.vue'
 
 defineProps<{ steps: PlanStep[] }>()
-const emit = defineEmits<{ (e: 'open-decision', payload: { decision: any; stepId?: string; stepTitle?: string }): void }>()
+const emit = defineEmits<{ (e: 'open-decision', payload: PlanDecisionOpenPayload): void }>()
 </script>
 
 <template>

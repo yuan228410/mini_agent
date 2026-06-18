@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import type { PlanInteraction } from '../plan/types'
+import type { PlanInteraction, PlanInteractionOption } from '../plan/types'
 
 const props = defineProps<{ interaction: PlanInteraction }>()
 const emit = defineEmits<{
@@ -25,7 +25,7 @@ const modeLabel = computed(() => {
   return '步骤决策'
 })
 
-function riskLevel(option: any): string {
+function riskLevel(option: PlanInteractionOption): string {
   return option.risk_level || ''
 }
 

@@ -7,7 +7,7 @@ import ToolCallBlock from './ToolCallBlock.vue'
 import PlanArtifactCard from './PlanArtifactCard.vue'
 import PlanInteractionCard from './PlanInteractionCard.vue'
 import type { ImageData } from '../api'
-import type { PlanInteraction } from '../plan/types'
+import type { PlanArtifact, PlanDecisionOpenPayload, PlanInteraction } from '../plan/types'
 
 marked.use({
   breaks: true,
@@ -17,7 +17,7 @@ marked.use({
 const emit = defineEmits<{
   (e: 'retry'): void
   (e: 'open-plan-options'): void
-  (e: 'open-plan-decision', payload: { decision: any; stepId?: string; stepTitle?: string }): void
+  (e: 'open-plan-decision', payload: PlanDecisionOpenPayload): void
   (e: 'submit-plan-interaction', payload: { interaction: PlanInteraction; selectedIds: string[]; customValue: string }): void
 }>()
 
@@ -32,7 +32,7 @@ const props = defineProps<{
     timestamp?: string
     teammate?: string
     teammateColor?: string
-    plan?: any
+    plan?: PlanArtifact
     planInteraction?: PlanInteraction
   }
 }>()

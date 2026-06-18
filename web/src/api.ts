@@ -1,4 +1,4 @@
-import type { PlanEventData } from './plan/types'
+import type { PlanArtifact, PlanEventData } from './plan/types'
 
 const USERNAME_KEY = 'mini-ai-username'
 const _FETCH_TIMEOUT = 8000
@@ -251,13 +251,13 @@ export interface HistoryMessage {
   thinking?: any
   timestamp?: string
   kind?: string
-  plan?: any
+  plan?: PlanArtifact
 }
 
 export interface HistoryResponse {
   session_id: string
   history: HistoryMessage[]
-  current_plan?: any
+  current_plan?: PlanArtifact | null
 }
 
 export interface SessionInfo {

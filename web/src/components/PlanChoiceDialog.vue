@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
-import type { PlanOption } from '../plan/types'
+import type { PlanChoiceConfirmPayload, PlanChoiceMode, PlanChoiceOption } from '../plan/types'
 
 const props = defineProps<{
   visible: boolean
-  mode: 'option' | 'decision'
+  mode: PlanChoiceMode
   title: string
   subtitle?: string
-  options: Array<PlanOption | { id: string; title: string; summary?: string; recommended?: boolean }>
+  options: PlanChoiceOption[]
   allowMultiple?: boolean
   selectedIds?: string[]
   customValue?: string
@@ -16,7 +16,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'confirm', payload: { selectedIds: string[]; customValue: string }): void
+  (e: 'confirm', payload: PlanChoiceConfirmPayload): void
 }>()
 
 const local = reactive({ selectedIds: [] as string[], customValue: '' })
@@ -38,8 +38,8 @@ const modeLabel = computed(() => {
 
 const canConfirm = computed(() => local.selectedIds.length > 0 || local.customValue.trim().length > 0)
 
-function riskLevel(option: any): string {
-  return option.risk_level || ''
+function riskLevel(option: PlanChoiceOption): string {
+  return 'risk_level' in option ? option.risk_level || '' : ''
 }
 
 function toggle(id: string) {

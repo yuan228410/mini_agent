@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import type { PlanArtifact } from '../plan/types'
+import type { PlanArtifact, PlanDecisionOpenPayload } from '../plan/types'
 import PlanOptionPicker from './PlanOptionPicker.vue'
 import PlanStepList from './PlanStepList.vue'
 
 defineProps<{ plan: PlanArtifact }>()
 const emit = defineEmits<{
   (e: 'open-option'): void
-  (e: 'open-decision', payload: { decision: any; stepId?: string; stepTitle?: string }): void
+  (e: 'open-decision', payload: PlanDecisionOpenPayload): void
 }>()
 </script>
 

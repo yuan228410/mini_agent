@@ -15,7 +15,7 @@ import PlanApprovalBar from './PlanApprovalBar.vue'
 import PlanChoiceDialog from './PlanChoiceDialog.vue'
 import { usePlanSession } from '../plan/usePlanSession'
 import { hasUnresolvedPlanInteractions, isFinalPlan, nextPlanInteraction } from '../plan/interactions'
-import type { PlanArtifact, PlanDecision, PlanInteraction, PlanState } from '../plan/types'
+import type { PlanArtifact, PlanChoiceConfirmPayload, PlanChoiceMode, PlanChoiceOption, PlanDecision, PlanDecisionOpenPayload, PlanInteraction, PlanState } from '../plan/types'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -83,10 +83,10 @@ const effectiveInputMode = computed(() => {
 const workflowStateRef = ref<WorkflowState | undefined>()
 const planDialog = ref<{
   visible: boolean
-  mode: 'option' | 'decision'
+  mode: PlanChoiceMode
   title: string
   subtitle?: string
-  options: any[]
+  options: PlanChoiceOption[]
   allowMultiple: boolean
   selectedIds: string[]
   customValue: string
@@ -116,7 +116,7 @@ function _tmColor(name: string): string {
   return teammateColorMap[base] || '#888'
 }
 
-function _looksLikePlanArtifact(raw: any): boolean {
+function _looksLikePlanArtifact(raw: unknown): raw is PlanArtifact {
   return !!(raw && typeof raw === 'object' && ['goal', 'summary', 'steps', 'options'].some(k => k in raw))
 }
 
@@ -442,7 +442,7 @@ async function restoreHistory(sid: string, ws?: string) {
       } else {
         const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' }
         if (m.images) msg.images = m.images
-        if (m.kind) msg.kind = m.kind as any
+        if (m.kind && (m.kind === 'chat' || m.kind === 'plan_discussion' || m.kind === 'plan_artifact' || m.kind === 'plan_interaction' || m.kind === 'system_notice')) msg.kind = m.kind
         if (m.plan) {
           msg.plan = m.plan
           if (!isFinalPlan(m.plan)) continue
@@ -1350,7 +1350,7 @@ function openPlanOptionsDialog() {
   }
 }
 
-function openPlanDecisionDialog(payload: { decision: PlanDecision; stepId?: string; stepTitle?: string }) {
+function openPlanDecisionDialog(payload: PlanDecisionOpenPayload) {
   planDialog.value = {
     visible: true,
     mode: 'decision',
@@ -1433,7 +1433,7 @@ function submitPlanInteraction(payload: { interaction: PlanInteraction; selected
   sendMessage(_buildInteractionInstruction(payload.interaction, payload.selectedIds, payload.customValue))
 }
 
-function confirmPlanDialog(payload: { selectedIds: string[]; customValue: string }) {
+function confirmPlanDialog(payload: PlanChoiceConfirmPayload) {
   const dialog = planDialog.value
   closePlanDialog()
   const current = plan.state.currentPlan

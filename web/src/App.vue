@@ -14,7 +14,7 @@ import SettingsPanel from './components/SettingsPanel.vue'
 import WorkflowPanel from './components/WorkflowPanel.vue'
 import PlanArtifactCard from './components/PlanArtifactCard.vue'
 import { isFinalPlan } from './plan/interactions'
-import type { PlanState } from './plan/types'
+import type { PlanArtifact, PlanDecisionOpenPayload, PlanState } from './plan/types'
 
 const SIDEBAR_KEY = 'mini-ai-sidebar-open'
 const SIDEBAR_WIDTH_KEY = 'mini-ai-sidebar-width'
@@ -44,7 +44,7 @@ const usernameInput = ref('')
 const sessionId = ref('')
 const planState = ref<PlanState>('idle')
 const todosContent = ref('')
-const currentPlan = ref<any>(null)
+const currentPlan = ref<PlanArtifact | null>(null)
 const activeWorkspace = ref('')
 
 // 组件引用
@@ -126,7 +126,7 @@ function onSelectTheme(nextTheme: Theme) {
   theme.value = setTheme(nextTheme)
 }
 
-function onConfigUpdate(c: any) {
+function onConfigUpdate(c: Partial<typeof config.value> & { plan_state?: PlanState }) {
   config.value = { ...config.value, ...c }
   if (c.session_id) sessionId.value = c.session_id
   if (c.plan_state !== undefined) planState.value = c.plan_state
@@ -136,7 +136,7 @@ function onPlanModeChange(state: PlanState | boolean) {
   planState.value = typeof state === 'boolean' ? (state ? 'planning' : 'idle') : state
 }
 
-function onPlanUpdate(plan: any) {
+function onPlanUpdate(plan: PlanArtifact | null) {
   currentPlan.value = plan
 }
 
@@ -211,7 +211,7 @@ function openPlanOptionsFromPanel() {
   chatViewRef.value?.openPlanOptionsDialog()
 }
 
-function openPlanDecisionFromPanel(payload: any) {
+function openPlanDecisionFromPanel(payload: PlanDecisionOpenPayload) {
   chatViewRef.value?.openPlanDecisionDialog(payload)
 }
 
