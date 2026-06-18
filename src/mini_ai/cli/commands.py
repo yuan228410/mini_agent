@@ -3,6 +3,8 @@ from datetime import datetime, timezone, timedelta
 
 from ..logger import logger
 from ..utils import now_ts
+from ..plan.schema import PlanSessionState, PlanArtifact
+from ..plan.service import PlanService
 
 
 class CommandHandler:
@@ -21,12 +23,44 @@ class CommandHandler:
         self.project_path = project_path
         self.username = username
         self.session_id = session_id
-        self.plan_mode = False
+        self.plan = PlanSessionState()
 
     def handle(self, user_input: str, messages: list[dict]) -> str | None:
         """处理斜杠命令，返回 'continue' / 'break' / None（非命令）"""
         return self.handle_commands(user_input, messages)
     
+    def get_plan_state(self, key: str = "") -> PlanSessionState:
+        return self.plan
+
+    def set_plan_state(self, key: str, plan: PlanSessionState):
+        self.plan = plan
+
+    def _plan_store(self):
+        from ..plan.store import PlanStore
+        return PlanStore(self.history_db, self._get_workspace(), self.session_id or "default")
+
+    def _render_plan(self):
+        artifact = PlanArtifact.from_dict(self.plan.current_plan)
+        if not artifact:
+            self.disp.info("暂无计划")
+            return
+        from rich.panel import Panel
+        from rich.table import Table
+        self.disp.console.print(Panel(f"[bold]{artifact.goal}[/bold]\n\n{artifact.summary}", title=f"PLAN r{artifact.revision} · {artifact.status}", border_style="yellow"))
+        if artifact.options:
+            table = Table(title="方案选项", show_header=True)
+            table.add_column("ID")
+            table.add_column("方案")
+            table.add_column("风险")
+            table.add_column("说明")
+            for opt in artifact.options:
+                mark = " ✓" if opt.id == artifact.selected_option_id else ""
+                table.add_row(opt.id + mark, opt.title, opt.risk_level, opt.summary)
+            self.disp.console.print(table)
+        if artifact.steps:
+            lines = [f"{i+1}. {s.title} — {s.description}" for i, s in enumerate(artifact.steps)]
+            self.disp.info("执行步骤:\n" + "\n".join(lines))
+
     def _get_workspace(self) -> str:
         """获取当前工作空间名称"""
         if self.workspace_mgr:
@@ -300,11 +334,11 @@ class CommandHandler:
                 return "continue"
             prompt = f"请将当前对话中的关键方法论、步骤和经验总结为一个名为 '{skill_name}' 的技能。要求：1) 用 YAML frontmatter 定义 name 和 description；2) 正文用 Markdown 格式，结构清晰，步骤明确；3) 调用 install_skill 工具安装，使用 content 参数传入技能内容。"
             messages.append({"role": "user", "content": prompt, "timestamp": now_ts()})
-            self.history_db.append("user", prompt)
+            self.history_db.append(self._get_workspace(), self.session_id, "user", prompt)
             msg = self.run_tool_fn(messages, self.lead_tools, self.inject_fn, self.disp, ctx=self.ctx)
             if msg and msg.get("content"):
                 messages.append({"role": "assistant", "content": msg["content"]})
-                self.history_db.append("assistant", msg["content"])
+                self.history_db.append(self._get_workspace(), self.session_id, "assistant", msg["content"])
             return "continue"
 
         # ── 技能管理命令 ──
@@ -598,18 +632,36 @@ tags: 标签1,标签2
                     return "reload_workspace"
             return "continue"
 
-        if user_input == "/plan":
-            self.plan_mode = True
-            self.disp.info("已进入计划模式 📋 — 后续消息只规划不执行，输入 /act 开始执行")
+        if user_input == "/plan" or user_input.startswith("/plan "):
+            sub = user_input[6:].strip()
+            if sub == "cancel":
+                PlanService().cancel(session_key=self.session_id or "cli", sm=self, store=self._plan_store())
+                self.disp.info("已取消计划模式")
+                return "continue"
+            if sub == "status":
+                self._render_plan()
+                return "continue"
+            artifact = PlanService().start(session_key=self.session_id or "cli", sm=self, store=self._plan_store(), goal=sub)
+            self.plan = PlanSessionState(state=artifact.status, current_plan=artifact.to_dict(), selected_option_id=artifact.selected_option_id)
+            self.disp.info("已进入计划模式：继续输入可讨论/修订方案，输入 /act 批准执行")
+            self._render_plan()
             return "continue"
 
         if user_input == "/act":
-            if not self.plan_mode:
-                self.disp.info("当前已是执行模式")
+            artifact = PlanArtifact.from_dict(self.plan.current_plan)
+            if not artifact or artifact.status != "awaiting_approval":
+                self.disp.info("当前没有等待确认的计划。请先 /plan 并完成方案讨论。")
                 return "continue"
-            self.plan_mode = False
-            self.disp.info("已切换到执行模式 ⚡")
-            return "continue"
+            artifact = PlanService().approve(
+                session_key=self.session_id or "cli",
+                sm=self,
+                store=self._plan_store(),
+                plan_id=artifact.plan_id,
+                revision=artifact.revision,
+            )
+            self.plan.approved_plan = artifact.to_dict()
+            self.disp.info("计划已批准，开始执行")
+            return "approve_plan"
 
         if user_input == "/mcp":
             from ..tools.mcp_loader import _MCP_ENABLED, _MCP_SERVERS

@@ -14,8 +14,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket
 
-from ...config import DATA_DIR, MODEL_CONFIG, PLAN, STREAMING, RequestContext, get_model_config
-from ...llm import get_usage, reset_usage, chat as llm_chat
+from ...config import MODEL_CONFIG, RequestContext, get_model_config
 from ...logger import logger
 from ...tools import inject_todos as _inject_todos
 from ...utils import now_ts
@@ -27,6 +26,8 @@ from ..session_manager import (
     _update_meta_cache, _build_meta,
 )
 from ..chat_runner import run_tool_loop_sync
+from ...plan.service import PlanService
+from ...plan.store import PlanStore
 
 router = APIRouter()
 
@@ -48,27 +49,28 @@ async def chat_ws_endpoint(ws: WebSocket):
             except Exception as e:
                 logger.warning(f'[Web] _send failed: {e}, event={data.get("event")}')
 
-    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list | None = None):
-        logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0}")
+    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list | None = None, plan_turn: bool = False, approved_plan: dict | None = None):
+        logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")
         session_key = cache_key(username, ws_name, sid)
         base = resolve_base(username, ws_name)
         messages = get_or_create_session(username, sid, base, ws_name)[1]
         ts = now_ts()
 
-        # 构造用户消息（可能包含图片）
-        user_msg: dict = {"role": "user", "content": user_message, "timestamp": ts}
-        if images and len(images) > 0:
-            content_blocks = [{"type": "text", "text": user_message}]
-            for img in images:
-                data_url = img.get("dataUrl", "")
-                if data_url.startswith("data:"):
-                    content_blocks.append({
-                        "type": "image_url",
-                        "image_url": {"url": data_url}
-                    })
-            user_msg["content"] = content_blocks
+        # 构造用户消息（可能包含图片）。审批后的执行由 approved_plan 注入内部指令，不追加可见用户消息。
+        if user_message or images:
+            user_msg: dict = {"role": "user", "content": user_message, "timestamp": ts}
+            if images and len(images) > 0:
+                content_blocks = [{"type": "text", "text": user_message}]
+                for img in images:
+                    data_url = img.get("dataUrl", "")
+                    if data_url.startswith("data:"):
+                        content_blocks.append({
+                            "type": "image_url",
+                            "image_url": {"url": data_url}
+                        })
+                user_msg["content"] = content_blocks
 
-        messages.append(user_msg)
+            messages.append(user_msg)
         get_or_create_components(username, sid, base, ws_name)
 
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
@@ -88,7 +90,7 @@ async def chat_ws_endpoint(ws: WebSocket):
         from ...config import RUNNER
         max_turns_web = RUNNER.get("max_turns", 20)
         future = loop.run_in_executor(
-            None, run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name
+            None, run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name, plan_turn, approved_plan
         )
 
         complete_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -203,12 +205,82 @@ async def chat_ws_endpoint(ws: WebSocket):
                                 evt.set()
                         continue
 
+                    username = _ws_username
+                    session_id = data.get("session_id")
+                    ws_name = data.get("workspace")
+
+                    if msg_type and msg_type.startswith("plan."):
+                        if not session_id:
+                            await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                            continue
+                        base = resolve_base(username, ws_name)
+                        sid, messages = get_or_create_session(username, session_id, base, ws_name)
+                        comp = get_or_create_components(username, sid, base, ws_name)
+                        session_key = cache_key(username, ws_name, sid)
+                        sm = SessionManager.instance()
+                        store = PlanStore(comp["history_db"], ws_name or "default", sid)
+                        plan_svc = PlanService()
+
+                        try:
+                            if msg_type == "plan.start":
+                                artifact = plan_svc.start(session_key=session_key, sm=sm, store=store, goal=data.get("goal", ""))
+                                await _send({"event": "plan_event", "data": {"kind": "state.changed", "state": artifact.status, "mode": "plan", "session_id": sid}})
+                                await _send({"event": "plan_event", "data": {"kind": "artifact.updated", "plan": artifact.to_dict(), "session_id": sid}})
+                                continue
+                            if msg_type == "plan.select_option":
+                                artifact = plan_svc.select_option(session_key=session_key, sm=sm, store=store, plan_id=data.get("plan_id", ""), option_id=data.get("option_id", ""))
+                                await _send({"event": "plan_event", "data": {"kind": "option.selected", "option_id": artifact.selected_option_id, "plan": artifact.to_dict(), "session_id": sid}})
+                                await _send({"event": "plan_event", "data": {"kind": "approval.required", "plan": artifact.to_dict(), "plan_id": artifact.plan_id, "revision": artifact.revision, "session_id": sid}})
+                                continue
+                            if msg_type == "plan.apply_decision":
+                                artifact = plan_svc.apply_decision(
+                                    session_key=session_key,
+                                    sm=sm,
+                                    store=store,
+                                    plan_id=data.get("plan_id", ""),
+                                    step_id=data.get("step_id", ""),
+                                    decision_id=data.get("decision_id", ""),
+                                    selected_option_ids=data.get("selected_option_ids") or [],
+                                    custom_value=data.get("custom_value", ""),
+                                    revision=int(data["revision"]) if data.get("revision") is not None else None,
+                                )
+                                await _send({"event": "plan_event", "data": {"kind": "decision.applied", "plan": artifact.to_dict(), "step_id": data.get("step_id", ""), "decision_id": data.get("decision_id", ""), "session_id": sid}})
+                                await _send({"event": "plan_event", "data": {"kind": "artifact.updated", "plan": artifact.to_dict(), "session_id": sid}})
+                                if artifact.status == "awaiting_approval":
+                                    await _send({"event": "plan_event", "data": {"kind": "approval.required", "plan": artifact.to_dict(), "plan_id": artifact.plan_id, "revision": artifact.revision, "session_id": sid}})
+                                continue
+                            if msg_type == "plan.cancel":
+                                plan_svc.cancel(session_key=session_key, sm=sm, store=store)
+                                await _send({"event": "plan_event", "data": {"kind": "cancelled", "mode": "chat", "session_id": sid}})
+                                continue
+                            if msg_type == "plan.approve":
+                                artifact = plan_svc.approve(session_key=session_key, sm=sm, store=store, plan_id=data.get("plan_id", ""), revision=int(data.get("revision") or 0))
+                                executing_artifact = plan_svc.mark_executing(session_key=session_key, sm=sm, store=store, artifact=artifact)
+                                await _send({"event": "plan_event", "data": {"kind": "approved", "plan": artifact.to_dict(), "session_id": sid}})
+                                await _send({"event": "plan_event", "data": {"kind": "execution.started", "plan": executing_artifact.to_dict(), "mode": "execute", "session_id": sid}})
+                                task = asyncio.create_task(_run_chat(sid, username, "", ws_name, None, False, executing_artifact.to_dict()))
+                                if not sm.claim_active_task(session_key, task):
+                                    task.cancel()
+                                    await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                                continue
+                            if msg_type in ("plan.message", "plan.revise"):
+                                user_message = data.get("message", "").strip()
+                                if not user_message:
+                                    await _send({"event": "error", "data": {"error": "计划消息不能为空", "session_id": sid}})
+                                    continue
+                                task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, data.get("images"), True, None))
+                                if not sm.claim_active_task(session_key, task):
+                                    task.cancel()
+                                    await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                                continue
+                        except Exception as e:
+                            await _send({"event": "plan_event", "data": {"kind": "error", "error": str(e), "session_id": sid}})
+                            continue
+
                     if msg_type != "chat":
                         continue
 
                     user_message = data.get("message", "").strip()
-                    username = _ws_username
-                    session_id = data.get("session_id")
                     images = data.get("images")
 
                     # 处理 /compact 命令
@@ -246,14 +318,40 @@ async def chat_ws_endpoint(ws: WebSocket):
                             await _send({"event": "error", "data": {"error": f"压缩失败: {e}", "session_id": sid}})
                         continue
 
-                    # 处理 /act 命令（切换到执行模式）
+                    # 处理 /act 命令（批准当前计划并执行）
                     if user_message == "/act":
                         ws_name = data.get("workspace")
-                        if session_id:
-                            session_key = cache_key(username, ws_name, session_id)
-                            sm = SessionManager.instance()
-                            sm.set_plan_mode(session_key, False)
-                        await _send({"event": "info", "data": {"message": "⚡ 已切换到执行模式", "session_id": session_id}})
+                        if not session_id:
+                            await _send({"event": "error", "data": {"error": "请先选择会话"}})
+                            continue
+                        base = resolve_base(username, ws_name)
+                        sid, _ = get_or_create_session(username, session_id, base, ws_name)
+                        comp = get_or_create_components(username, sid, base, ws_name)
+                        session_key = cache_key(username, ws_name, sid)
+                        sm = SessionManager.instance()
+                        store = PlanStore(comp["history_db"], ws_name or "default", sid)
+                        artifact_dict = sm.get_plan_state(session_key).current_plan or store.current()
+                        if not artifact_dict:
+                            await _send({"event": "plan_event", "data": {"kind": "error", "error": "当前没有可审批的计划", "session_id": sid}})
+                            continue
+                        try:
+                            plan_svc = PlanService()
+                            artifact = plan_svc.approve(
+                                session_key=session_key,
+                                sm=sm,
+                                store=store,
+                                plan_id=artifact_dict.get("plan_id", ""),
+                                revision=int(artifact_dict.get("revision") or 0),
+                            )
+                            executing_artifact = plan_svc.mark_executing(session_key=session_key, sm=sm, store=store, artifact=artifact)
+                            await _send({"event": "plan_event", "data": {"kind": "approved", "plan": artifact.to_dict(), "session_id": sid}})
+                            await _send({"event": "plan_event", "data": {"kind": "execution.started", "plan": executing_artifact.to_dict(), "mode": "execute", "session_id": sid}})
+                            task = asyncio.create_task(_run_chat(sid, username, "", ws_name, None, False, executing_artifact.to_dict()))
+                            if not sm.claim_active_task(session_key, task):
+                                task.cancel()
+                                await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
+                        except Exception as e:
+                            await _send({"event": "plan_event", "data": {"kind": "error", "error": str(e), "session_id": sid}})
                         continue
 
                     if not session_id:
@@ -261,16 +359,17 @@ async def chat_ws_endpoint(ws: WebSocket):
                         continue
 
                     ws_name = data.get("workspace")
+                    sid = session_id
 
                     # 同一会话只允许一个生成任务，避免多个 runner 同时改同一 messages 导致串流
-                    session_key = cache_key(username, ws_name, session_id)
+                    session_key = cache_key(username, ws_name, sid)
                     sm = SessionManager.instance()
                     task = asyncio.create_task(
-                        _run_chat(session_id, username, user_message, ws_name, images)
+                        _run_chat(sid, username, user_message, ws_name, images)
                     )
                     if not sm.claim_active_task(session_key, task):
                         task.cancel()
-                        await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": session_id}})
+                        await _send({"event": "error", "data": {"error": "当前会话正在生成，请稍后再发送", "session_id": sid}})
                         continue
 
                 except asyncio.TimeoutError:
@@ -303,6 +402,8 @@ async def chat_ws_endpoint(ws: WebSocket):
         reader_task.cancel()
         try:
             await reader_task
+        except asyncio.CancelledError:
+            pass
         except Exception:
             pass
 
@@ -327,11 +428,15 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
     sm = SessionManager.instance()
     mem_msgs = sm.get_messages(key)
 
+    current_plan = None
     if mem_msgs:
         messages = [m for m in mem_msgs if m["role"] not in ("system", "tool")]
+        comp = get_or_create_components(username, session_id, base, workspace or None)
+        current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
     else:
         comp = get_or_create_components(username, session_id, base, workspace or None)
         messages = comp["history_db"].load_session_for_display(workspace or "default", session_id) or []
+        current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
 
     history = []
     for m in messages:
@@ -362,10 +467,14 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
             entry["thinking"] = m["thinking"]
         if m.get("tool_calls"):
             entry["tool_calls"] = m["tool_calls"]
+        if m.get("kind"):
+            entry["kind"] = m["kind"]
+        if m.get("plan"):
+            entry["plan"] = m["plan"]
         history.append(entry)
 
     logger.info(f"[chat_history] sid={session_id} ws={workspace} msgs={len(messages)} time={time.time()-_t0:.3f}s")
-    return {"session_id": session_id, "history": history}
+    return {"session_id": session_id, "history": history, "current_plan": current_plan}
 
 
 # ── REST: 重置会话 ──

@@ -98,11 +98,13 @@ function toggleResult() {
 
 <style scoped>
 .tool-block {
-  margin: 0.5rem 0;
-  padding-left: 0.8rem;
-  border-left: 2px dashed var(--tool-line);
-  background: var(--bg-tool);
-  border-radius: 0 4px 4px 0;
+  margin: 0.65rem 0;
+  padding: 0.12rem 0 0.12rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--tool-line) 42%, var(--border));
+  border-left: 3px dashed var(--tool-line);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-tool) 64%, transparent), color-mix(in srgb, var(--bg-card) 46%, transparent));
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.032);
 }
 
 .tool-line {
@@ -119,7 +121,7 @@ function toggleResult() {
 }
 
 .tool-name {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   font-weight: 500;
   color: var(--fg);
@@ -156,7 +158,7 @@ function toggleResult() {
 }
 
 .tool-args {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.75rem;
   line-height: 1.4;
   color: var(--fg-dim);
@@ -183,7 +185,7 @@ function toggleResult() {
 }
 
 .result-preview {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.72rem;
   line-height: 1.4;
   color: var(--fg-muted);
@@ -244,7 +246,7 @@ function toggleResult() {
 }
 
 .detail-content {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   line-height: 1.5;
   color: var(--fg-muted);

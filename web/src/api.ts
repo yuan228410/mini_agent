@@ -74,11 +74,14 @@ export interface HistoryMessage {
   images?: ImageData[]
   thinking?: any
   timestamp?: string
+  kind?: string
+  plan?: any
 }
 
 export interface HistoryResponse {
   session_id: string
   history: HistoryMessage[]
+  current_plan?: any
 }
 
 export interface SessionInfo {
@@ -325,7 +328,7 @@ function _flushPendingMessages() {
   const pending = [..._pendingMessages]
   _pendingMessages.length = 0
   for (const p of pending) {
-    wsChat(p.message, p.sessionId, p.workspace, p.planMode, p.images)
+    wsSend(p)
   }
 }
 
@@ -335,18 +338,21 @@ export interface ImageData {
   size: number
 }
 
-export function wsChat(message: string, sessionId?: string, workspace?: string, planMode?: boolean, images?: ImageData[]) {
+function _sendOrQueue(msg: any) {
   if (!_ws || _ws.readyState !== WebSocket.OPEN) {
-    _pendingMessages.push({ message, sessionId, workspace, planMode, images })
+    _pendingMessages.push(msg)
     console.log(`[WS] Queued message (offline), pending=${_pendingMessages.length}`)
     return
   }
+  wsSend(msg)
+}
+
+export function wsChat(message: string, sessionId?: string, workspace?: string, images?: ImageData[]) {
   const chatMsg: any = { type: 'chat', message, ..._usernameBody() }
   if (sessionId) chatMsg.session_id = sessionId
   if (workspace) chatMsg.workspace = workspace
-  if (planMode) chatMsg.plan_mode = true
   if (images && images.length > 0) chatMsg.images = images
-  wsSend(chatMsg)
+  _sendOrQueue(chatMsg)
 }
 
 export function abortChat(sessionId?: string, workspace?: string) {
@@ -356,16 +362,68 @@ export function abortChat(sessionId?: string, workspace?: string) {
   wsSend(msg)
 }
 
-export function sendPlan(sessionId?: string) {
-  const msg: any = { type: 'plan', ..._usernameBody() }
+export function startPlan(sessionId?: string, workspace?: string, initialGoal?: string) {
+  const msg: any = { type: 'plan.start', goal: initialGoal || '', ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
-  wsSend(msg)
+  if (workspace) msg.workspace = workspace
+  _sendOrQueue(msg)
 }
 
-export function sendAct(sessionId?: string) {
-  const msg: any = { type: 'act', ..._usernameBody() }
+export function sendPlanMessage(message: string, sessionId?: string, workspace?: string, images?: ImageData[]) {
+  const msg: any = { type: 'plan.message', message, ..._usernameBody() }
   if (sessionId) msg.session_id = sessionId
-  wsSend(msg)
+  if (workspace) msg.workspace = workspace
+  if (images && images.length > 0) msg.images = images
+  _sendOrQueue(msg)
+}
+
+export function selectPlanOption(sessionId: string, planId: string, optionId: string, workspace?: string) {
+  const msg: any = { type: 'plan.select_option', session_id: sessionId, plan_id: planId, option_id: optionId, ..._usernameBody() }
+  if (workspace) msg.workspace = workspace
+  _sendOrQueue(msg)
+}
+
+export function approvePlan(sessionId: string, planId: string, revision: number, workspace?: string) {
+  const msg: any = { type: 'plan.approve', session_id: sessionId, plan_id: planId, revision, ..._usernameBody() }
+  if (workspace) msg.workspace = workspace
+  _sendOrQueue(msg)
+}
+
+export function applyPlanDecision(
+  sessionId: string,
+  planId: string,
+  revision: number,
+  stepId: string,
+  decisionId: string,
+  selectedOptionIds: string[],
+  customValue: string,
+  workspace?: string,
+) {
+  const msg: any = {
+    type: 'plan.apply_decision',
+    session_id: sessionId,
+    plan_id: planId,
+    revision,
+    step_id: stepId,
+    decision_id: decisionId,
+    selected_option_ids: selectedOptionIds,
+    custom_value: customValue,
+    ..._usernameBody(),
+  }
+  if (workspace) msg.workspace = workspace
+  _sendOrQueue(msg)
+}
+
+export function revisePlan(sessionId: string, planId: string, instruction: string, workspace?: string) {
+  const msg: any = { type: 'plan.revise', session_id: sessionId, plan_id: planId, message: instruction, ..._usernameBody() }
+  if (workspace) msg.workspace = workspace
+  _sendOrQueue(msg)
+}
+
+export function cancelPlan(sessionId: string, planId?: string, workspace?: string) {
+  const msg: any = { type: 'plan.cancel', session_id: sessionId, plan_id: planId || '', ..._usernameBody() }
+  if (workspace) msg.workspace = workspace
+  _sendOrQueue(msg)
 }
 
 export function closeWs() {

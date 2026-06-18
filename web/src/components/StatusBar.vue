@@ -7,7 +7,7 @@ const props = defineProps<{
   prompt_tokens: number
   completion_tokens: number
   history_count: number
-  planMode?: boolean
+  planState?: string
 }>()
 
 const modelShort = computed(() => {
@@ -24,11 +24,23 @@ const usagePct = computed(() => {
   if (pct < 1 && pct > 0) return pct.toFixed(1)
   return Math.round(pct).toString()
 })
+
+const planLabel = computed(() => {
+  switch (props.planState) {
+    case 'planning': return 'PLAN 规划'
+    case 'awaiting_user': return 'PLAN 待补充'
+    case 'awaiting_approval': return 'PLAN 待确认'
+    case 'approved': return 'PLAN 已批准'
+    case 'executing': return 'PLAN 执行中'
+    default: return 'CHAT 对话'
+  }
+})
+const isPlanActive = computed(() => !['idle', 'completed', 'cancelled', 'superseded', undefined].includes(props.planState as any))
 </script>
 
 <template>
   <div class="status-bar">
-    <span class="status-item" :class="{ 'plan-mode': planMode }">{{ planMode ? '📋 计划' : '⚡ 执行' }}</span>
+    <span class="status-item" :class="{ 'plan-mode': isPlanActive }">{{ planLabel }}</span>
     <span class="status-sep">·</span>
     <span class="status-item">{{ modelShort }}</span>
     <span class="status-sep">·</span>
@@ -47,16 +59,22 @@ const usagePct = computed(() => {
   justify-content: flex-end;
   align-items: center;
   gap: 0.35rem;
-  padding: 0.25rem 1.5rem;
-  border-top: 0.5px solid var(--border-light);
-  font-size: 0.72rem;
-  font-family: 'JetBrains Mono', monospace;
+  padding: 0.32rem 1.5rem;
+  border-top: 1px solid var(--surface-hairline);
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  font-weight: 700;
   color: var(--fg-dim);
-  background: var(--bg);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 44%, transparent), color-mix(in srgb, var(--bg) 82%, transparent));
+  backdrop-filter: blur(12px);
   cursor: default;
 }
 
 .status-sep {
   color: var(--border);
+}
+
+.plan-mode {
+  color: var(--accent);
 }
 </style>

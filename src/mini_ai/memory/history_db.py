@@ -134,6 +134,21 @@ class HistoryDB:
                 CREATE INDEX IF NOT EXISTS idx_session ON messages(workspace, session_id);
                 CREATE INDEX IF NOT EXISTS idx_ts ON messages(ts);
                 CREATE INDEX IF NOT EXISTS idx_role ON messages(role);
+
+                CREATE TABLE IF NOT EXISTS plan_artifacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    plan_id TEXT NOT NULL,
+                    revision INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    artifact_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(workspace, session_id, plan_id, revision)
+                );
+                CREATE INDEX IF NOT EXISTS idx_plan_current ON plan_artifacts(workspace, session_id, updated_at);
+                CREATE INDEX IF NOT EXISTS idx_plan_status ON plan_artifacts(workspace, session_id, status);
             """)
             try:
                 self._conn.execute(
@@ -505,8 +520,90 @@ class HistoryDB:
                 # FTS 查询失败，退化为 LIKE 搜索
                 return self.search(keyword=keyword, workspace=workspace, limit=limit)
     
+    # === 计划产物操作 ===
+
+    def save_plan(self, workspace: str, session_id: str, artifact: dict) -> None:
+        """保存结构化计划产物。"""
+        payload = json.dumps(artifact, ensure_ascii=False)
+        created_at = artifact.get("created_at") or datetime.now(_UTC8).isoformat()
+        updated_at = artifact.get("updated_at") or datetime.now(_UTC8).isoformat()
+        with self._lock:
+            self._ensure_conn()
+            with self._conn:
+                self._conn.execute(
+                    """INSERT OR REPLACE INTO plan_artifacts
+                       (workspace, session_id, plan_id, revision, status, artifact_json, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        workspace,
+                        session_id,
+                        artifact.get("plan_id", ""),
+                        int(artifact.get("revision") or 0),
+                        artifact.get("status", ""),
+                        payload,
+                        created_at,
+                        updated_at,
+                    ),
+                )
+
+    def get_current_plan(self, workspace: str, session_id: str) -> dict | None:
+        """返回当前会话最新的非终态计划。"""
+        with self._lock:
+            self._ensure_conn()
+            row = self._conn.execute(
+                """SELECT artifact_json FROM plan_artifacts
+                   WHERE workspace=? AND session_id=? AND status NOT IN ('completed', 'cancelled', 'superseded')
+                   ORDER BY updated_at DESC, revision DESC LIMIT 1""",
+                (workspace, session_id),
+            ).fetchone()
+        if not row:
+            return None
+        try:
+            return json.loads(row[0])
+        except Exception:
+            return None
+
+    def list_plans(self, workspace: str, session_id: str) -> list[dict]:
+        with self._lock:
+            self._ensure_conn()
+            rows = self._conn.execute(
+                """SELECT artifact_json FROM plan_artifacts
+                   WHERE workspace=? AND session_id=?
+                   ORDER BY updated_at DESC, revision DESC""",
+                (workspace, session_id),
+            ).fetchall()
+        plans: list[dict] = []
+        for row in rows:
+            try:
+                plans.append(json.loads(row[0]))
+            except Exception:
+                pass
+        return plans
+
+    def mark_plan_status(self, workspace: str, session_id: str, plan_id: str, status: str) -> None:
+        with self._lock:
+            self._ensure_conn()
+            with self._conn:
+                rows = self._conn.execute(
+                    """SELECT id, artifact_json FROM plan_artifacts
+                       WHERE workspace=? AND session_id=? AND plan_id=?""",
+                    (workspace, session_id, plan_id),
+                ).fetchall()
+                for row_id, payload in rows:
+                    try:
+                        artifact = json.loads(payload)
+                        artifact["status"] = status
+                        artifact["updated_at"] = datetime.now(_UTC8).isoformat()
+                        payload = json.dumps(artifact, ensure_ascii=False)
+                    except Exception:
+                        pass
+                    self._conn.execute(
+                        "UPDATE plan_artifacts SET status=?, artifact_json=?, updated_at=? WHERE id=?",
+                        (status, payload, datetime.now(_UTC8).isoformat(), row_id),
+                    )
+
     # === 删除操作 ===
-    
+
     def delete_session(self, workspace: str, session_id: str) -> int:
         """删除指定会话的所有消息
         
@@ -527,6 +624,10 @@ class HistoryDB:
                     )
                 except Exception:
                     pass
+                self._conn.execute(
+                    "DELETE FROM plan_artifacts WHERE workspace=? AND session_id=?",
+                    (workspace, session_id),
+                )
                 cur = self._conn.execute(
                     "DELETE FROM messages WHERE workspace=? AND session_id=?",
                     (workspace, session_id),
@@ -553,6 +654,10 @@ class HistoryDB:
                     )
                 except Exception:
                     pass
+                self._conn.execute(
+                    "DELETE FROM plan_artifacts WHERE workspace=?",
+                    (workspace,),
+                )
                 cur = self._conn.execute(
                     "DELETE FROM messages WHERE workspace=?",
                     (workspace,),
@@ -622,12 +727,17 @@ class HistoryDB:
                         )
                     except Exception:
                         pass
+                    self._conn.execute(
+                        "DELETE FROM plan_artifacts WHERE workspace=?",
+                        (workspace,),
+                    )
                     cur = self._conn.execute(
                         "DELETE FROM messages WHERE workspace=?",
                         (workspace,),
                     )
                     logger.info(f"[HistoryDB] 已清除 workspace={workspace}, 共 {cur.rowcount} 条消息")
                 else:
+                    self._conn.execute("DELETE FROM plan_artifacts")
                     cur = self._conn.execute("DELETE FROM messages")
                     try:
                         self._conn.execute("DELETE FROM messages_fts")

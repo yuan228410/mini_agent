@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 from ..logger import logger
+from ..plan.artifact_parser import strip_artifact_blocks
 
 
 class HistoryPersister:
@@ -20,10 +21,11 @@ class HistoryPersister:
         persister.flush_deferred(messages)
     """
 
-    def __init__(self, history_db, workspace: str, session_id: str):
+    def __init__(self, history_db, workspace: str, session_id: str, sanitize_plan_artifacts: bool = False):
         self._db = history_db
         self._ws = workspace
         self._sid = session_id
+        self._sanitize_plan_artifacts = sanitize_plan_artifacts
         self._deferred_assistant: list[dict] = []
 
     def __call__(self, msg: dict) -> None:
@@ -48,8 +50,17 @@ class HistoryPersister:
                 meta = {}
                 if msg.get("thinking"):
                     meta["thinking"] = msg["thinking"]
+                if msg.get("kind"):
+                    meta["kind"] = msg["kind"]
+                if msg.get("plan"):
+                    meta["plan"] = msg["plan"]
+                content = msg.get("content", "")
+                if self._sanitize_plan_artifacts:
+                    content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
+                elif msg.get("kind") == "plan_discussion":
+                    content = strip_artifact_blocks(content)
                 self._db.append(
-                    self._ws, self._sid, "assistant", msg.get("content", ""),
+                    self._ws, self._sid, "assistant", content,
                     metadata=json.dumps(meta) if meta else "",
                 )
 
@@ -80,11 +91,20 @@ class HistoryPersister:
             meta = {}
             if am.get("thinking"):
                 meta["thinking"] = am["thinking"]
+            if am.get("kind"):
+                meta["kind"] = am["kind"]
+            if am.get("plan"):
+                meta["plan"] = am["plan"]
             if enriched_tcs:
                 meta["tool_calls"] = enriched_tcs
 
+            content = am.get("content", "")
+            if self._sanitize_plan_artifacts:
+                content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
+            elif am.get("kind") == "plan_discussion":
+                content = strip_artifact_blocks(content)
             self._db.append(
-                self._ws, self._sid, "assistant", am.get("content", ""),
+                self._ws, self._sid, "assistant", content,
                 metadata=json.dumps(meta) if meta else "",
             )
 

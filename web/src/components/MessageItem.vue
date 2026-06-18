@@ -4,14 +4,22 @@ import { marked } from 'marked'
 import hljs from 'highlight.js'
 import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
+import PlanArtifactCard from './PlanArtifactCard.vue'
+import PlanInteractionCard from './PlanInteractionCard.vue'
 import type { ImageData } from '../api'
+import type { PlanInteraction } from '../plan/types'
 
 marked.use({
   breaks: true,
   gfm: true,
 })
 
-const emit = defineEmits<{ (e: 'retry'): void }>()
+const emit = defineEmits<{
+  (e: 'retry'): void
+  (e: 'open-plan-options'): void
+  (e: 'open-plan-decision', payload: { decision: any; stepId?: string; stepTitle?: string }): void
+  (e: 'submit-plan-interaction', payload: { interaction: PlanInteraction; selectedIds: string[]; customValue: string }): void
+}>()
 
 const props = defineProps<{
   message: {
@@ -24,6 +32,8 @@ const props = defineProps<{
     timestamp?: string
     teammate?: string
     teammateColor?: string
+    plan?: any
+    planInteraction?: PlanInteraction
   }
 }>()
 
@@ -108,6 +118,8 @@ function openImage(dataUrl: string) {
       </div>
     </div>
     
+    <PlanInteractionCard v-if="message.planInteraction" :interaction="message.planInteraction" @submit="emit('submit-plan-interaction', $event)" />
+    <PlanArtifactCard v-if="message.plan" :plan="message.plan" @open-option="emit('open-plan-options')" @open-decision="emit('open-plan-decision', $event)" />
     <div v-if="message.content" class="message-body" v-html="renderedContent"></div>
     <span v-if="message.streaming" class="streaming-cursor"></span>
     <button v-if="isError && !message.streaming" class="retry-btn" @click="emit('retry')">↻ 重试</button>
@@ -116,12 +128,26 @@ function openImage(dataUrl: string) {
 
 <style scoped>
 .message {
-  padding: 0.6rem 0.8rem;
-  margin: 0.4rem 0;
-  border-bottom: none;
-  animation: fadeInUp 0.35s ease forwards;
-  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  margin: 0.55rem 0;
+  border: 1px solid color-mix(in srgb, var(--border) 38%, transparent);
+  animation: fadeInUp 0.35s var(--ease-out) forwards;
+  border-radius: 22px;
   position: relative;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 76%, transparent), color-mix(in srgb, var(--bg-elevated) 52%, transparent));
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255,255,255,.035);
+  backdrop-filter: blur(10px) saturate(1.04);
+}
+
+.message::before {
+  content: '';
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  top: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 26%, transparent), transparent);
+  opacity: .55;
 }
 
 
@@ -130,8 +156,10 @@ function openImage(dataUrl: string) {
 }
 
 .message--user {
-  background: var(--accent-soft);
-  border-radius: 10px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 64%, transparent), color-mix(in srgb, var(--bg-card) 70%, transparent));
+  border-color: color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 22px;
+  box-shadow: 0 16px 38px color-mix(in srgb, var(--accent-glow) 12%, var(--shadow) 26%);
 }
 
 .message--user .message-row {
@@ -150,10 +178,10 @@ function openImage(dataUrl: string) {
 
 .message--teammate {
   border-left: 3px solid #888;
-  padding-left: 0.6rem;
+  padding-left: 0.9rem;
   margin-left: 1.5rem;
-  background: var(--bg-tool);
-  border-radius: 0 8px 8px 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-tool) 72%, transparent), color-mix(in srgb, var(--bg-card) 48%, transparent));
+  border-radius: 18px 22px 22px 18px;
 }
 
 .agent-dot {
@@ -185,14 +213,20 @@ function openImage(dataUrl: string) {
 }
 
 .message-row {
-  display: inline;
-  font-size: 0.65rem;
+  display: flex;
+  align-items: center;
+  gap: .45rem;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
   line-height: 1;
   color: var(--fg-dim);
+  margin-bottom: .45rem;
+  letter-spacing: .055em;
+  text-transform: uppercase;
 }
 
 .message-label {
-  font-weight: 500;
+  font-weight: 800;
 }
 
 .message-time {
@@ -236,20 +270,22 @@ function openImage(dataUrl: string) {
 }
 
 .message-body :deep(code) {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: var(--font-mono);
   font-size: 0.88em;
   padding: 0.15em 0.4em;
-  background: var(--bg-code);
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--bg-code) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  border-radius: 7px;
 }
 
 .message-body :deep(pre) {
   margin: 1em 0;
   padding: 1rem 1.2rem;
-  background: var(--bg-code);
-  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-code) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-light) 62%, transparent);
+  border-radius: 16px;
   overflow-x: auto;
-  box-shadow: 0 1px 3px var(--shadow-code);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.03), 0 1px 3px var(--shadow-code);
 }
 
 .message-body :deep(pre code) {
@@ -326,9 +362,11 @@ function openImage(dataUrl: string) {
 .message-image {
   max-width: 200px;
   max-height: 200px;
-  border-radius: 8px;
+  border-radius: 14px;
   overflow: hidden;
   cursor: pointer;
+  border: 1px solid var(--surface-hairline);
+  box-shadow: var(--shadow-card);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 

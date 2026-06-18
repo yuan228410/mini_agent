@@ -62,11 +62,13 @@ function toggle() {
 
 <style scoped>
 .thinking-block {
-  margin: 0.6rem 0;
-  padding-left: 0.8rem;
-  border-left: 2px solid var(--thinking-line);
-  background: var(--bg-thinking);
-  border-radius: 0 4px 4px 0;
+  margin: 0.65rem 0;
+  padding: 0.05rem 0 0.05rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--thinking-line) 34%, var(--border));
+  border-left: 3px solid var(--thinking-line);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-thinking) 78%, transparent), color-mix(in srgb, var(--bg-card) 42%, transparent));
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.032);
   transition: all 0.3s ease;
 }
 

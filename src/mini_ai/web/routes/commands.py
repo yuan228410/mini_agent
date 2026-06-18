@@ -4,8 +4,8 @@ from fastapi import APIRouter
 router = APIRouter()
 
 _WEB_COMMANDS = [
-    {"name": "/plan", "desc": "进入计划模式（只规划不执行）", "has_arg": False},
-    {"name": "/act", "desc": "切换到执行模式", "has_arg": False},
+    {"name": "/plan", "desc": "进入计划模式：讨论方案、生成选项、确认后执行", "has_arg": False},
+    {"name": "/act", "desc": "批准当前计划并执行", "has_arg": False},
     {"name": "/clear", "desc": "清空当前会话消息（归档）", "has_arg": False},
     {"name": "/purge", "desc": "彻底删除历史消息（不可恢复）", "has_arg": False},
     {"name": "/compact", "desc": "手动触发对话压缩", "has_arg": False},

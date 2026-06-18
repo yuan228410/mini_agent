@@ -1,14 +1,21 @@
 <script setup lang="ts">
 import { ref, nextTick, onMounted, onUnmounted, computed, watch } from 'vue'
 import {
-  ensureWs, onWsEvent, wsChat, abortChat, closeWs, sendPlan, sendAct, isWsConnected,
+  ensureWs, onWsEvent, wsChat, abortChat, closeWs, isWsConnected,
+  startPlan, sendPlanMessage, approvePlan, cancelPlan, applyPlanDecision,
   getConfig, createSession, getHistory, resetChat, renameSession,
-  getSessions, getWorkspaces, exportSession,
+  getSessions, exportSession,
   getSystemPrompt, getTodos, getTools,
   type WsEvent, type HistoryMessage, type ImageData,
 } from '../api'
 import MessageItem from './MessageItem.vue'
 import InputBar, { type ImageFile } from './InputBar.vue'
+import PlanModeBanner from './PlanModeBanner.vue'
+import PlanApprovalBar from './PlanApprovalBar.vue'
+import PlanChoiceDialog from './PlanChoiceDialog.vue'
+import { usePlanSession } from '../plan/usePlanSession'
+import { hasUnresolvedPlanInteractions, isFinalPlan, nextPlanInteraction } from '../plan/interactions'
+import type { PlanArtifact, PlanDecision, PlanInteraction, PlanState } from '../plan/types'
 
 interface Message {
   role: 'user' | 'assistant'
@@ -22,6 +29,9 @@ interface Message {
   teammateColor?: string
   workflow?: { status: string; tasks: Record<string, { status: string; agent: string; prompt?: string; result?: string }> }
   main?: boolean
+  kind?: 'chat' | 'plan_discussion' | 'plan_artifact' | 'plan_interaction' | 'system_notice'
+  plan?: PlanArtifact
+  planInteraction?: PlanInteraction
 }
 
 interface SessionState {
@@ -30,6 +40,8 @@ interface SessionState {
   _currentContent: string
   _currentThinking: string
   draftText: string
+  planState: PlanState
+  currentPlan: PlanArtifact | null
   // 多 Agent 并行：每个队友独立的缓冲区
   _teammateBuffers: Map<string, { content: string; thinking: string }>
   // 会话级别工作流状态
@@ -74,10 +86,34 @@ const activeSessionId = ref('')
 const messages = ref<Message[]>([])
 const isStreaming = ref(false)
 const planMode = ref(false)
+const plan = usePlanSession()
 const todosContent = ref('')
 const draftText = ref('')
+const effectiveAwaitingApproval = computed(() => _effectiveAwaitingApproval())
+const effectiveInputMode = computed(() => {
+  if (plan.state.planState === 'executing') return 'executing'
+  if (effectiveAwaitingApproval.value) return 'awaiting_approval'
+  if (plan.isPlanning.value) return 'planning'
+  return 'chat'
+})
 // 响应式的工作流状态（用于触发 Vue 更新）
 const workflowStateRef = ref<WorkflowState | undefined>()
+const planDialog = ref<{
+  visible: boolean
+  mode: 'option' | 'decision'
+  title: string
+  subtitle?: string
+  options: any[]
+  allowMultiple: boolean
+  selectedIds: string[]
+  customValue: string
+  decision?: PlanDecision
+  stepId?: string
+  stepTitle?: string
+}>({ visible: false, mode: 'option', title: '', options: [], allowMultiple: false, selectedIds: [], customValue: '' })
+const autoOpenedApprovalKeys = new Set<string>()
+const suppressedApprovalKeys = new Set<string>()
+const completedInteractionIds = new Set<string>()
 const teammateColorMap: Record<string, string> = {
   researcher: '#4a9eff',
   coder: '#e8922d',
@@ -97,10 +133,74 @@ function _tmColor(name: string): string {
   return teammateColorMap[base] || '#888'
 }
 
+function _looksLikePlanArtifact(raw: any): boolean {
+  return !!(raw && typeof raw === 'object' && ['goal', 'summary', 'steps', 'options'].some(k => k in raw))
+}
+
+function _stripTrailingPlanJson(text: string): string {
+  const source = text || ''
+  for (let start = source.lastIndexOf('{'); start >= 0; start = source.lastIndexOf('{', start - 1)) {
+    const candidate = source.slice(start).trim()
+    try {
+      const raw = JSON.parse(candidate)
+      if (_looksLikePlanArtifact(raw)) return source.slice(0, start).trim()
+    } catch {}
+  }
+  return source.trim()
+}
+
+function _stripPlanArtifactBlocks(text: string): string {
+  const stripped = (text || '')
+    .replace(/```plan-artifact[\s\S]*?```/gi, '')
+    .replace(/```json[\s\S]*?```/gi, '')
+    .trim()
+  if (stripped.startsWith('{') && stripped.endsWith('}')) {
+    try {
+      if (_looksLikePlanArtifact(JSON.parse(stripped))) return ''
+    } catch {}
+  }
+  return _stripTrailingPlanJson(stripped)
+}
+
+function _removeDraftPlanMessages(s: SessionState, planId: string) {
+  s.messages = s.messages.filter(m => !(m.plan?.plan_id === planId && !isFinalPlan(m.plan)))
+}
+
+function _syncPlanWizardMessages(s: SessionState, planArtifact: PlanArtifact) {
+  _removeDraftPlanMessages(s, planArtifact.plan_id)
+  const interaction = nextPlanInteraction(planArtifact)
+  const final = isFinalPlan(planArtifact)
+
+  if (interaction) {
+    const existing = s.messages.findIndex(m => m.kind === 'plan_interaction' && m.planInteraction?.id === interaction.id)
+    const card: Message = {
+      role: 'assistant',
+      content: '',
+      kind: 'plan_interaction',
+      planInteraction: { ...interaction, completed: completedInteractionIds.has(interaction.id) },
+      timestamp: _localTs(),
+      streaming: false,
+    }
+    if (existing >= 0) s.messages[existing] = card
+    else s.messages.push(card)
+  }
+
+  if (final) {
+    const existing = s.messages.findIndex(m => m.kind === 'plan_artifact' && m.plan?.plan_id === planArtifact.plan_id)
+    const card: Message = { role: 'assistant', content: '', kind: 'plan_artifact', plan: planArtifact, timestamp: _localTs(), streaming: false }
+    if (existing >= 0) s.messages[existing] = card
+    else s.messages.push(card)
+  }
+}
+
+function _effectiveAwaitingApproval(): boolean {
+  return !!(plan.awaitingApproval.value && plan.state.currentPlan && !hasUnresolvedPlanInteractions(plan.state.currentPlan))
+}
+
 const chatContainer = ref<HTMLElement>()
 const showScrollBottom = ref(false)
 const props = defineProps<{ workspace?: string }>()
-const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change', 'todos-update'])
+const emit = defineEmits(['config-update', 'status-change', 'plan-mode-change', 'plan-update', 'todos-update'])
 
 let _unsubWs: (() => void) | null = null
 let _flushTimer: number | null = null
@@ -123,6 +223,8 @@ function _state(sid: string): SessionState {
       _currentContent: '',
       _currentThinking: '',
       draftText: '',
+      planState: 'idle',
+      currentPlan: null,
       _teammateBuffers: new Map(),
       workflowState: { status: 'idle', tasks: {} },
       _lastSeq: 0,
@@ -167,6 +269,10 @@ function _load(sid: string) {
     }
     
     draftText.value = s.draftText
+    plan.setState(s.planState, s.currentPlan)
+    planMode.value = plan.isPlanning.value || s.planState === 'executing'
+    emit('plan-mode-change', s.planState)
+    emit('plan-update', s.currentPlan)
     // 同步工作流状态
     workflowStateRef.value = s.workflowState ? { ...s.workflowState, tasks: { ...s.workflowState.tasks } } : undefined
   }
@@ -193,7 +299,10 @@ function _syncMainContent(s: SessionState) {
   if (!s._currentContent) return
   const idx = _mainAssistantIndex(s)
   if (idx >= 0) {
-    s.messages[idx] = { ...s.messages[idx], content: s._currentContent }
+    const nextContent = s.messages[idx].kind === 'plan_discussion'
+      ? _stripPlanArtifactBlocks(s._currentContent)
+      : s._currentContent
+    s.messages[idx] = { ...s.messages[idx], content: nextContent }
   }
 }
 
@@ -335,6 +444,13 @@ async function restoreHistory(sid: string, ws?: string) {
   try {
     const resp = await getHistory(sid, ws || props.workspace)
     const raw = resp.history || []  // 后端已过滤 system/tool，无需前端再过滤
+    const restoredPlan = (resp.current_plan || null) as PlanArtifact | null
+    if (sid === activeSessionId.value) {
+      plan.restore(restoredPlan)
+      planMode.value = plan.isPlanning.value
+      emit('plan-mode-change', plan.state.planState)
+      emit('plan-update', plan.state.currentPlan)
+    }
     const merged: Message[] = []
     for (const m of raw) {
       if (m.role === 'assistant' && merged.length > 0 && merged[merged.length - 1].role === 'assistant') {
@@ -343,11 +459,19 @@ async function restoreHistory(sid: string, ws?: string) {
       } else {
         const msg: Message = { role: m.role as 'user' | 'assistant', content: m.content || '', timestamp: m.timestamp || '' }
         if (m.images) msg.images = m.images
+        if (m.kind) msg.kind = m.kind as any
+        if (m.plan) {
+          msg.plan = m.plan
+          if (!isFinalPlan(m.plan)) continue
+        }
         merged.push(msg)
       }
     }
     const s = _state(sid)
     s.messages = merged
+    if (restoredPlan) _syncPlanWizardMessages(s, restoredPlan)
+    s.currentPlan = restoredPlan
+    s.planState = restoredPlan?.status || 'idle'
     _load(sid)
     await nextTick()
     scrollToBottom()
@@ -623,9 +747,14 @@ function _processEvent(s: SessionState, event: WsEvent) {
           tmMsg.content = buf.content
           _updateUI(s)
         } else {
-          s._currentContent += event.data.content || ''
+          const chunk = event.data.content || ''
+          s._currentContent += chunk
           // 只修改 state 中的主 assistant 消息，不直接动全局 messages.value（避免跨会话串台）
           _syncMainContent(s)
+          const idx = _mainAssistantIndex(s)
+          if (idx >= 0 && s.messages[idx].kind === 'plan_discussion') {
+            s.messages[idx] = { ...s.messages[idx], content: _stripPlanArtifactBlocks(s._currentContent) }
+          }
         }
       }
       _scheduleScroll()
@@ -743,9 +872,45 @@ function _processEvent(s: SessionState, event: WsEvent) {
         _updateUI(s)
       }
       break
+    case 'plan_event':
+      {
+        const activeKey = _cacheKey(activeSessionId.value, props.workspace)
+        const isActiveSession = s === _states.get(activeKey)
+        if (isActiveSession) {
+          plan.applyPlanEvent(event.data)
+          s.planState = plan.state.planState
+          s.currentPlan = plan.state.currentPlan
+          planMode.value = plan.isPlanning.value || plan.state.planState === 'executing'
+          emit('plan-mode-change', plan.state.planState)
+          emit('plan-update', plan.state.currentPlan)
+        } else {
+          if (event.data?.plan !== undefined) s.currentPlan = event.data.plan
+          if (event.data?.state) s.planState = event.data.state
+          if (event.data?.kind === 'artifact.updated' && event.data.plan) s.planState = event.data.plan.status
+          if (event.data?.kind === 'approval.required') s.planState = hasUnresolvedPlanInteractions(event.data.plan) ? 'awaiting_user' : 'awaiting_approval'
+          if (event.data?.kind === 'execution.started') s.planState = 'executing'
+          if (event.data?.kind === 'execution.completed') s.planState = 'completed'
+          if (event.data?.kind === 'cancelled') s.planState = 'cancelled'
+          if (event.data?.kind === 'approved') s.planState = 'approved'
+        }
+        if (event.data?.plan && ['artifact.updated', 'option.selected', 'approval.required', 'approved', 'execution.started', 'execution.completed'].includes(event.data.kind)) {
+          _syncPlanWizardMessages(s, event.data.plan)
+          const idx = _mainAssistantIndex(s)
+          if (idx >= 0 && s.messages[idx].kind === 'plan_discussion') {
+            s.messages[idx] = { ...s.messages[idx], streaming: false }
+            s._currentContent = ''
+          }
+          _updateUI(s)
+        }
+        if (event.data?.error) {
+          s.messages.push({ role: 'assistant', content: `⚠ ${event.data.error}`, timestamp: _localTs(), streaming: false })
+          _updateUI(s)
+        }
+      }
+      break
     case 'mode_change':
       planMode.value = event.data.mode === 'plan'
-      emit('plan-mode-change', planMode.value)
+      emit('plan-mode-change', planMode.value ? 'planning' : 'idle')
       break
     case 'aborted':
       s._currentContent += '\n\n⚠ 已中断生成'
@@ -980,7 +1145,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
         const task = event.data.task || ''
         const icon = agentType.startsWith('sub:') ? '📦' : '🤖'
         const label = agentType.startsWith('sub:') ? agentType.slice(4) : agentType
-                _stopMainAgentStreaming(s)
+        _stopMainAgentStreaming(s)
         s.messages.push({
           role: 'assistant',
           content: `${icon} **${label}** 已启动${role ? ` (${role})` : ''}\n\n任务: ${task}`,
@@ -1016,15 +1181,14 @@ async function sendMessage(text: string, images?: ImageFile[]) {
   }
   
   if (text === '/plan') {
-    planMode.value = true
-    sendPlan(activeSessionId.value)
-    emit('plan-mode-change', true)
+    ensureWs().finally(() => startPlan(activeSessionId.value, props.workspace))
     return
   }
   if (text === '/act') {
-    planMode.value = false
-    sendAct(activeSessionId.value)
-    emit('plan-mode-change', false)
+    const current = plan.state.currentPlan
+    if (current) ensureWs().finally(() => approvePlan(activeSessionId.value, current.plan_id, current.revision, props.workspace))
+    else s.messages = [...s.messages, { role: 'assistant', content: '⚠ 当前没有可审批的计划。先输入 /plan 开始规划。', timestamp: _localTs() }]
+    _updateUI(s)
     return
   }
   if (text.startsWith('/clear')) {
@@ -1077,7 +1241,7 @@ async function sendMessage(text: string, images?: ImageFile[]) {
     }))
   }
   
-  s.messages = [...s.messages, userMsg, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '', main: true }]
+  s.messages = [...s.messages, userMsg, { role: 'assistant', content: '', tools: [], streaming: true, timestamp: '', main: true, kind: (plan.isPlanning.value || plan.state.planState === 'awaiting_approval') ? 'plan_discussion' : 'chat' }]
   _updateUI(s)
 
   emit('status-change', sid, 'generating')
@@ -1094,7 +1258,8 @@ async function sendMessage(text: string, images?: ImageFile[]) {
 
   let wsOk = false
   try { wsOk = await ensureWs() } catch {}
-  wsChat(text, sid, props.workspace, planMode.value, userMsg.images)
+  if (plan.isPlanning.value || plan.state.planState === 'awaiting_approval') sendPlanMessage(text, sid, props.workspace, userMsg.images)
+  else wsChat(text, sid, props.workspace, userMsg.images)
   if (!wsOk) {
     const idx = _mainAssistantIndex(s)
     if (idx >= 0) {
@@ -1131,7 +1296,8 @@ async function handleRetry(msgIndex: number) {
 
   let wsOk = false
   try { wsOk = await ensureWs() } catch {}
-  wsChat(userMsg.content || '', sid, props.workspace, planMode.value, userMsg.images)
+  if (plan.isPlanning.value || plan.state.planState === 'awaiting_approval') sendPlanMessage(userMsg.content || '', sid, props.workspace, userMsg.images)
+  else wsChat(userMsg.content || '', sid, props.workspace, userMsg.images)
   if (!wsOk) {
     const idx = _mainAssistantIndex(s)
     if (idx >= 0) {
@@ -1158,6 +1324,151 @@ function stopGeneration() {
     _stopAllStreamingMessages(s)
     messages.value = [...s.messages]
   }
+}
+
+function approveCurrentPlan() {
+  const current = plan.state.currentPlan
+  if (!current) return
+  ensureWs().finally(() => approvePlan(activeSessionId.value, current.plan_id, current.revision, props.workspace))
+}
+
+function cancelCurrentPlan() {
+  const current = plan.state.currentPlan
+  ensureWs().finally(() => cancelPlan(activeSessionId.value, current?.plan_id, props.workspace))
+}
+
+function openPlanOptionsDialog() {
+  const key = _cacheKey(activeSessionId.value, props.workspace)
+  const current = plan.state.currentPlan || _states.get(key)?.currentPlan
+  if (!current?.options?.length) return
+  planDialog.value = {
+    visible: true,
+    mode: 'option',
+    title: '选择整体实施方案',
+    subtitle: current.summary || current.goal,
+    options: current.options,
+    allowMultiple: false,
+    selectedIds: current.selected_option_id ? [current.selected_option_id] : (current.options || []).filter(o => o.recommended).slice(0, 1).map(o => o.id),
+    customValue: '',
+  }
+}
+
+function openPlanDecisionDialog(payload: { decision: PlanDecision; stepId?: string; stepTitle?: string }) {
+  planDialog.value = {
+    visible: true,
+    mode: 'decision',
+    title: payload.decision.title,
+    subtitle: payload.decision.description,
+    options: payload.decision.options || [],
+    allowMultiple: !!payload.decision.allow_multiple,
+    selectedIds: payload.decision.selected_option_ids?.length
+      ? [...payload.decision.selected_option_ids]
+      : (payload.decision.options || []).filter(o => o.recommended).slice(0, payload.decision.allow_multiple ? undefined : 1).map(o => o.id),
+    customValue: payload.decision.custom_value || '',
+    decision: payload.decision,
+    stepId: payload.stepId,
+    stepTitle: payload.stepTitle,
+  }
+}
+
+function closePlanDialog() {
+  planDialog.value = { ...planDialog.value, visible: false }
+}
+
+function suppressAutoOpen(planId?: string, revision?: number) {
+  if (!planId || !revision) return
+  suppressedApprovalKeys.add(`${planId}:${revision}`)
+}
+
+function _markInteractionSubmitted(interactionId?: string) {
+  if (!interactionId) return
+  completedInteractionIds.add(interactionId)
+  const key = _cacheKey(activeSessionId.value, props.workspace)
+  const s = _states.get(key)
+  if (!s) return
+  const idx = s.messages.findIndex(m => m.kind === 'plan_interaction' && m.planInteraction?.id === interactionId)
+  if (idx >= 0 && s.messages[idx].planInteraction) {
+    s.messages[idx] = { ...s.messages[idx], planInteraction: { ...s.messages[idx].planInteraction!, completed: true } }
+    _updateUI(s)
+  }
+}
+
+function _buildInteractionInstruction(interaction: PlanInteraction, selectedIds: string[], customValue: string): string {
+  if (interaction.type === 'top_option') {
+    const current = plan.state.currentPlan
+    const optionId = selectedIds[0]
+    const option = current?.options?.find(o => o.id === optionId)
+    if (optionId && !customValue) {
+      return `我选择整体方案 ${optionId}${option ? `（${option.title}）` : ''}。请基于这个方案重新生成后续计划：更新 selected_option_id，并同步重写 summary、steps、risks、validation_strategy。还要重新检查该新方案的每个步骤是否存在方案内可选实现/参数/取舍；如果有，必须写入对应 step.decisions，提供单选或多选选项、推荐项和“其他想法”入口；如果没有，也要确保步骤描述足够明确可执行。不要只标记选中项。`
+    }
+    const pieces: string[] = ['整体方案选择']
+    if (optionId) pieces.push(`选择: ${optionId}`)
+    if (customValue) pieces.push(`其他想法: ${customValue}`)
+    return `请按我的交互选择修订计划：${pieces.join('；')}。如果这是一个新方案，也要同步重写 summary、steps、risks、validation_strategy，并重新生成该方案内需要用户选择的步骤决策。`
+  }
+
+  const pieces: string[] = []
+  if (interaction.stepId) pieces.push(`步骤 ${interaction.stepId}${interaction.stepTitle ? `（${interaction.stepTitle}）` : ''}`)
+  if (interaction.decisionId) pieces.push(`决策 ${interaction.decisionId}`)
+  if (selectedIds.length) pieces.push(`选择: ${selectedIds.join(', ')}`)
+  if (customValue) pieces.push(`其他想法: ${customValue}`)
+  return `请按我的交互选择修订计划：${pieces.join('；')}。请把该决策写回对应 step.decisions 的 selected_option_ids/custom_value，并继续检查后续步骤是否还有需要我选择的方案内决策；如果没有，请给出可最终审批的计划。`
+}
+
+function submitPlanInteraction(payload: { interaction: PlanInteraction; selectedIds: string[]; customValue: string }) {
+  const current = plan.state.currentPlan
+  if (!current) return
+  _markInteractionSubmitted(payload.interaction.id)
+  suppressAutoOpen(current.plan_id, current.revision + 1)
+  if (payload.interaction.type === 'step_decision' && payload.interaction.stepId && payload.interaction.decisionId) {
+    ensureWs().finally(() => applyPlanDecision(
+      activeSessionId.value,
+      current.plan_id,
+      current.revision,
+      payload.interaction.stepId!,
+      payload.interaction.decisionId!,
+      payload.selectedIds,
+      payload.customValue,
+      props.workspace,
+    ))
+    return
+  }
+  sendMessage(_buildInteractionInstruction(payload.interaction, payload.selectedIds, payload.customValue))
+}
+
+function confirmPlanDialog(payload: { selectedIds: string[]; customValue: string }) {
+  const dialog = planDialog.value
+  closePlanDialog()
+  const current = plan.state.currentPlan
+  if (!current) return
+  const interaction: PlanInteraction = dialog.mode === 'option'
+    ? {
+        id: `${current.plan_id}:${current.revision}:top-option-dialog`,
+        planId: current.plan_id,
+        revision: current.revision,
+        type: 'top_option',
+        title: '选择整体实施方案',
+        description: current.summary || current.goal,
+        options: current.options || [],
+        allowMultiple: false,
+        selectedIds: current.selected_option_id ? [current.selected_option_id] : [],
+      }
+    : {
+        id: `${current.plan_id}:${current.revision}:decision-dialog:${dialog.stepId || ''}:${dialog.decision?.id || ''}`,
+        planId: current.plan_id,
+        revision: current.revision,
+        type: 'step_decision',
+        title: dialog.decision?.title || dialog.title,
+        description: dialog.decision?.description || dialog.subtitle,
+        options: dialog.decision?.options || [],
+        allowMultiple: !!dialog.decision?.allow_multiple,
+        selectedIds: [...(dialog.decision?.selected_option_ids || [])],
+        customValue: dialog.decision?.custom_value || '',
+        stepId: dialog.stepId,
+        stepTitle: dialog.stepTitle,
+        decisionId: dialog.decision?.id,
+      }
+  submitPlanInteraction({ interaction, selectedIds: payload.selectedIds, customValue: payload.customValue })
 }
 
 function useSkill(name: string) {
@@ -1223,7 +1534,17 @@ async function switchToSession(sid: string, ws?: string) {
   }
 }
 
-defineExpose({ useSkill, switchToSession, activeSessionId, planMode, getCurrentWorkflowState })
+defineExpose({
+  useSkill,
+  switchToSession,
+  activeSessionId,
+  planMode,
+  openPlanOptionsDialog,
+  openPlanDecisionDialog,
+  getCurrentWorkflowState,
+  getCurrentPlan: () => plan.state.currentPlan,
+  getPlanState: () => plan.state.planState,
+})
 
 // 获取当前会话的工作流状态
 function getCurrentWorkflowState(): WorkflowState | undefined {
@@ -1238,6 +1559,7 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
     <button class="export-btn" @click="doExport" title="导出 Markdown">📥 导出</button>
   </div>
 
+  <PlanModeBanner :state="plan.state.planState" />
   <div class="chat-view" ref="chatContainer" @scroll="_onChatScroll">
     <div class="messages" v-if="messages.length === 0">
       <div class="empty-state">
@@ -1255,6 +1577,9 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
         :style="{ animationDelay: `${Math.min(i * 0.04, 0.6)}s` }"
         class="msg-anim"
         @retry="handleRetry(i)"
+        @open-plan-options="openPlanOptionsDialog"
+        @open-plan-decision="openPlanDecisionDialog"
+        @submit-plan-interaction="submitPlanInteraction"
       />
 
     </div>
@@ -1265,7 +1590,21 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
     </button>
   </div>
   <div class="input-area">
-    <InputBar v-model="draftText" :disabled="isStreaming" :is-streaming="isStreaming" @send="sendMessage" @stop="stopGeneration" />
+    <PlanApprovalBar :visible="effectiveAwaitingApproval" :plan="plan.state.currentPlan" :disabled="isStreaming" @approve="approveCurrentPlan" @cancel="cancelCurrentPlan" />
+    <InputBar v-model="draftText" :disabled="isStreaming" :is-streaming="isStreaming" :mode="effectiveInputMode" @send="sendMessage" @stop="stopGeneration" />
+    <PlanChoiceDialog
+      :visible="planDialog.visible"
+      :mode="planDialog.mode"
+      :title="planDialog.title"
+      :subtitle="planDialog.subtitle"
+      :options="planDialog.options"
+      :allow-multiple="planDialog.allowMultiple"
+      :selected-ids="planDialog.selectedIds"
+      :custom-value="planDialog.customValue"
+      :step-title="planDialog.stepTitle"
+      @close="closePlanDialog"
+      @confirm="confirmPlanDialog"
+    />
   </div>
   </div>
 </template>
@@ -1283,35 +1622,55 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  background: radial-gradient(circle at 58% -8%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 34%), linear-gradient(180deg, color-mix(in srgb, var(--bg) 42%, transparent), transparent 36%);
+  position: relative;
+}
+
+.chat-container::before {
+  content: '';
+  position: absolute;
+  inset: 14px 18px 76px;
+  border: 1px solid color-mix(in srgb, var(--border-light) 20%, transparent);
+  border-radius: 28px;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(255,255,255,.018), transparent 26%);
+  mask-image: linear-gradient(to bottom, #000 0%, transparent 88%);
 }
 
 .chat-toolbar {
   display: flex;
   justify-content: flex-end;
-  padding: 0.3rem 0.8rem;
-  border-bottom: 0.5px solid var(--border-light);
-  background: var(--bg);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--surface-hairline);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 76%, transparent), color-mix(in srgb, var(--bg-card) 44%, transparent));
+  backdrop-filter: blur(14px);
+  position: relative;
+  z-index: 2;
 }
 
 .export-btn {
-  padding: 0.25rem 0.6rem;
-  border: 0.5px solid var(--border);
-  border-radius: 5px;
-  background: var(--bg-card);
-  color: var(--fg-dim);
-  font-size: 0.75rem;
+  padding: 0.38rem 0.72rem;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--fg-muted);
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  font-weight: 800;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all .16s var(--ease-out);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
 }
-.export-btn:hover { color: var(--fg); background: var(--bg-thinking); }
+.export-btn:hover { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); transform: translateY(-1px); }
 
 
 
 .chat-view {
   flex: 1;
   overflow-y: auto;
-  padding: 0.5rem 0;
+  padding: 1rem 0 0.6rem;
   position: relative;
+  z-index: 1;
 }
 
 .msg-anim {
@@ -1319,7 +1678,9 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
 }
 
 .messages {
-  padding: 0 3%;
+  padding: 0 3.2%;
+  position: relative;
+  z-index: 1;
 }
 
 .empty-state {
@@ -1332,19 +1693,20 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
 }
 
 .empty-icon {
-  width: 72px;
-  height: 80px;
-  border-radius: 18px;
-  background: var(--accent);
-  color: var(--bg);
-  font-family: 'Playfair Display', serif;
-  font-weight: 700;
+  width: 86px;
+  height: 86px;
+  border-radius: 28px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: radial-gradient(circle at 32% 24%, var(--accent-soft), transparent 48%), var(--surface-panel);
+  color: var(--accent);
+  font-family: var(--font-display);
+  font-weight: 800;
   font-size: 2.4rem;
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 1.2rem;
-  box-shadow: 0 8px 32px rgba(232, 145, 45, 0.2);
+  box-shadow: var(--glow-accent);
 }
 
 .empty-title {
@@ -1368,27 +1730,29 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
 
 .scroll-bottom-btn {
   position: fixed;
-  bottom: 90px;
+  bottom: 104px;
   left: 50%;
   transform: translateX(-50%);
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: var(--accent);
-  border: 2px solid var(--accent);
-  color: white;
+  width: 42px;
+  height: 42px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  color: var(--accent);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(232, 145, 45, 0.4);
-  transition: all 0.2s ease;
+  box-shadow: var(--shadow-card);
+  backdrop-filter: blur(14px) saturate(1.08);
+  transition: all .16s var(--ease-out);
   z-index: 1000;
 }
 
 .scroll-bottom-btn:hover {
-  background: var(--accent-hover);
-  transform: translateX(-50%) scale(1.1);
+  border-color: var(--accent);
+  box-shadow: var(--glow-accent);
+  transform: translateX(-50%) translateY(-2px);
 }
 
 .scroll-bottom-btn svg {
@@ -1402,8 +1766,11 @@ function getCurrentWorkflowState(): WorkflowState | undefined {
 
 .input-area {
   flex-shrink: 0;
-  border-top: 0.5px solid var(--border);
-  background: var(--bg);
+  border-top: 1px solid color-mix(in srgb, var(--border) 42%, transparent);
+  background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg) 90%, transparent) 24%);
+  backdrop-filter: blur(16px);
+  position: relative;
+  z-index: 2;
 }
 
 

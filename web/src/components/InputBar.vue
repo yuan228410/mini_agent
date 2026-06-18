@@ -9,7 +9,7 @@ export interface ImageFile {
   size: number
 }
 
-const props = defineProps<{ disabled?: boolean; isStreaming?: boolean; modelValue?: string }>()
+const props = defineProps<{ disabled?: boolean; isStreaming?: boolean; modelValue?: string; mode?: 'chat' | 'planning' | 'awaiting_approval' | 'executing' }>()
 const emit = defineEmits<{
   (e: 'send', text: string, images?: ImageFile[]): void
   (e: 'stop'): void
@@ -33,10 +33,16 @@ watch(() => props.modelValue, (val) => {
 })
 
 const showSlash = computed(() => text.value.startsWith('/') && text.value.length < 30)
+const placeholder = computed(() => {
+  if (props.mode === 'planning') return '按消息区向导选择，或继续补充约束/修改想法…'
+  if (props.mode === 'awaiting_approval') return '继续提出修改，或点击“批准并执行”…'
+  if (props.mode === 'executing') return '正在执行已批准计划…'
+  return '输入消息… / 命令…'
+})
 
 function submit() {
   const val = text.value.trim()
-  if (props.disabled) return
+  if (props.disabled || props.mode === 'executing') return
   if (!val && images.value.length === 0) return
   emit('send', val, images.value.length > 0 ? [...images.value] : undefined)
   text.value = ''
@@ -155,7 +161,7 @@ function onSlashSelect(cmd: CommandInfo) {
         <textarea
           v-model="text"
           :disabled="disabled"
-          placeholder="输入消息… / 命令…"
+          :placeholder="placeholder"
           rows="1"
           @keydown="onKeydown"
           @input="autoResize"
@@ -165,7 +171,7 @@ function onSlashSelect(cmd: CommandInfo) {
       <button v-if="isStreaming" class="stop-btn" @click="$emit('stop')" title="停止生成">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
       </button>
-      <button v-else class="send-btn" :disabled="disabled || (!text.trim() && images.length === 0)" @click="submit">
+      <button v-else class="send-btn" :disabled="disabled || mode === 'executing' || (!text.trim() && images.length === 0)" @click="submit">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="22" y1="2" x2="11" y2="13"></line>
           <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
@@ -178,9 +184,27 @@ function onSlashSelect(cmd: CommandInfo) {
 <style scoped>
 .input-bar {
   flex-shrink: 0;
-  padding: 0.3rem 0.5rem 0.1rem;
-  border-top: 0.5px solid var(--border);
-  background: var(--bg);
+  margin: 0 .9rem .85rem;
+  padding: .65rem;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 24px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 76%, transparent), color-mix(in srgb, var(--bg) 88%, transparent));
+  box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,.04);
+  backdrop-filter: blur(18px) saturate(1.08);
+  position: relative;
+}
+
+.input-bar::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 82% 0, color-mix(in srgb, var(--accent-glow) 24%, transparent), transparent 34%);
+  pointer-events: none;
+}
+
+.input-bar > * {
+  position: relative;
 }
 
 .image-preview {
@@ -244,22 +268,25 @@ function onSlashSelect(cmd: CommandInfo) {
 
 .attach-btn {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--fg-dim);
+  width: 42px;
+  height: 42px;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 16px;
+  background: var(--surface-control);
+  color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, color 0.2s ease;
+  transition: all .16s var(--ease-out);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
 }
 
 .attach-btn:hover:not(:disabled) {
-  background: var(--bg-hover);
+  background: var(--accent-soft);
   color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  transform: translateY(-1px);
 }
 
 .attach-btn:disabled {
@@ -274,24 +301,26 @@ function onSlashSelect(cmd: CommandInfo) {
 
 textarea {
   width: 100%;
-  font-family: 'Source Sans 3', sans-serif;
+  font-family: var(--font-ui);
   font-size: 1rem;
   line-height: 1.5;
   color: var(--fg);
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.45rem 0.8rem;
+  background: color-mix(in srgb, var(--bg-input) 90%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  border-radius: 18px;
+  padding: 0.58rem 0.9rem;
   resize: none;
   outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-  min-height: 42px;
+  transition: all .16s var(--ease-out);
+  min-height: 44px;
   max-height: 160px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
 }
 
 textarea:focus {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(232, 145, 45, 0.15);
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  background: color-mix(in srgb, var(--bg-input) 98%, transparent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-soft) 52%, transparent), inset 0 1px 0 rgba(255,255,255,.04);
 }
 
 textarea::placeholder {
@@ -300,24 +329,25 @@ textarea::placeholder {
 
 .send-btn {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   margin-bottom: 1px;
-  border: none;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #fff;
+  border: 1px solid transparent;
+  border-radius: 16px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: var(--accent-ink);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease;
+  transition: all .14s var(--ease-out);
+  box-shadow: 0 14px 32px color-mix(in srgb, var(--shadow) 26%, transparent);
 }
 
 .send-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  transform: scale(1.05);
-  box-shadow: 0 2px 12px rgba(232, 145, 45, 0.3);
+  filter: saturate(1.08);
+  transform: translateY(-1px);
+  box-shadow: var(--glow-accent);
 }
 
 .send-btn:active:not(:disabled) {
@@ -331,12 +361,12 @@ textarea::placeholder {
 
 .stop-btn {
   flex-shrink: 0;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   margin-bottom: 1px;
   border: none;
-  border-radius: 8px;
-  background: #e55;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #e55, color-mix(in srgb, #e55 76%, #fff));
   color: #fff;
   cursor: pointer;
   display: flex;

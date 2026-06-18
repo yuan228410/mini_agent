@@ -590,13 +590,18 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 <style scoped>
 .sidebar {
   flex-shrink: 0; display: flex; flex-direction: column;
-  border-right: 0.5px solid var(--border); background: var(--bg); overflow: hidden;
+  border-right: 1px solid var(--surface-hairline); background:
+    radial-gradient(circle at 18% 0, color-mix(in srgb, var(--accent-glow) 18%, transparent), transparent 36%),
+    var(--surface-panel); overflow: hidden;
+  box-shadow: 12px 0 42px color-mix(in srgb, var(--shadow) 24%, transparent);
+  backdrop-filter: blur(18px) saturate(1.08);
 }
 
 .sidebar-collapsed {
   width: 40px; flex-shrink: 0; display: flex; flex-direction: column;
   align-items: center; padding-top: 1rem; gap: 0.6rem;
-  border-right: 0.5px solid var(--border); background: var(--bg-card); cursor: pointer;
+  border-right: 1px solid var(--surface-hairline); background: var(--surface-panel); cursor: pointer;
+  box-shadow: 8px 0 28px color-mix(in srgb, var(--shadow) 18%, transparent);
 }
 .collapsed-icon { font-size: 1.1rem; }
 .collapsed-expand { font-size: 0.7rem; color: var(--fg-dim); margin-top: auto; margin-bottom: 1rem; }
@@ -604,10 +609,11 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 /* Header */
 .sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 0.7rem 0.9rem; border-bottom: 0.5px solid var(--border);
+  padding: 0.9rem 0.9rem 0.75rem; border-bottom: 1px solid var(--surface-hairline);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 58%, transparent), transparent);
 }
 .sidebar-brand {
-  font-family: 'Playfair Display', serif; font-size: 1rem; font-weight: 600; color: var(--fg);
+  font-family: var(--font-display); font-size: 1.06rem; font-weight: 800; color: var(--fg);
 }
 .sidebar-brand::after { content: '.'; color: var(--accent); }
 .ws-add-ws-btn {
@@ -1041,4 +1047,186 @@ defineExpose({ loadSessions: loadAllSessions, updateSessionStatus, setActiveSess
 }
 .removed-ws-btn-delete:hover { color: #e55; opacity: 1; }
 .removed-ws-empty { font-size: 0.82rem; color: var(--fg-dim); text-align: center; padding: 0.8rem; }
+
+/* Visual polish overrides: style-only, keep all behavior unchanged */
+.ws-add-ws-btn,
+.ws-mgr-btn,
+.batch-btn,
+.add-ws-btn-ghost,
+.add-ws-browse,
+.ws-mgr-browse-btn,
+.dir-up {
+  border: 1px solid var(--surface-hairline);
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-weight: 800;
+  transition: all .16s var(--ease-out);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+.ws-add-ws-btn,
+.ws-mgr-btn:hover,
+.batch-btn:hover:not(:disabled),
+.add-ws-browse:hover,
+.ws-mgr-browse-btn:hover,
+.dir-up:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.add-ws-popup,
+.ctx-menu,
+.ws-mgr-panel,
+.dir-panel {
+  border: 1px solid var(--surface-hairline);
+  background: var(--surface-panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-soft), inset 0 1px 0 rgba(255,255,255,.035);
+  backdrop-filter: blur(18px) saturate(1.08);
+}
+.add-ws-popup {
+  margin: .6rem .7rem .75rem;
+  padding: .95rem;
+}
+.add-ws-mode-tabs {
+  padding: 3px;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 68%, transparent);
+}
+.add-ws-tab {
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-weight: 800;
+}
+.add-ws-tab.active {
+  background: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  color: var(--accent-ink);
+}
+.add-ws-input,
+.ws-mgr-input,
+.session-edit-input {
+  border: 1px solid var(--surface-hairline);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-input) 92%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+}
+.add-ws-input:focus,
+.ws-mgr-input:focus,
+.session-edit-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-soft) 54%, transparent);
+}
+.sidebar-body {
+  padding: .55rem .55rem .75rem;
+}
+.ws-group {
+  border-bottom: none;
+  margin: .45rem 0;
+}
+.ws-group-header {
+  padding: .68rem .7rem;
+  border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
+  border-radius: 17px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 68%, transparent), color-mix(in srgb, var(--bg-elevated) 38%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
+  transition: all .16s var(--ease-out);
+}
+.ws-group-header:hover {
+  background: color-mix(in srgb, var(--bg-hover) 82%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card), inset 0 1px 0 rgba(255,255,255,.04);
+}
+.ws-actions {
+  opacity: .72;
+}
+.ws-add-btn,
+.ws-action-btn,
+.ws-mgr-btn-sm,
+.dir-close,
+.ws-mgr-close {
+  border: 1px solid color-mix(in srgb, var(--border) 46%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-card) 48%, transparent);
+  color: var(--fg-muted);
+}
+.ws-add-btn:hover,
+.ws-action-btn:hover,
+.ws-mgr-btn-sm:hover,
+.dir-close:hover,
+.ws-mgr-close:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  color: var(--accent);
+  background: var(--bg-hover);
+}
+.ws-group-sessions {
+  padding: .45rem 0 .15rem .85rem;
+}
+.session-item {
+  margin: .32rem 0;
+  padding: .56rem .62rem .52rem .82rem;
+  border: 1px solid color-mix(in srgb, var(--border) 44%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--border) 54%, transparent);
+  border-radius: 15px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 54%, transparent), color-mix(in srgb, var(--bg-tool) 34%, transparent));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+  transition: all .14s var(--ease-out);
+}
+.session-item:hover {
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 24%, var(--border));
+  transform: translateX(2px);
+  box-shadow: 0 10px 26px color-mix(in srgb, var(--shadow) 22%, transparent);
+}
+.session-item.active,
+.session-item.selected {
+  background: var(--surface-active);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-left-color: var(--accent);
+  box-shadow: var(--glow-accent);
+}
+.session-dot.generating {
+  box-shadow: 0 0 0 4px color-mix(in srgb, #4CAF50 14%, transparent), 0 0 16px color-mix(in srgb, #4CAF50 34%, transparent);
+}
+.session-meta,
+.dir-current,
+.dir-selected,
+.ws-mgr-item-name {
+  font-family: var(--font-mono);
+}
+.batch-inline-bar {
+  margin: .3rem 0 .45rem;
+  padding: .45rem .5rem;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 14px;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-tool) 68%, transparent), color-mix(in srgb, var(--bg-card) 46%, transparent));
+}
+.ctx-menu {
+  min-width: 132px;
+  border-radius: 16px;
+}
+.ctx-item {
+  margin: 2px 6px;
+  border-radius: 10px;
+}
+.ws-mgr-overlay,
+.dir-overlay {
+  background: color-mix(in srgb, #000 42%, transparent);
+  backdrop-filter: blur(5px);
+}
+.ws-mgr-header,
+.dir-header,
+.dir-footer,
+.sidebar-collapse {
+  border-color: var(--surface-hairline);
+}
+.dir-item {
+  margin: 2px .6rem;
+  border-radius: 12px;
+}
+.dir-item:hover {
+  background: var(--bg-hover);
+}
 </style>

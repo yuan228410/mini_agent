@@ -5,14 +5,17 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..config import DATA_DIR, MODEL_CONFIG, STREAMING, PLAN, PACKAGE_DIR, RequestContext, get_model_config
+from ..config import DATA_DIR, MODEL_CONFIG, STREAMING, PACKAGE_DIR, RequestContext, get_model_config
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..llm.base import estimate_messages_tokens
-from ..memory.context_pruner import ContextPruner, PruneOptions
 from ..runner import run_tool_loop
 from ..tools import register_memory_tools, register_history_tools, register, inject_todos as _inject_todos
 from ..tools import register_team, register_blackboard
 from ..logger import logger, set_session_id
+from ..plan.artifact_parser import strip_artifact_blocks
+from ..plan.prompts import build_plan_user_message
+from ..plan.service import PlanService
+from ..plan.store import PlanStore
+from ..plan.tool_policy import ToolPolicy, filter_tools
 from .display import WebDisplay
 from .session_manager import (
     SessionManager, cache_key, safe_queue_put,
@@ -33,7 +36,9 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                        model_name=None, session_lock=None,
                        session_key: str = "",
                        username: str = "",
-                       workspace: str | None = None) -> tuple:
+                       workspace: str | None = None,
+                       plan_turn: bool = False,
+                       approved_plan: dict | None = None) -> tuple:
     """在后台线程中运行工具循环，将事件推入 queue 供 WS 消费"""
     acquired = _concurrent_semaphore.acquire(timeout=30.0)
     if not acquired:
@@ -74,29 +79,45 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
                 if tools is None:
                     tools = lead_tool_defs()
+                all_tools = tools
 
                 if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
                     messages[0]["content"] = build_system_prompt(username, comp_key, base, workspace)
 
-                disp = WebDisplay(queue, loop, session_id=comp_key)
+                disp = WebDisplay(queue, loop, session_id=comp_key, suppress_text=plan_turn)
                 from ..tools import _registry
                 _registry.register_display(disp)
 
                 if comp.get("team_mgr"):
                     comp["team_mgr"].set_display(disp)
 
-                plan_mode = sm.get_plan_mode(session_key)
-                if plan_mode:
-                    tools = []
+                plan_state = sm.get_plan_state(session_key)
+                if plan_turn:
+                    tools = filter_tools(all_tools, ToolPolicy.PLAN_READONLY)
+                    plan_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+                    if plan_user and isinstance(plan_user.get("content"), str):
+                        plan_user["_plan_original_content"] = plan_user.get("content", "")
+                        plan_user["content"] = build_plan_user_message(
+                            plan_user.get("content", ""),
+                            current_plan=plan_state.current_plan,
+                            selected_option_id=plan_state.selected_option_id,
+                        )
+                else:
+                    tools = filter_tools(all_tools, ToolPolicy.EXECUTION)
+                    if approved_plan:
+                        plan_svc = PlanService()
+                        plan_svc.seed_execution_todos(artifact=approved_plan, session_key=session_key, display=disp)
+                        messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": now_ts(), "_internal": True})
 
                 cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
                 ctx = RequestContext(model_config=cfg, display=disp)
 
-                user_msgs = [m for m in messages if m["role"] == "user"]
+                user_msgs = [m for m in messages if m["role"] == "user" and not m.get("_internal")]
                 if user_msgs:
                     last_user = user_msgs[-1]
-                    user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp")}
-                    comp["history_db"].append(workspace or "default", comp_key, "user", last_user.get("content", ""), metadata=json.dumps(user_meta) if user_meta else "")
+                    user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp", "_plan_original_content")}
+                    persisted_user_content = last_user.get("_plan_original_content", last_user.get("content", ""))
+                    comp["history_db"].append(workspace or "default", comp_key, "user", persisted_user_content, metadata=json.dumps(user_meta) if user_meta else "")
 
                 if len(user_msgs) == 1 and messages[0].get("name", "") in ("", "新会话"):
                     first_content = user_msgs[0].get("content", "")
@@ -110,11 +131,11 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         _save_session_name(base, comp_key, auto_name)
 
                 reset_usage()
-                logger.debug(f"[Web] run_tool_loop start key={session_key} plan={plan_mode} tools={len(tools)}")
+                logger.debug(f"[Web] run_tool_loop start key={session_key} plan_turn={plan_turn} tools={len(tools)}")
 
                 # 使用 HistoryPersister 统一持久化
                 from ..core.persister import HistoryPersister
-                persister = HistoryPersister(comp["history_db"], workspace or "default", comp_key)
+                persister = HistoryPersister(comp["history_db"], workspace or "default", comp_key, sanitize_plan_artifacts=plan_turn)
 
                 msg, _ = run_tool_loop(
                     messages, tools,
@@ -232,18 +253,39 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
                 # ── 正常流程 ──
-                if msg and msg.get("content") and msg["content"].strip() and not any(
-                    m.get("role") == "assistant" and m.get("content") == msg["content"]
-                    for m in messages[-3:]
-                ):
-                    if plan_mode:
-                        if PLAN.get("approval", True):
-                            msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
-                        else:
-                            sm.set_plan_mode(session_key, False)
-                            msg["content"] += "\n\n⚡ 已自动切换到执行模式，开始执行..."
-                    asst_ts = now_ts()
-                    messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts})
+                raw_plan_text = msg.get("content") if (plan_turn and msg) else None
+                if msg and msg.get("content") and msg["content"].strip():
+                    if plan_turn:
+                        display_content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
+                        msg["content"] = display_content
+                        msg["kind"] = "plan_discussion"
+                        safe_queue_put(queue, {"event": "text", "data": {"content": display_content, "session_id": comp_key}}, loop)
+                        for m in reversed(messages):
+                            if m.get("role") == "assistant" and m.get("content") == raw_plan_text:
+                                m["content"] = display_content
+                                m["kind"] = "plan_discussion"
+                                break
+                    elif not any(
+                        m.get("role") == "assistant" and m.get("content") == msg["content"]
+                        for m in messages[-3:]
+                    ):
+                        asst_ts = now_ts()
+                        messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts, "kind": "chat"})
+
+                if plan_turn and raw_plan_text:
+                    store = PlanStore(comp["history_db"], workspace or "default", comp_key)
+                    PlanService().update_from_response(
+                        session_key=session_key,
+                        sm=sm,
+                        store=store,
+                        user_text=user_msgs[-1].get("_plan_original_content", user_msgs[-1].get("content", "")) if user_msgs else "",
+                        assistant_text=raw_plan_text,
+                        display=disp,
+                    )
+
+                if approved_plan:
+                    store = PlanStore(comp["history_db"], workspace or "default", comp_key)
+                    PlanService().mark_completed(session_key=session_key, sm=sm, store=store, display=disp)
 
                 # 使用 maybe_compact 统一压缩逻辑
                 usage = get_usage()

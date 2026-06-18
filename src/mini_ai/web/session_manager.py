@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
 from ..logger import logger
+from ..plan.schema import PlanSessionState
 from ..utils import now_ts
 from ..workspace import WorkspaceManager
 from ..llm.base import rebuild_tool_messages as _rebuild_tool_messages
@@ -31,7 +32,7 @@ class SessionState:
     status: str = "idle"
     access_time: float = 0.0
     last_usage: dict = field(default_factory=dict)
-    plan_mode: bool = False
+    plan: PlanSessionState = field(default_factory=PlanSessionState)
     lock: threading.Lock = field(default_factory=threading.Lock)
     abort_event: threading.Event = field(default_factory=threading.Event)
     meta: dict = field(default_factory=dict)
@@ -120,16 +121,34 @@ class SessionManager:
             s = self._sessions.get(key)
             return s.model if s else ""
 
-    def set_plan_mode(self, key: str, mode: bool):
+    def set_plan_state(self, key: str, plan: PlanSessionState):
         with self._lock:
             s = self._sessions.get(key)
             if s:
-                s.plan_mode = mode
+                s.plan = plan
 
-    def get_plan_mode(self, key: str) -> bool:
+    def get_plan_state(self, key: str) -> PlanSessionState:
         with self._lock:
             s = self._sessions.get(key)
-            return s.plan_mode if s else False
+            if s:
+                return s.plan
+            return PlanSessionState()
+
+    def is_planning(self, key: str) -> bool:
+        with self._lock:
+            s = self._sessions.get(key)
+            return bool(s and s.plan.state in ("planning", "awaiting_user", "awaiting_approval"))
+
+    def set_plan_mode(self, key: str, mode: bool):
+        """兼容旧调用；新代码应使用 set_plan_state。"""
+        with self._lock:
+            s = self._sessions.get(key)
+            if s:
+                s.plan.state = "planning" if mode else "idle"
+
+    def get_plan_mode(self, key: str) -> bool:
+        """兼容旧调用；新代码应使用 get_plan_state/is_planning。"""
+        return self.is_planning(key)
 
     def set_last_usage(self, key: str, usage: dict):
         with self._lock:
@@ -266,6 +285,7 @@ class SessionManager:
             s = self._sessions.get(key)
             if s:
                 s.messages = [{"role": "system", "content": system_content, "name": old_name or "新会话", "timestamp": now_ts()}]
+                s.plan = PlanSessionState()
                 s.components = {}
                 s.refs = 0
 

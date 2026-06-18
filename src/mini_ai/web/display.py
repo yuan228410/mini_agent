@@ -8,11 +8,12 @@ _EVENT_SEQS: dict[str, int] = {}
 _EVENT_SEQS_LOCK = threading.Lock()
 
 class WebDisplay:
-    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = "", agent_id: str = ""):
+    def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = "", agent_id: str = "", suppress_text: bool = False):
         self.queue = queue
         self.loop = loop
         self.session_id = session_id  # 会话ID，用于前端路由工作流事件
         self.agent_id = agent_id  # Agent ID，用于前端分组消息
+        self.suppress_text = suppress_text  # 计划模式下先缓存原始输出，解析后只发送渲染友好的摘要
         self._teammate = ""
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
@@ -134,6 +135,8 @@ class WebDisplay:
     def text_chunk(self, text: str):
         self._stream_buf += text
         self._streaming = True
+        if self.suppress_text:
+            return
         data = {"content": text}
         if self._teammate:
             data["teammate"] = self._teammate
@@ -147,7 +150,7 @@ class WebDisplay:
         #   1) 非流式路径（_stream_buf 为空）：full_text 是唯一来源，必须发
         #   2) full_text 与已累积内容不一致：兜底，避免丢失内容
         # 否则跳过补发，否则前端会把完整文本再追加一次，导致显示两遍。
-        should_emit = bool(full_text) and (not saved_buf or full_text != saved_buf)
+        should_emit = bool(full_text) and not self.suppress_text and (not saved_buf or full_text != saved_buf)
         if should_emit:
             self._stream_buf = ""
             self._streaming = True
@@ -198,6 +201,11 @@ class WebDisplay:
 
     def info(self, text: str):
         self._push("info", {"message": text})
+
+    def plan_event(self, kind: str, **data):
+        payload = {"kind": kind}
+        payload.update(data)
+        self._push("plan_event", payload)
 
     def error(self, text: str):
         self._push("error", {"error": text})

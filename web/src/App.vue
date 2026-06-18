@@ -12,6 +12,9 @@ import TeamPanel from './components/TeamPanel.vue'
 import FileBrowserPanel from './components/FileBrowserPanel.vue'
 import SettingsPanel from './components/SettingsPanel.vue'
 import WorkflowPanel from './components/WorkflowPanel.vue'
+import PlanArtifactCard from './components/PlanArtifactCard.vue'
+import { isFinalPlan } from './plan/interactions'
+import type { PlanState } from './plan/types'
 
 const SIDEBAR_KEY = 'mini-ai-sidebar-open'
 const SIDEBAR_WIDTH_KEY = 'mini-ai-sidebar-width'
@@ -39,8 +42,9 @@ const usernameInput = ref('')
 
 // 会话相关
 const sessionId = ref('')
-const planMode = ref(false)
+const planState = ref<PlanState>('idle')
 const todosContent = ref('')
+const currentPlan = ref<any>(null)
 const activeWorkspace = ref('')
 
 // 组件引用
@@ -53,6 +57,7 @@ const currentWorkflowState = computed(() => {
   console.log('[App] currentWorkflowState computed:', state)
   return state
 })
+const finalPlan = computed(() => isFinalPlan(currentPlan.value) ? currentPlan.value : null)
 
 function startSidebarResize(e: MouseEvent) {
   const startX = e.clientX
@@ -124,13 +129,16 @@ function onSelectTheme(nextTheme: Theme) {
 function onConfigUpdate(c: any) {
   config.value = { ...config.value, ...c }
   if (c.session_id) sessionId.value = c.session_id
-  if (c.plan_mode !== undefined) planMode.value = c.plan_mode
+  if (c.plan_state !== undefined) planState.value = c.plan_state
 }
 
-function onPlanModeChange(mode: boolean) {
-  planMode.value = mode
+function onPlanModeChange(state: PlanState | boolean) {
+  planState.value = typeof state === 'boolean' ? (state ? 'planning' : 'idle') : state
 }
 
+function onPlanUpdate(plan: any) {
+  currentPlan.value = plan
+}
 
 
 function renderTodos() {
@@ -197,6 +205,14 @@ function logout() {
 
 function onTodosUpdate(content: string) {
   todosContent.value = content
+}
+
+function openPlanOptionsFromPanel() {
+  chatViewRef.value?.openPlanOptionsDialog()
+}
+
+function openPlanDecisionFromPanel(payload: any) {
+  chatViewRef.value?.openPlanDecisionDialog(payload)
 }
 
 </script>
@@ -274,10 +290,11 @@ function onTodosUpdate(content: string) {
         @workspace-change="onWorkspaceChange"
       />
       <div class="sidebar-resize-handle" @mousedown.prevent="startSidebarResize"></div>
-      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" @todos-update="onTodosUpdate" />
+      <ChatView ref="chatViewRef" :workspace="activeWorkspace" @config-update="onConfigUpdate" @status-change="onStatusChange" @plan-mode-change="onPlanModeChange" @plan-update="onPlanUpdate" @todos-update="onTodosUpdate" />
       <div class="rp-resize-handle" @mousedown.prevent="startRightPanelResize"></div>
       <div class="right-panel" :class="{ 'rp-collapsed': rightPanelCollapsed }" :style="rightPanelCollapsed ? {} : { width: rightPanelWidth + 'px' }">
         <div class="rp-tabs">
+          <button class="rp-tab" :class="{ active: rightPanelTab === 'plan' }" @click="rightPanelTab = rightPanelTab === 'plan' ? '' : 'plan'; rightPanelCollapsed = false" v-if="finalPlan" title="计划">计划</button>
           <button class="rp-tab" :class="{ active: rightPanelTab === 'todos' }" @click="rightPanelTab = rightPanelTab === 'todos' ? '' : 'todos'; rightPanelCollapsed = false" v-if="todosContent" title="任务计划">任务</button>
           <button class="rp-tab" :class="{ active: rightPanelTab === 'workflow' }" @click="rightPanelTab = rightPanelTab === 'workflow' ? '' : 'workflow'; rightPanelCollapsed = false" title="工作流">流程</button>
           <button class="rp-tab" :class="{ active: rightPanelTab === 'team' }" @click="rightPanelTab = rightPanelTab === 'team' ? '' : 'team'; rightPanelCollapsed = false" title="协作">协作</button>
@@ -287,6 +304,10 @@ function onTodosUpdate(content: string) {
           <button class="rp-tab rp-collapse" @click="rightPanelCollapsed = !rightPanelCollapsed">{{ rightPanelCollapsed ? '◂' : '▸' }}</button>
         </div>
         <div class="rp-body" v-show="!rightPanelCollapsed">
+          <div v-if="rightPanelTab === 'plan' && finalPlan" class="rp-content">
+            <div class="rp-title">最终执行计划</div>
+            <PlanArtifactCard :plan="finalPlan" @open-option="openPlanOptionsFromPanel" @open-decision="openPlanDecisionFromPanel" />
+          </div>
           <div v-if="rightPanelTab === 'todos'" class="rp-content">
             <div class="rp-title">任务计划</div>
             <div class="rp-todos" v-html="renderTodos()"></div>
@@ -310,7 +331,7 @@ function onTodosUpdate(content: string) {
         </div>
       </div>
     </div>
-    <StatusBar v-bind="config" :plan-mode="planMode" />
+    <StatusBar v-bind="config" :plan-state="planState" />
   </template>
 </template>
 
@@ -529,9 +550,14 @@ function onTodosUpdate(content: string) {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0.8rem 1.5rem;
-  border-bottom: 0.5px solid var(--border);
+  padding: 0.85rem 1.35rem;
+  border-bottom: 1px solid var(--surface-hairline);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg) 86%, transparent), color-mix(in srgb, var(--bg-card) 66%, transparent));
+  backdrop-filter: blur(22px) saturate(1.12);
+  box-shadow: 0 1px 0 rgba(255,255,255,.035);
   flex-shrink: 0;
+  position: relative;
+  z-index: 20;
 }
 
 .header-left {
@@ -541,65 +567,76 @@ function onTodosUpdate(content: string) {
 }
 
 .sidebar-toggle {
-  width: 32px;
-  height: 32px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--bg-card);
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 14px;
+  background: var(--surface-control);
+  color: var(--fg-muted);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
+  transition: transform .16s var(--ease-out), border-color .16s, color .16s, box-shadow .16s;
   font-size: 0.9rem;
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--shadow) 18%, transparent), inset 0 1px 0 rgba(255,255,255,.04);
 }
 
 .sidebar-toggle:hover {
-  border-color: var(--accent);
-  background: var(--bg-thinking);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: var(--glow-accent);
 }
 
 .brand {
-  font-family: 'Playfair Display', serif;
-  font-size: 1.3rem;
-  font-weight: 700;
+  font-family: var(--font-display);
+  font-size: 1.38rem;
+  font-weight: 800;
   color: var(--fg);
   letter-spacing: -0.02em;
+  text-shadow: 0 10px 28px color-mix(in srgb, var(--shadow) 44%, transparent);
 }
 
 .brand::after {
   content: '.';
   color: var(--accent);
+  filter: drop-shadow(0 0 12px var(--accent-glow));
 }
 
 .username-badge {
-  font-size: 0.78rem;
-  color: var(--fg-dim);
-  font-family: 'JetBrains Mono', monospace;
-  padding: 0.15rem 0.5rem;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  font-size: 0.72rem;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  padding: 0.28rem 0.65rem;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-card) 72%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
 }
 
 .logout-btn {
-  width: 28px;
-  height: 28px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--surface-hairline);
+  border-radius: 14px;
+  background: var(--surface-control);
   cursor: pointer;
   font-size: 0.85rem;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
-  color: var(--fg-dim);
+  transition: all .16s var(--ease-out);
+  color: var(--fg-muted);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
 }
 
 .logout-btn:hover {
   border-color: #e55;
   color: #e55;
-  background: rgba(238, 85, 85, 0.08);
+  background: color-mix(in srgb, #e55 12%, var(--bg-card));
+  transform: translateY(-1px);
 }
 
 .header-right {
@@ -614,37 +651,58 @@ function onTodosUpdate(content: string) {
   flex: 1;
   display: flex;
   overflow: hidden;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--bg) 72%, transparent), transparent 42%);
+  position: relative;
+}
+
+.main-area::before {
+  content: '';
+  position: absolute;
+  inset: 10px;
+  pointer-events: none;
+  border: 1px solid color-mix(in srgb, var(--border-light) 26%, transparent);
+  border-radius: 28px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+
+.main-area > * {
+  position: relative;
+  z-index: 1;
 }
 
 .sidebar-resize-handle {
-  width: 4px;
+  width: 6px;
   cursor: col-resize;
-  background: transparent;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--border) 38%, transparent), transparent);
   flex-shrink: 0;
   z-index: 10;
+  transition: background .16s ease, opacity .16s ease;
 }
 .sidebar-resize-handle:hover {
-  background: var(--accent);
-  opacity: 0.3;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 56%, transparent), transparent);
+  opacity: 0.75;
 }
 
 .rp-resize-handle {
-  width: 4px;
+  width: 6px;
   cursor: col-resize;
-  background: transparent;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--border) 38%, transparent), transparent);
   flex-shrink: 0;
   z-index: 10;
+  transition: background .16s ease, opacity .16s ease;
 }
 .rp-resize-handle:hover {
-  background: var(--accent);
-  opacity: 0.3;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent) 56%, transparent), transparent);
+  opacity: 0.75;
 }
 
 .right-panel {
   width: 300px;
   flex-shrink: 0;
-  border-left: 0.5px solid var(--border);
-  background: var(--bg);
+  border-left: 1px solid var(--surface-hairline);
+  background: var(--surface-panel);
+  box-shadow: -12px 0 42px color-mix(in srgb, var(--shadow) 22%, transparent);
+  backdrop-filter: blur(18px) saturate(1.08);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -658,38 +716,45 @@ function onTodosUpdate(content: string) {
 .rp-tabs {
   display: flex;
   align-items: center;
-  border-bottom: 0.5px solid var(--border);
-  padding: 0.35rem 0.4rem;
-  gap: 4px;
+  border-bottom: 1px solid var(--surface-hairline);
+  padding: 0.55rem 0.55rem;
+  gap: 6px;
   flex-shrink: 0;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--bg-card) 50%, transparent), transparent);
 }
 
 .rp-tab {
-  height: 30px;
-  min-width: 30px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  background: transparent;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--surface-hairline);
+  background: color-mix(in srgb, var(--bg-card) 58%, transparent);
   cursor: pointer;
-  font-size: 0.78rem;
-  border-radius: 6px;
+  font-size: 0.76rem;
+  border-radius: 999px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
+  transition: all .16s var(--ease-out);
   position: relative;
   white-space: nowrap;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-weight: 800;
 }
 
 .rp-tab:hover {
-  background: var(--bg-card);
-  border-color: var(--border);
+  background: var(--bg-hover);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  color: var(--fg);
+  transform: translateY(-1px);
 }
 
 .rp-tab.active {
-  background: var(--accent-soft);
-  border-color: var(--accent);
+  background: var(--surface-active);
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
   color: var(--accent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--accent-glow) 20%, transparent);
 }
 
 .rp-tab.active::after {

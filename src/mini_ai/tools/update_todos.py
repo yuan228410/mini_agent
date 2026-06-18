@@ -111,6 +111,15 @@ def get_todos(session_id: str | None = None) -> list[dict]:
         return list(_get_store().items)
 
 
+def set_todos(session_id: str, todos: list[dict]) -> str:
+    """直接设置指定会话的 todos，供计划审批/执行入口快速初始化。"""
+    with _stores_lock:
+        if session_id not in _stores:
+            _stores[session_id] = TodoStore()
+        store = _stores[session_id]
+    return store.update(todos)
+
+
 def execute(args: dict) -> str:
     todos = args.get("todos", [])
     if not todos:

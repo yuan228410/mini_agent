@@ -23,7 +23,13 @@ from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
 from .tools import (get_definitions, register, register_subagents, register_team,
                    inject_todos as _inject_todos,
                     register_display, register_blackboard, register_memory_tools,
-                    register_history_tools, render_todos, set_project_path)
+                    register_history_tools, set_project_path)
+from .plan.artifact_parser import strip_artifact_blocks
+from .plan.prompts import build_plan_user_message
+from .plan.schema import PlanArtifact
+from .plan.service import PlanService
+from .plan.store import PlanStore
+from .plan.tool_policy import ToolPolicy, filter_tools
 from .workspace import WorkspaceManager
 
 
@@ -452,7 +458,7 @@ def main():
 
     # ── 主循环 ──
     while True:
-        user_input = disp.user_input(plan_mode=cmd.plan_mode).strip()
+        user_input = disp.user_input(plan_mode=cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')).strip()
         if not user_input:
             continue
 
@@ -461,6 +467,21 @@ def main():
             break
         if result == "continue":
             continue
+        if result == "approve_plan":
+            artifact = cmd.plan.approved_plan
+            if artifact:
+                parsed_artifact = PlanArtifact.from_dict(artifact)
+                if not parsed_artifact:
+                    continue
+                plan_artifact = PlanService().mark_executing(
+                    session_key=current_session_id,
+                    sm=cmd,
+                    store=PlanStore(history_db, _get_workspace_name(), current_session_id),
+                    artifact=parsed_artifact,
+                )
+                user_input = PlanService().execution_instruction(plan_artifact)
+            else:
+                continue
         if result == "reload_workspace":
             # 清理旧资源
             _app_ctx.lead_tools_cache = None
@@ -486,14 +507,19 @@ def main():
             continue
 
         ts = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-        messages.append({"role": "user", "content": user_input, "timestamp": ts})
+        original_user_input = user_input
+        planning_turn = cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')
+        if planning_turn:
+            user_input = build_plan_user_message(user_input, current_plan=cmd.plan.current_plan, selected_option_id=cmd.plan.selected_option_id)
+        messages.append({"role": "user", "content": user_input, "timestamp": ts, "_plan_original_content": original_user_input if planning_turn else None})
         workspace_name = _get_workspace_name()
-        history_db.append(workspace_name, current_session_id, "user", user_input, metadata=json.dumps({"timestamp": ts}))
+        history_db.append(workspace_name, current_session_id, "user", original_user_input, metadata=json.dumps({"timestamp": ts}))
         disp.user_label(ts)
 
         try:
             reset_usage()
-            tools = [] if cmd.plan_mode else _lead_tool_defs(_app_ctx)
+            planning_turn = cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')
+            tools = filter_tools(_lead_tool_defs(_app_ctx), ToolPolicy.PLAN_READONLY if planning_turn else ToolPolicy.EXECUTION)
 
             # 使用 HistoryPersister 统一持久化
             _cli_persister = HistoryPersister(history_db, _get_workspace_name(), current_session_id)
@@ -511,31 +537,27 @@ def main():
             )
             _cli_persister.flush_deferred(messages)  # 异常时跳过，避免写入不完整消息
 
-            # 计划模式自动执行
-            if cmd.plan_mode and msg and msg.get("content"):
-                if PLAN.get("approval", True):
-                    msg["content"] += "\n\n📋 以上为执行计划，确认后输入 /act 开始执行"
-                else:
-                    cmd.plan_mode = False
-                    msg["content"] += "\n\n⚡ 已自动切换到执行模式"
-                    tools = _lead_tool_defs(_app_ctx)
-                    msg2, _ = run_tool_loop(
-                        messages, tools,
-                        streaming=STREAMING,
-                        display=disp,
-                        inject_fn=_inject_todos,
-                        ctx=cmd.ctx,
-                        persist_fn=_cli_persister,
-                        bus=bus,
-                        context_length=MODEL_CONFIG.get("context_length", 256000),
-                        compactor=compactor,
-                    )
-                    _cli_persister.flush_deferred(messages)
-                    if msg2 and msg2.get("content"):
-                        msg = msg2
+            if planning_turn and msg and msg.get("content"):
+                raw_plan_text = msg["content"]
+                msg["content"] = strip_artifact_blocks(raw_plan_text) or "计划已更新。"
+                artifact = PlanService().update_from_response(
+                    session_key=current_session_id,
+                    sm=cmd,
+                    store=PlanStore(history_db, _get_workspace_name(), current_session_id),
+                    user_text=original_user_input,
+                    assistant_text=raw_plan_text,
+                    display=None,
+                )
+                cmd.plan.current_plan = artifact.to_dict()
+                cmd.plan.state = artifact.status
+                cmd._render_plan()
+                disp.info("输入 /act 批准执行，或继续输入修改意见。")
+
+            if cmd.plan.state == 'executing' and msg and msg.get("content"):
+                cmd.plan.state = 'completed'
 
             # 等待队友回禀
-            if not cmd.plan_mode:
+            if not (cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')):
                 teammate_msg = wait_for_teammates(
                     bus, team_mgr, session.lead_event,
                     cmd.run_tool_fn, messages, _lead_tool_defs(_app_ctx),
@@ -547,8 +569,9 @@ def main():
 
             if msg and msg.get("content"):
                 ts2 = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
-                messages.append({"role": "assistant", "content": msg["content"],
-                                 "timestamp": ts2})
+                if not any(m.get("role") == "assistant" and m.get("content") == msg["content"] for m in messages[-3:]):
+                    messages.append({"role": "assistant", "content": msg["content"],
+                                     "timestamp": ts2})
 
             cleanup_inbox(bus)
 
