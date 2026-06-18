@@ -8,10 +8,25 @@ from __future__ import annotations
 
 from pathlib import Path
 from threading import Event
-from typing import Any
 
 from ..config import DATABASE, DISPLAY, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TIMEOUTS, TOOL
+from .display_protocol import DisplayProtocol
 from .runtime_context import SessionIdentity, SessionRuntimeContext, ToolContext
+from .runtime_types import (
+    BlackboardProtocol,
+    CompactorProtocol,
+    ContextBuilderProtocol,
+    HistoryDBProtocol,
+    McpLoaderProtocol,
+    MemoryStoreProtocol,
+    MessageBusProtocol,
+    MessageDict,
+    RequestContextProtocol,
+    SkillLoaderProtocol,
+    SubagentLoaderProtocol,
+    TeamManagerProtocol,
+    ToolRegistryProtocol,
+)
 from .settings import SettingsSnapshot
 from .tool_registry_factory import build_tool_registry
 
@@ -19,23 +34,23 @@ from .tool_registry_factory import build_tool_registry
 def build_session_runtime(
     *,
     identity: SessionIdentity,
-    messages: list[dict],
-    display: Any = None,
-    history_db: Any = None,
-    memory_store: Any = None,
-    skill_loader: Any = None,
-    subagent_loader: Any = None,
-    bus: Any = None,
-    team_mgr: Any = None,
-    blackboard: Any = None,
+    messages: list[MessageDict],
+    display: DisplayProtocol | None = None,
+    history_db: HistoryDBProtocol | None = None,
+    memory_store: MemoryStoreProtocol | None = None,
+    skill_loader: SkillLoaderProtocol | None = None,
+    subagent_loader: SubagentLoaderProtocol | None = None,
+    bus: MessageBusProtocol | None = None,
+    team_mgr: TeamManagerProtocol | None = None,
+    blackboard: BlackboardProtocol | None = None,
     workflow_dirs: list[Path] | None = None,
     abort_event: Event | None = None,
-    request_context: Any = None,
+    request_context: RequestContextProtocol | None = None,
     model_config: dict | None = None,
-    tool_registry: Any = None,
-    mcp_loader: Any = None,
-    compactor: Any = None,
-    context_builder: Any = None,
+    tool_registry: ToolRegistryProtocol | None = None,
+    mcp_loader: McpLoaderProtocol | None = None,
+    compactor: CompactorProtocol | None = None,
+    context_builder: ContextBuilderProtocol | None = None,
     settings: SettingsSnapshot | None = None,
 ) -> SessionRuntimeContext:
     """Build a fully-bound runtime for one CLI/Web session.

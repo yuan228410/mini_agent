@@ -14,6 +14,7 @@ from pathlib import Path
 
 from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
 from ..core.events import TERMINAL_EVENT_TYPES
+from ..core.runtime_types import MessageDict, MetadataDict, ToolDefinition, UsageDict
 from ..logger import logger
 from ..plan.schema import PlanSessionState
 from ..utils import now_ts
@@ -28,17 +29,17 @@ from ..llm.base import rebuild_tool_messages as _rebuild_tool_messages
 @dataclass
 class SessionState:
     """一个会话的完整状态（合并原 13 个 dict 中的对应字段）"""
-    messages: list[dict] = field(default_factory=list)
+    messages: list[MessageDict] = field(default_factory=list)
     model: str = ""
     status: str = "idle"
     access_time: float = 0.0
-    last_usage: dict = field(default_factory=dict)
+    last_usage: UsageDict = field(default_factory=dict)
     plan: PlanSessionState = field(default_factory=PlanSessionState)
     lock: threading.Lock = field(default_factory=threading.Lock)
     abort_event: threading.Event = field(default_factory=threading.Event)
-    meta: dict = field(default_factory=dict)
+    meta: MetadataDict = field(default_factory=dict)
     refs: int = 0
-    components: dict = field(default_factory=dict)
+    components: MetadataDict = field(default_factory=dict)
 
 
 # ═══════════════════════════════════════════
@@ -67,9 +68,9 @@ class SessionManager:
         # 核心状态：cache_key → SessionState
         self._sessions: dict[str, SessionState] = {}
         # 团队组件：ws_key → {bus, team_mgr, blackboard}
-        self._team_components: dict[str, dict] = {}
+        self._team_components: dict[str, MetadataDict] = {}
         # 工具定义缓存
-        self._lead_tools_cache: list[dict] | None = None
+        self._lead_tools_cache: list[ToolDefinition] | None = None
         # 活跃生成任务：cache_key → task，用于跨 WebSocket 连接隔离同一会话生成
         self._active_tasks: dict[str, object] = {}
 
@@ -89,12 +90,12 @@ class SessionManager:
         with self._lock:
             return self._sessions.get(key)
 
-    def get_messages(self, key: str) -> list[dict] | None:
+    def get_messages(self, key: str) -> list[MessageDict] | None:
         with self._lock:
             s = self._sessions.get(key)
             return s.messages if s else None
 
-    def set_messages(self, key: str, messages: list[dict]):
+    def set_messages(self, key: str, messages: list[MessageDict]):
         with self._lock:
             s = self._sessions.get(key)
             if s:
@@ -268,7 +269,7 @@ class SessionManager:
 
     # ── CRUD ──
 
-    def create_session(self, key: str, messages: list[dict]):
+    def create_session(self, key: str, messages: list[MessageDict]):
         """创建新会话"""
         with self._lock:
             self._sessions[key] = SessionState(messages=messages, access_time=time.monotonic())
@@ -337,7 +338,7 @@ class SessionManager:
 
     # ── 工具定义缓存 ──
 
-    def lead_tool_defs(self) -> list[dict]:
+    def lead_tool_defs(self) -> list[ToolDefinition]:
         raise RuntimeError("SessionManager.lead_tool_defs is compatibility-only; use SessionRuntimeContext.tool_registry")
 
     def invalidate_lead_tools(self):
@@ -405,7 +406,7 @@ def safe_queue_put(queue, item, loop=None):
 def abort_all_sessions():
     SessionManager.instance().abort_all()
 
-def lead_tool_defs() -> list[dict]:
+def lead_tool_defs() -> list[ToolDefinition]:
     raise RuntimeError("lead_tool_defs is compatibility-only; use SessionRuntimeContext.tool_registry")
 
 def invalidate_lead_tools():
@@ -577,7 +578,7 @@ def build_system_prompt(username: str, sid: str, base: Path | None = None, works
 # 会话加载/创建
 # ═══════════════════════════════════════════
 
-def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> list[dict] | None:
+def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> list[MessageDict] | None:
     _t0 = time.time()
     try:
         if base is None:
@@ -637,7 +638,7 @@ def _restore_session_model(base: Path | None, sid: str, cache_key: str):
     if model:
         SessionManager.instance().set_model(cache_key, model)
 
-def _build_meta(sid: str, messages: list[dict], username: str, workspace: str | None = None) -> dict:
+def _build_meta(sid: str, messages: list[MessageDict], username: str, workspace: str | None = None) -> dict:
     sm = SessionManager.instance()
     key = sm.cache_key(username, workspace, sid)
     non_system = [m for m in messages if m["role"] != "system"]
@@ -663,7 +664,7 @@ def _build_meta(sid: str, messages: list[dict], username: str, workspace: str | 
         "status": sm.get_status(key),
     }
 
-def _update_meta_cache(username: str, sid: str, workspace: str | None = None, messages: list[dict] | None = None):
+def _update_meta_cache(username: str, sid: str, workspace: str | None = None, messages: list[MessageDict] | None = None):
     sm = SessionManager.instance()
     key = sm.cache_key(username, workspace, sid)
     if messages is not None:
@@ -682,7 +683,7 @@ def _save_session_model(base: Path | None, sid: str, model_name: str):
     meta["model"] = model_name
     meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
-def get_or_create_session(username: str, session_id: str | None, base: Path | None = None, workspace: str | None = None, *, create: bool = True) -> tuple[str, list[dict] | None]:
+def get_or_create_session(username: str, session_id: str | None, base: Path | None = None, workspace: str | None = None, *, create: bool = True) -> tuple[str, list[MessageDict] | None]:
     _t0 = time.time()
     sm = SessionManager.instance()
 

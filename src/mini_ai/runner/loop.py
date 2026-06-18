@@ -5,10 +5,10 @@
 - 管理循环生命周期
 """
 import threading
-from typing import Any, Callable
 
 from .state import LoopState
 from ..core.display_protocol import DisplayProtocol
+from ..core.runtime_types import CompactorProtocol, MessageBusProtocol, MessageDict, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol
 from .executor import ToolExecutor
 from .error_handler import ErrorHandler
 
@@ -22,8 +22,8 @@ _CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.88)
 MAX_OVERFLOW_RETRIES = 3
 
 def run_tool_loop(
-    messages: list[dict],
-    tools: list[dict],
+    messages: list[MessageDict],
+    tools: list[ToolDefinition],
     *,
     streaming: bool = False,
     display: DisplayProtocol | None = None,
@@ -33,11 +33,11 @@ def run_tool_loop(
     max_turns: int = 0,
     context_length: int | None = None,
     context_usage_limit: float = _CONTEXT_USAGE_LIMIT,
-    ctx=None,
-    bus=None,
-    compactor=None,
-    tool_registry=None,
-) -> tuple[dict | None, bool]:
+    ctx: RequestContextProtocol | None = None,
+    bus: MessageBusProtocol | None = None,
+    compactor: CompactorProtocol | None = None,
+    tool_registry: ToolRegistryProtocol | None = None,
+) -> tuple[MessageDict | None, bool]:
     """统一工具循环
     
     Args:
@@ -212,7 +212,7 @@ def run_tool_loop(
     # 达到最大轮次
     return _force_summary(messages, ctx, display, bus, state)
 
-def _has_recent_tool_error(messages: list[dict]) -> bool:
+def _has_recent_tool_error(messages: list[MessageDict]) -> bool:
     """检查最近是否有工具错误（匹配明确的错误模式，避免误判正常工具结果中的 ⚠ 符号）"""
     tool_msgs = [m for m in messages[-5:] if m.get("role") == "tool"]
     if not tool_msgs:
@@ -227,7 +227,7 @@ def _has_recent_tool_error(messages: list[dict]) -> bool:
         return True
     return False
 
-def _force_summary(messages: list[dict], ctx, display, bus, state: LoopState) -> tuple[dict | None, bool]:
+def _force_summary(messages: list[MessageDict], ctx: RequestContextProtocol | None, display: DisplayProtocol | None, bus: MessageBusProtocol | None, state: LoopState) -> tuple[MessageDict | None, bool]:
     """强制生成总结
 
     在达到 max_turns 或连续错误过多时调用，
@@ -279,7 +279,7 @@ def _force_summary(messages: list[dict], ctx, display, bus, state: LoopState) ->
     
     return None, state.spawned_teammate
 
-def _inject_teammate_reports(bus, messages: list[dict], with_instruction: bool = False) -> None:
+def _inject_teammate_reports(bus: MessageBusProtocol, messages: list[MessageDict], with_instruction: bool = False) -> None:
     """注入队友回禀
     
     Args:
@@ -308,7 +308,7 @@ def _inject_teammate_reports(bus, messages: list[dict], with_instruction: bool =
         
         logger.info("[runner] 注入队友回禀")
 
-def _check_context_usage(messages: list[dict], context_length: int, limit: float, ctx, compactor=None) -> bool:
+def _check_context_usage(messages: list[MessageDict], context_length: int, limit: float, ctx: RequestContextProtocol | None, compactor: CompactorProtocol | None = None) -> bool:
     """检查上下文使用率，超限时触发裁剪+压缩
     
     Returns:
@@ -359,7 +359,7 @@ def _check_context_usage(messages: list[dict], context_length: int, limit: float
         return True
 
 
-def _recover_from_overflow(messages: list[dict], compactor, ctx, state: LoopState) -> bool:
+def _recover_from_overflow(messages: list[MessageDict], compactor: CompactorProtocol, ctx: RequestContextProtocol | None, state: LoopState) -> bool:
     """上下文溢出恢复：force_compact 后可重试
     
     Returns:
@@ -385,7 +385,17 @@ def _recover_from_overflow(messages: list[dict], compactor, ctx, state: LoopStat
         logger.error(f"[runner] force_compact 异常: {e}", exc_info=True)
         return False
 
-def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abort_event: threading.Event | None = None, tool_names: list[str] | None = None, context_length: int = 128000, compactor=None, tool_registry=None) -> str | None:
+def run_agent(
+    messages: list[MessageDict],
+    max_turns: int = 10,
+    ctx: RequestContextProtocol | None = None,
+    bus: MessageBusProtocol | None = None,
+    abort_event: threading.Event | None = None,
+    tool_names: list[str] | None = None,
+    context_length: int = 128000,
+    compactor: CompactorProtocol | None = None,
+    tool_registry: ToolRegistryProtocol | None = None,
+) -> str | None:
     """轻量 agent 循环
     
     Args:

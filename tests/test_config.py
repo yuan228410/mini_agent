@@ -24,6 +24,9 @@ class FakeToolRegistry:
     def handle_tool_calls(self, msg, messages, **kwargs):
         return False
 
+    def dispatch(self, name, args):
+        return None
+
 
 def test_settings_snapshot_copies_config_dicts():
     model_config = {

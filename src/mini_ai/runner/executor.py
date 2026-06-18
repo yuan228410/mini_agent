@@ -7,11 +7,12 @@
 """
 import time
 import threading
-from typing import Any, Callable
+from typing import Callable
 
 from ..logger import logger
 from ..utils import now_ts
 from ..core.display_protocol import DisplayProtocol
+from ..core.runtime_types import MessageDict, RequestContextProtocol, ToolDefinition
 
 class ToolExecutor:
     """工具执行器
@@ -25,7 +26,7 @@ class ToolExecutor:
     def __init__(
         self,
         display: DisplayProtocol | None = None,
-        persist_fn: Callable[[dict], None] | None = None,
+        persist_fn: Callable[[MessageDict], None] | None = None,
         streaming: bool = False,
     ):
         """
@@ -40,9 +41,9 @@ class ToolExecutor:
     
     def call_llm(
         self,
-        messages: list[dict],
-        tools: list[dict] | None,
-        ctx: Any = None,
+        messages: list[MessageDict],
+        tools: list[ToolDefinition] | None,
+        ctx: RequestContextProtocol | None = None,
         abort_event: threading.Event | None = None,
     ) -> dict | None:
         """调用 LLM（根据 streaming 选择模式）
@@ -63,9 +64,9 @@ class ToolExecutor:
     
     def _call_llm_sync(
         self,
-        messages: list[dict],
-        tools: list[dict] | None,
-        ctx: Any,
+        messages: list[MessageDict],
+        tools: list[ToolDefinition] | None,
+        ctx: RequestContextProtocol | None,
     ) -> dict | None:
         """同步调用 LLM"""
         from ..llm import chat as llm_chat, get_model
@@ -101,9 +102,9 @@ class ToolExecutor:
     
     def _call_llm_stream(
         self,
-        messages: list[dict],
-        tools: list[dict] | None,
-        ctx: Any,
+        messages: list[MessageDict],
+        tools: list[ToolDefinition] | None,
+        ctx: RequestContextProtocol | None,
         abort_event: threading.Event | None,
     ) -> dict | None:
         """流式调用 LLM（支持自动重试）"""
@@ -251,7 +252,7 @@ class ToolExecutor:
     def finalize_response(
         self,
         msg: dict | None,
-        messages: list[dict],
+        messages: list[MessageDict],
     ) -> None:
         """完成响应（添加时间戳、持久化）
         

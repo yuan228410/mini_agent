@@ -10,6 +10,7 @@ from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..core import ApplicationService, RunTurnOptions, build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
 from ..core.runtime_context import SessionIdentity
+from ..core.runtime_types import MessageDict, ToolDefinition
 from ..tools import inject_todos as _inject_todos
 from ..logger import logger, set_session_id
 from ..plan.artifact_parser import strip_artifact_blocks
@@ -36,7 +37,7 @@ def _ws_event(event: DisplayEventType, **data) -> dict:
 
 
 def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
-                       messages: list[dict], tools: list[dict] | None = None,
+                       messages: list[MessageDict], tools: list[ToolDefinition] | None = None,
                        max_turns: int = 0, abort_event=None,
                        model_name=None, session_lock=None,
                        session_key: str = "",

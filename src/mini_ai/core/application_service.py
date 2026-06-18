@@ -15,20 +15,22 @@ from ..plan.tool_policy import ToolPolicy, filter_tools
 from ..runner import run_tool_loop
 from ..tools import inject_todos as _inject_todos
 from ..utils import now_ts
+from .display_protocol import DisplayProtocol
 from .persister import HistoryPersister
 from .runtime_context import SessionRuntimeContext
+from .runtime_types import HistoryDBProtocol, MessageBusProtocol, MessageDict, PlanStateStoreProtocol, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol
 
 
 @dataclass
 class RunTurnOptions:
     streaming: bool | None = None
-    display: Any = None
-    request_context: RequestContext | None = None
+    display: DisplayProtocol | None = None
+    request_context: RequestContextProtocol | None = None
     abort_event: threading.Event | None = None
     max_turns: int = 0
     plan_turn: bool = False
-    approved_plan: dict | None = None
-    tool_registry: Any = None
+    approved_plan: MessageDict | None = None
+    tool_registry: ToolRegistryProtocol | None = None
     context_length: int | None = None
     persist_user_history: bool = True
     plan_session_key: str | None = None
@@ -36,8 +38,8 @@ class RunTurnOptions:
 
 @dataclass
 class RunTurnResult:
-    message: dict | None
-    usage: dict
+    message: MessageDict | None
+    usage: dict[str, Any]
     raw_plan_text: str | None = None
 
 
@@ -52,15 +54,15 @@ class ApplicationService:
     def run_turn(
         self,
         *,
-        messages: list[dict] | None = None,
-        tools: list[dict] | None = None,
-        history_db=None,
+        messages: list[MessageDict] | None = None,
+        tools: list[ToolDefinition] | None = None,
+        history_db: HistoryDBProtocol | None = None,
         workspace: str | None = None,
         session_id: str | None = None,
         compactor=None,
-        bus=None,
+        bus: MessageBusProtocol | None = None,
         plan_store: PlanStore | None = None,
-        plan_state: Any = None,
+        plan_state: PlanStateStoreProtocol | None = None,
         user_text_for_history: str | None = None,
         options: RunTurnOptions | None = None,
         runtime: SessionRuntimeContext | None = None,

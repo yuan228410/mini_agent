@@ -4,8 +4,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any
 
+from .display_protocol import DisplayProtocol
+from .runtime_types import (
+    BlackboardProtocol,
+    CompactorProtocol,
+    ContextBuilderProtocol,
+    HistoryDBProtocol,
+    MemoryStoreProtocol,
+    MessageBusProtocol,
+    MessageDict,
+    RequestContextProtocol,
+    SkillLoaderProtocol,
+    SubagentLoaderProtocol,
+    TeamManagerProtocol,
+    ToolRegistryProtocol,
+)
 from .settings import SettingsSnapshot
 
 
@@ -20,14 +34,14 @@ class SessionIdentity:
 @dataclass
 class ToolContext:
     identity: SessionIdentity
-    display: Any = None
-    memory_store: Any = None
-    history_db: Any = None
-    skill_loader: Any = None
-    subagent_loader: Any = None
-    bus: Any = None
-    team_mgr: Any = None
-    blackboard: Any = None
+    display: DisplayProtocol | None = None
+    memory_store: MemoryStoreProtocol | None = None
+    history_db: HistoryDBProtocol | None = None
+    skill_loader: SkillLoaderProtocol | None = None
+    subagent_loader: SubagentLoaderProtocol | None = None
+    bus: MessageBusProtocol | None = None
+    team_mgr: TeamManagerProtocol | None = None
+    blackboard: BlackboardProtocol | None = None
     workflow_dirs: list[Path] | None = None
     abort_event: Event | None = None
 
@@ -35,20 +49,19 @@ class ToolContext:
 @dataclass
 class SessionRuntimeContext:
     identity: SessionIdentity
-    request_context: Any
-    tool_registry: Any
+    request_context: RequestContextProtocol
+    tool_registry: ToolRegistryProtocol
     tool_context: ToolContext
-    messages: list[dict]
+    messages: list[MessageDict]
     settings: SettingsSnapshot | None = None
-    compactor: Any = None
-    context_builder: Any = None
-    history_db: Any = None
-    memory_store: Any = None
-    skill_loader: Any = None
-    bus: Any = None
-    team_mgr: Any = None
-    blackboard: Any = None
+    compactor: CompactorProtocol | None = None
+    context_builder: ContextBuilderProtocol | None = None
+    history_db: HistoryDBProtocol | None = None
+    memory_store: MemoryStoreProtocol | None = None
+    skill_loader: SkillLoaderProtocol | None = None
+    bus: MessageBusProtocol | None = None
+    team_mgr: TeamManagerProtocol | None = None
+    blackboard: BlackboardProtocol | None = None
 
-    def close(self):
-        if self.request_context and hasattr(self.request_context, "close"):
-            self.request_context.close()
+    def close(self) -> None:
+        self.request_context.close()

@@ -427,3 +427,54 @@ def test_workflow_display_events_use_structured_payload_helpers():
 
     end = events.workflow_task_end("t1", TaskStatus.SKIPPED.value, error="条件不满足").to_wire()
     assert end == {"event": "task_end", "data": {"id": "t1", "status": "skipped", "error": "条件不满足"}}
+
+
+def test_runtime_context_uses_explicit_protocol_boundaries():
+    import typing
+    from mini_ai.core.display_protocol import DisplayProtocol
+    from mini_ai.core.runtime_context import SessionRuntimeContext, ToolContext
+    from mini_ai.core.runtime_types import RequestContextProtocol, ToolRegistryProtocol
+
+    tool_hints = typing.get_type_hints(ToolContext)
+    runtime_hints = typing.get_type_hints(SessionRuntimeContext)
+
+    assert tool_hints["display"] == DisplayProtocol | None
+    assert runtime_hints["request_context"] is RequestContextProtocol
+    assert runtime_hints["tool_registry"] is ToolRegistryProtocol
+    assert "messages" in runtime_hints
+
+
+def test_session_runtime_context_close_uses_owned_request_context_protocol():
+    from mini_ai.core.runtime_context import SessionIdentity, SessionRuntimeContext, ToolContext
+
+    class FakeRequestContext:
+        model_config = {}
+        display = None
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeRegistry:
+        def get_definitions(self):
+            return []
+
+        def handle_tool_calls(self, msg, messages, display=None, persist_fn=None):
+            return False
+
+        def dispatch(self, name, args):
+            return None
+
+    identity = SessionIdentity(username="u", workspace="w", session_id="s")
+    request_context = FakeRequestContext()
+    runtime = SessionRuntimeContext(
+        identity=identity,
+        request_context=request_context,
+        tool_registry=FakeRegistry(),
+        tool_context=ToolContext(identity=identity),
+        messages=[],
+    )
+
+    runtime.close()
+
+    assert request_context.closed is True
