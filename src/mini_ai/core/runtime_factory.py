@@ -10,8 +10,9 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
-from ..config import MODEL_CONFIG, RequestContext
+from ..config import DATABASE, DISPLAY, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TIMEOUTS, TOOL
 from .runtime_context import SessionIdentity, SessionRuntimeContext, ToolContext
+from .settings import SettingsSnapshot
 from .tool_registry_factory import build_tool_registry
 
 
@@ -35,6 +36,7 @@ def build_session_runtime(
     mcp_loader: Any = None,
     compactor: Any = None,
     context_builder: Any = None,
+    settings: SettingsSnapshot | None = None,
 ) -> SessionRuntimeContext:
     """Build a fully-bound runtime for one CLI/Web session.
 
@@ -57,7 +59,16 @@ def build_session_runtime(
         abort_event=abort_event,
     )
     registry = tool_registry or build_tool_registry(tool_context, mcp_loader=mcp_loader)
-    req_ctx = request_context or RequestContext(model_config=model_config or MODEL_CONFIG, display=display)
+    snapshot = settings or SettingsSnapshot.from_config_dicts(
+        model_config=model_config or MODEL_CONFIG,
+        timeouts=TIMEOUTS,
+        runner=RUNNER,
+        display=DISPLAY,
+        tool=TOOL,
+        database=DATABASE,
+        streaming=STREAMING,
+    )
+    req_ctx = request_context or RequestContext(model_config=snapshot.model.to_dict(), display=display)
 
     return SessionRuntimeContext(
         identity=identity,
@@ -65,6 +76,7 @@ def build_session_runtime(
         tool_registry=registry,
         tool_context=tool_context,
         messages=messages,
+        settings=snapshot,
         compactor=compactor,
         context_builder=context_builder,
         history_db=history_db,

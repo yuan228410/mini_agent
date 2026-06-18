@@ -119,7 +119,16 @@ Runner 模块拆分为四个职责清晰的子模块：
 
 - `SessionIdentity` — 当前用户、工作空间、session id、项目路径。
 - `ToolContext` — 工具执行所需的会话资源：Display、MemoryStore、HistoryDB、SkillLoader、SubagentLoader、MessageBus、TeamManager、Blackboard、workflow 目录和 abort 事件。
-- `SessionRuntimeContext` — 一轮对话共享的完整 runtime：identity、request context、tool registry、tool context、messages、compactor、context builder、history/memory/team 等资源。
+- `SessionRuntimeContext` — 一轮对话共享的完整 runtime：identity、request context、tool registry、tool context、messages、settings snapshot、compactor、context builder、history/memory/team 等资源。
+
+`src/mini_ai/core/settings.py` 提供 typed immutable settings snapshot，用于把配置模块的兼容 dict 入口收口为稳定运行时结构：
+
+- `SettingsSnapshot` — 一次会话/请求观察到的完整配置快照。
+- `ModelSettings` — provider 所需模型参数，可转换回 provider-compatible dict。
+- `TimeoutSettings` / `RunnerSettings` / `DisplaySettings` / `ToolSettings` — runtime 常用配置的类型化视图。
+- `DatabaseSettings` / `DatabaseHistorySettings` — 历史库和异步写入配置。
+
+配置文件格式仍保持 YAML + dict 兼容；runtime 边界优先读取 `SessionRuntimeContext.settings`，避免新代码继续散落访问全局配置 dict。
 
 `src/mini_ai/core/tool_registry_factory.py` 的 `build_tool_registry()` 只从 `ToolContext` 构造当前会话的 `ToolRegistry`：
 
@@ -332,6 +341,7 @@ src/mini_ai/
 │   ├── events.py              # DisplayEventType / DisplayEvent / terminal event 集合
 │   ├── messages.py            # ChatMessage / MessageRole / provider-safe conversion
 │   ├── tool_models.py         # ToolCall / ToolFunctionCall / ToolResult
+│   ├── settings.py            # SettingsSnapshot / typed runtime config DTOs
 │   ├── persister.py           # HistoryPersister 统一持久化
 │   └── chat_session.py        # ChatSession 统一会话运行逻辑
 ├── llm/                 # LLM 通信层（router + base + openai + anthropic）

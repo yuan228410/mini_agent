@@ -12,6 +12,96 @@ from mini_ai.config import (
     MODEL_CONFIG,
     _raw,
 )
+from mini_ai.core import ApplicationService, RunTurnOptions, SettingsSnapshot
+from mini_ai.core.runtime_context import SessionIdentity
+from mini_ai.core.runtime_factory import build_session_runtime
+
+
+class FakeToolRegistry:
+    def get_definitions(self):
+        return []
+
+    def handle_tool_calls(self, msg, messages, **kwargs):
+        return False
+
+
+def test_settings_snapshot_copies_config_dicts():
+    model_config = {
+        "api_url": "https://example.test/v1",
+        "api_key": "secret",
+        "model": "demo",
+        "api_mode": "openai",
+        "context_length": 1000,
+        "headers": {"X-Test": "1"},
+        "custom": "kept",
+    }
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config=model_config,
+        runner={"context_usage_limit": 0.5, "max_turns": 7},
+        display={"thinking_mode": "hidden", "tool_detail": "full"},
+        tool={"max_result_chars": 123},
+        database={"history": {"async_write": True, "batch_size": 9}},
+        streaming=False,
+    )
+
+    model_config["headers"]["X-Test"] = "mutated"
+    assert snapshot.model.api_url == "https://example.test/v1"
+    assert snapshot.model.headers == {"X-Test": "1"}
+    assert snapshot.model.extra == {"custom": "kept"}
+    assert snapshot.runner.max_turns == 7
+    assert snapshot.display.thinking_mode == "hidden"
+    assert snapshot.tool.max_result_chars == 123
+    assert snapshot.database.history.async_write is True
+    assert snapshot.database.history.batch_size == 9
+    assert snapshot.streaming is False
+    assert snapshot.model.to_dict()["custom"] == "kept"
+
+
+def test_application_service_defaults_to_runtime_settings(monkeypatch):
+    captured = {}
+
+    def fake_run_tool_loop(*args, **kwargs):
+        captured.update(kwargs)
+        return {"role": "assistant", "content": "ok"}, False
+
+    monkeypatch.setattr("mini_ai.core.application_service.run_tool_loop", fake_run_tool_loop)
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 77},
+        runner={"max_turns": 6, "context_usage_limit": 0.44},
+        streaming=False,
+    )
+    runtime = build_session_runtime(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s"),
+        messages=[{"role": "user", "content": "hi"}],
+        settings=snapshot,
+        tool_registry=FakeToolRegistry(),
+        history_db=type("DB", (), {"append": lambda *args, **kwargs: 1})(),
+    )
+
+    result = ApplicationService().run_turn(runtime=runtime, tools=[], options=RunTurnOptions(persist_user_history=False))
+
+    assert result.message == {"role": "assistant", "content": "ok"}
+    assert captured["streaming"] is False
+    assert captured["context_length"] == 77
+    assert captured["max_turns"] == 6
+    runtime.close()
+
+
+def test_runtime_factory_attaches_settings_snapshot():
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 42},
+        streaming=True,
+    )
+    runtime = build_session_runtime(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s"),
+        messages=[],
+        settings=snapshot,
+        tool_registry=object(),
+    )
+
+    assert runtime.settings is snapshot
+    assert runtime.request_context.model_config["context_length"] == 42
+    runtime.close()
 
 
 class TestConfigWatcher:

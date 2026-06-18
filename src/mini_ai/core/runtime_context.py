@@ -6,6 +6,8 @@ from pathlib import Path
 from threading import Event
 from typing import Any
 
+from .settings import SettingsSnapshot
+
 
 @dataclass
 class SessionIdentity:
@@ -37,6 +39,7 @@ class SessionRuntimeContext:
     tool_registry: Any
     tool_context: ToolContext
     messages: list[dict]
+    settings: SettingsSnapshot | None = None
     compactor: Any = None
     context_builder: Any = None
     history_db: Any = None

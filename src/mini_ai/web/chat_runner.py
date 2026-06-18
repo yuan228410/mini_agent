@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..config import DATA_DIR, MODEL_CONFIG, STREAMING, PACKAGE_DIR, get_model_config
+from ..config import DATA_DIR, MODEL_CONFIG, PACKAGE_DIR, get_model_config
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..core import ApplicationService, RunTurnOptions, build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -102,6 +102,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 )
                 tool_registry = runtime.tool_registry
                 ctx = runtime.request_context
+                settings = runtime.settings
 
                 if tools is None:
                     tools = [d for d in tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
@@ -152,12 +153,12 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     plan_state=sm,
                     user_text_for_history=(user_msgs[-1].get("_plan_original_content", user_msgs[-1].get("content", "")) if user_msgs else None),
                     options=RunTurnOptions(
-                        streaming=STREAMING,
+                        streaming=None,
                         abort_event=abort_event,
                         max_turns=max_turns,
                         plan_turn=plan_turn,
                         approved_plan=approved_plan,
-                        context_length=cfg.get("context_length", 256000),
+                        context_length=None,
                         persist_user_history=False,
                         plan_session_key=session_key,
                     ),
@@ -202,10 +203,10 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                                     runtime=runtime,
                                     tools=tools,
                                     options=RunTurnOptions(
-                                        streaming=STREAMING,
+                                        streaming=None,
                                         abort_event=abort_event,
                                         max_turns=3,
-                                        context_length=cfg.get("context_length", 256000),
+                                        context_length=None,
                                         persist_user_history=False,
                                     ),
                                 )

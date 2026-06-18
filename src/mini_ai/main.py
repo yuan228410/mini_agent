@@ -8,8 +8,8 @@ from datetime import datetime
 from . import __version__
 from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, HistoryDB, HistoryDBPool
-from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
-                     DISPLAY, SKILL_PATHS, PLAN, MCP, RequestContext, _raw, user_data_dir)
+from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG,
+                     DISPLAY, SKILL_PATHS, PLAN, MCP, _raw, user_data_dir)
 from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
 from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
@@ -241,7 +241,6 @@ def _create_workspace_session(
     )
 
     # ── Runtime + CommandHandler（含 run_loop 闭包）──
-    req_ctx = RequestContext(model_config=MODEL_CONFIG, display=disp)
     runtime = build_session_runtime(
         identity=identity,
         messages=[],
@@ -254,22 +253,25 @@ def _create_workspace_session(
         team_mgr=team_mgr,
         blackboard=bb,
         workflow_dirs=workflow_dirs,
-        request_context=req_ctx,
         mcp_loader=app_ctx.mcp_loader,
         compactor=compactor,
         context_builder=ctx_builder,
     )
     tool_registry = runtime.tool_registry
+    req_ctx = runtime.request_context
+    settings = runtime.settings
 
     def _run_loop(messages, tools, inject_fn, disp, ctx=None):
         msg, _ = run_tool_loop(
             messages, tools,
-            streaming=STREAMING,
+            streaming=settings.streaming,
             display=disp,
             inject_fn=inject_fn,
             ctx=ctx,
             bus=app_ctx.bus,
-            context_length=MODEL_CONFIG.get("context_length", 256000),
+            context_length=settings.model.context_length,
+            max_turns=settings.runner.max_turns,
+            context_usage_limit=settings.runner.context_usage_limit,
             compactor=compactor,
             tool_registry=tool_registry,
         )
@@ -456,8 +458,8 @@ def main():
     def _update_status():
         usage = get_usage()
         disp.status_bar(
-            model=MODEL_CONFIG.get("model", "?"),
-            context_length=MODEL_CONFIG.get("context_length", 256000),
+            model=session.runtime.settings.model.model,
+            context_length=session.runtime.settings.model.context_length,
             prompt_tokens=usage["prompt_tokens"],
             completion_tokens=usage["completion_tokens"],
             system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -467,8 +469,8 @@ def main():
 
     # 初始状态栏
     disp.status_bar(
-        model=MODEL_CONFIG.get("model", "?"),
-        context_length=MODEL_CONFIG.get("context_length", 256000),
+        model=session.runtime.settings.model.model,
+        context_length=session.runtime.settings.model.context_length,
         prompt_tokens=0,
         completion_tokens=0,
         system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -549,9 +551,9 @@ def main():
                 plan_state=cmd,
                 user_text_for_history=original_user_input,
                 options=RunTurnOptions(
-                    streaming=STREAMING,
+                    streaming=None,
                     plan_turn=planning_turn,
-                    context_length=MODEL_CONFIG.get("context_length", 256000),
+                    context_length=None,
                     persist_user_history=False,
                 ),
             )
@@ -589,8 +591,8 @@ def main():
 
             usage = get_usage()
             disp.status_bar(
-                model=MODEL_CONFIG.get("model", "?"),
-                context_length=MODEL_CONFIG.get("context_length", 256000),
+                model=session.runtime.settings.model.model,
+                context_length=session.runtime.settings.model.context_length,
                 prompt_tokens=usage["prompt_tokens"],
                 completion_tokens=usage["completion_tokens"],
                 system_prompt_tokens=estimate_tokens(messages[0]["content"]) if messages else 0,
@@ -598,7 +600,7 @@ def main():
             )
 
             # 使用 Compactor.maybe_compact 统一压缩逻辑
-            compactor.maybe_compact(messages, usage["prompt_tokens"], llm_chat, cmd.ctx, MODEL_CONFIG.get("context_length", 256000))
+            compactor.maybe_compact(messages, usage["prompt_tokens"], llm_chat, cmd.ctx, session.runtime.settings.model.context_length)
 
         except KeyboardInterrupt:
             disp.info("⚠ 已中断")

@@ -25,6 +25,24 @@ def __getattr__(name):
     if name in ("DisplayEvent", "DisplayEventType", "TERMINAL_EVENT_TYPES"):
         from .events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
         return {"DisplayEvent": DisplayEvent, "DisplayEventType": DisplayEventType, "TERMINAL_EVENT_TYPES": TERMINAL_EVENT_TYPES}[name]
+    if name in (
+        "SettingsSnapshot", "ModelSettings", "TimeoutSettings", "RunnerSettings",
+        "DisplaySettings", "ToolSettings", "DatabaseSettings", "DatabaseHistorySettings",
+    ):
+        from .settings import (
+            SettingsSnapshot, ModelSettings, TimeoutSettings, RunnerSettings,
+            DisplaySettings, ToolSettings, DatabaseSettings, DatabaseHistorySettings,
+        )
+        return {
+            "SettingsSnapshot": SettingsSnapshot,
+            "ModelSettings": ModelSettings,
+            "TimeoutSettings": TimeoutSettings,
+            "RunnerSettings": RunnerSettings,
+            "DisplaySettings": DisplaySettings,
+            "ToolSettings": ToolSettings,
+            "DatabaseSettings": DatabaseSettings,
+            "DatabaseHistorySettings": DatabaseHistorySettings,
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 __all__ = [
@@ -34,4 +52,6 @@ __all__ = [
     "ChatMessage", "MessageRole", "normalize_messages", "to_provider_messages",
     "ToolCall", "ToolFunctionCall", "ToolResult",
     "DisplayEvent", "DisplayEventType", "TERMINAL_EVENT_TYPES",
+    "SettingsSnapshot", "ModelSettings", "TimeoutSettings", "RunnerSettings",
+    "DisplaySettings", "ToolSettings", "DatabaseSettings", "DatabaseHistorySettings",
 ]

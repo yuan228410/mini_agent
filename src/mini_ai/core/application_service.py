@@ -21,7 +21,7 @@ from .runtime_context import SessionRuntimeContext
 
 @dataclass
 class RunTurnOptions:
-    streaming: bool = STREAMING
+    streaming: bool | None = None
     display: Any = None
     request_context: RequestContext | None = None
     abort_event: threading.Event | None = None
@@ -29,7 +29,7 @@ class RunTurnOptions:
     plan_turn: bool = False
     approved_plan: dict | None = None
     tool_registry: Any = None
-    context_length: int = MODEL_CONFIG.get("context_length", 256000)
+    context_length: int | None = None
     persist_user_history: bool = True
     plan_session_key: str | None = None
 
@@ -65,6 +65,7 @@ class ApplicationService:
         options: RunTurnOptions | None = None,
         runtime: SessionRuntimeContext | None = None,
     ) -> RunTurnResult:
+        settings = runtime.settings if runtime is not None else None
         if runtime is not None:
             messages = runtime.messages
             history_db = runtime.history_db
@@ -76,7 +77,14 @@ class ApplicationService:
             options.display = options.display if options.display is not None else runtime.tool_context.display
             options.request_context = options.request_context or runtime.request_context
             options.tool_registry = options.tool_registry or runtime.tool_registry
+            options.streaming = options.streaming if options.streaming is not None else (settings.streaming if settings else STREAMING)
+            options.context_length = options.context_length if options.context_length is not None else (settings.model.context_length if settings else MODEL_CONFIG.get("context_length", 256000))
+            options.max_turns = options.max_turns or (settings.runner.max_turns if settings else 0)
         options = options or RunTurnOptions()
+        if options.streaming is None:
+            options.streaming = STREAMING
+        if options.context_length is None:
+            options.context_length = MODEL_CONFIG.get("context_length", 256000)
         if messages is None or tools is None or history_db is None or workspace is None or session_id is None:
             raise ValueError("ApplicationService.run_turn requires messages/tools/history_db/workspace/session_id or runtime")
         if options.tool_registry is None:
