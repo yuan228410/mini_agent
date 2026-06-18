@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
+import type { ToolCallDisplay } from '../api'
 
 const props = defineProps<{
-  tool: { name: string; args: string; result: string; elapsed: number }
+  tool: ToolCallDisplay
 }>()
 
 const expanded = ref(false)

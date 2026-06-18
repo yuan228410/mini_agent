@@ -6,7 +6,7 @@ import {
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, exportSession,
   getSystemPrompt, getTodos, getTools,
-  type WsEvent, type HistoryMessage, type ImageData, type WorkflowState, type WorkflowTaskStatus,
+  type WsEvent, type HistoryMessage, type ImageData, type TodoItem, type ToolCallDisplay, type WorkflowState, type WorkflowTaskStatus,
 } from '../api'
 import MessageItem from './MessageItem.vue'
 import InputBar, { type ImageFile } from './InputBar.vue'
@@ -22,7 +22,7 @@ interface Message {
   content: string
   images?: ImageData[]  // 用户消息中的图片
   thinking?: { chars: number; elapsed: number; content: string }
-  tools?: { name: string; args: string; result: string; elapsed: number; tool_call_id?: string }[]
+  tools?: ToolCallDisplay[]
   streaming?: boolean
   timestamp?: string
   teammate?: string
@@ -130,6 +130,35 @@ function _stripTrailingPlanJson(text: string): string {
     } catch {}
   }
   return source.trim()
+}
+
+function _findPendingTool(tools: ToolCallDisplay[] | undefined, toolCallId: string, name: string): ToolCallDisplay | undefined {
+  if (!tools?.length) return undefined
+  if (toolCallId) {
+    const exact = tools.find(t => t.tool_call_id === toolCallId)
+    if (exact) return exact
+  }
+  return tools.find(t => t.name === name && t.result === '...')
+    || tools.find(t => t.result === '...')
+    || tools[tools.length - 1]
+}
+
+function _findPendingToolIndex(tools: ToolCallDisplay[] | undefined, toolCallId: string, name: string): number {
+  if (!tools?.length) return -1
+  let index = -1
+  if (toolCallId) index = tools.findIndex(t => t.tool_call_id === toolCallId)
+  if (index < 0) index = tools.findIndex(t => t.name === name && t.result === '...')
+  if (index < 0) index = tools.findIndex(t => t.result === '...')
+  if (index < 0) index = tools.length - 1
+  return index
+}
+
+function _renderTodoLine(todo: TodoItem): string {
+  const icon = todo.status === 'completed' ? '[x]' : todo.status === 'in_progress' ? '[~]' : '[ ]'
+  if (todo.status === 'in_progress') {
+    return `${icon} **${todo.id}. ${todo.content}** ← 当前`
+  }
+  return `${icon} ${todo.id}. ${todo.content}`
 }
 
 function _stripPlanArtifactBlocks(text: string): string {
@@ -785,24 +814,14 @@ function _processEvent(s: SessionState, event: WsEvent) {
         if (tm) {
           const tmMsg = s.messages.slice().reverse().find(m => m.role === 'assistant' && m.teammate === tm && m.streaming)
           if (tmMsg && tmMsg.tools) {
-            let target: any = null
-            // 优先按 tool_call_id 精确匹配
-            if (tcId) target = tmMsg.tools.find((t: any) => t.tool_call_id === tcId)
-            // 否则按 name + 占位符匹配（同名工具可能在同一轮调用多次）
-            if (!target) {
-              const name = event.data.name || ''
-              target = tmMsg.tools.find((t: any) => t.name === name && t.result === '...')
-            }
-            // 最后兜底：找最后一个占位符
-            if (!target) target = tmMsg.tools.find((t: any) => t.result === '...')
-            if (!target) target = tmMsg.tools[tmMsg.tools.length - 1]
-            
+            const name = event.data.name || ''
+            const target = _findPendingTool(tmMsg.tools, tcId, name)
             if (target) {
               target.result = event.data.result || ''
               target.elapsed = event.data.elapsed || 0
               _updateUI(s)
             } else {
-              console.warn('[tool_result] 未找到匹配的工具调用', { tm, tcId, name: event.data.name })
+              console.warn('[tool_result] 未找到匹配的工具调用', { tm, tcId, name })
             }
           }
           break
@@ -812,25 +831,15 @@ function _processEvent(s: SessionState, event: WsEvent) {
         const idx = _mainAssistantIndex(s)
         const m = idx >= 0 ? s.messages[idx] : undefined
         if (m && m.tools && m.tools.length > 0) {
-          let targetIndex = -1
-          // 优先按 tool_call_id 精确匹配
-          if (tcId) targetIndex = m.tools.findIndex((t: any) => t.tool_call_id === tcId)
-          // 否则按 name + 占位符匹配
-          if (targetIndex < 0) {
-            const name = event.data.name || ''
-            targetIndex = m.tools.findIndex((t: any) => t.name === name && t.result === '...')
-          }
-          // 最后兜底：找最后一个占位符
-          if (targetIndex < 0) targetIndex = m.tools.findIndex((t: any) => t.result === '...')
-          if (targetIndex < 0) targetIndex = m.tools.length - 1
-
+          const name = event.data.name || ''
+          const targetIndex = _findPendingToolIndex(m.tools, tcId, name)
           if (targetIndex >= 0) {
             const tools = [...m.tools]
             tools[targetIndex] = { ...tools[targetIndex], result: event.data.result || '', elapsed: event.data.elapsed || 0 }
             s.messages[idx] = { ...m, tools }
             _updateUI(s)
           } else {
-            console.warn('[tool_result] 未找到匹配的工具调用', { tcId, name: event.data.name })
+            console.warn('[tool_result] 未找到匹配的工具调用', { tcId, name })
           }
         }
       }
@@ -1513,13 +1522,7 @@ async function switchToSession(sid: string, ws?: string) {
     const resp = await getTodos(sid, ws || props.workspace)
     if (resp.todos && resp.todos.length > 0) {
       // 将 todos 转换为显示格式
-      const lines = resp.todos.map((t: any) => {
-        const icon = t.status === 'completed' ? '[x]' : t.status === 'in_progress' ? '[~]' : '[ ]'
-        if (t.status === 'in_progress') {
-          return `${icon} **${t.id}. ${t.content}** ← 当前`
-        }
-        return `${icon} ${t.id}. ${t.content}`
-      })
+      const lines = resp.todos.map(_renderTodoLine)
       todosContent.value = '📋TODO\n' + lines.join('\n')
       emit('todos-update', todosContent.value)
     } else {

@@ -243,12 +243,50 @@ export interface CommandsResponse {
   commands: CommandInfo[]
 }
 
+export type TodoStatus = 'pending' | 'in_progress' | 'completed'
+
+export interface TodoItem {
+  id: number
+  content: string
+  status: TodoStatus
+}
+
+export interface TodosResponse {
+  todos: TodoItem[]
+}
+
+export interface ToolCallDisplay {
+  name: string
+  args: string
+  result: string
+  elapsed: number
+  tool_call_id?: string
+}
+
+export interface ToolFunctionCallPayload {
+  name?: string
+  arguments?: string
+}
+
+export interface HistoryToolCall {
+  id?: string
+  type?: string
+  function?: ToolFunctionCallPayload
+  _result?: string
+}
+
+export interface ThinkingSnapshot {
+  chars?: number
+  elapsed?: number
+  content?: string
+}
+
 export interface HistoryMessage {
-  tool_calls?: any[]
+  tool_calls?: HistoryToolCall[]
   role: string
   content?: string
   images?: ImageData[]
-  thinking?: any
+  thinking?: ThinkingSnapshot | string
   timestamp?: string
   kind?: string
   plan?: PlanArtifact
@@ -1118,7 +1156,7 @@ export async function clearBlackboard(username: string, workspace: string): Prom
   return resp.json()
 }
 
-export async function getTodos(sessionId: string, workspace?: string): Promise<{ todos: any[] }> {
+export async function getTodos(sessionId: string, workspace?: string): Promise<TodosResponse> {
   const params = new URLSearchParams()
   params.set('username', _username())
   params.set('session_id', sessionId)

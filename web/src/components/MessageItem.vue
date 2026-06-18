@@ -6,7 +6,7 @@ import ThinkingBlock from './ThinkingBlock.vue'
 import ToolCallBlock from './ToolCallBlock.vue'
 import PlanArtifactCard from './PlanArtifactCard.vue'
 import PlanInteractionCard from './PlanInteractionCard.vue'
-import type { ImageData } from '../api'
+import type { ImageData, ToolCallDisplay } from '../api'
 import type { PlanArtifact, PlanDecisionOpenPayload, PlanInteraction } from '../plan/types'
 
 marked.use({
@@ -27,7 +27,7 @@ const props = defineProps<{
     content: string
     images?: ImageData[]
     thinking?: { chars: number; elapsed: number; content: string }
-    tools?: { name: string; args: string; result: string; elapsed: number }[]
+    tools?: ToolCallDisplay[]
     streaming?: boolean
     timestamp?: string
     teammate?: string
