@@ -15,6 +15,7 @@ from .base import (
 )
 from ..logger import logger
 from ..exceptions import LLMError
+from ..core.tool_models import ToolCall, ToolFunctionCall
 from .retry import RetryStrategy
 
 
@@ -144,14 +145,13 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
             input_data = block.get("input", {})
             # 🔧 诊断：记录转换过程
             logger.debug(f"[Anth→OpenAI] tool_use: name={block.get('name')}, input={input_data}")
-            tool_calls.append({
-                "id": block.get("id", ""),
-                "type": "function",
-                "function": {
-                    "name": block.get("name", ""),
-                    "arguments": json.dumps(input_data, ensure_ascii=False),
-                },
-            })
+            tool_calls.append(ToolCall(
+                id=str(block.get("id") or ""),
+                function=ToolFunctionCall(
+                    name=str(block.get("name") or ""),
+                    arguments=json.dumps(input_data, ensure_ascii=False),
+                ),
+            ).to_dict())
 
     content = "\n".join(text_parts) if text_parts else None
     msg = {"role": "assistant", "content": content}

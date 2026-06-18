@@ -14,6 +14,7 @@ from .base import (
 )
 from ..logger import logger
 from ..exceptions import LLMError
+from ..core.tool_models import ToolCall, ToolFunctionCall
 from .retry import RetryStrategy
 
 
@@ -389,9 +390,13 @@ def chat_stream(messages, tools=None, ctx=None, abort_event=None):
             response.close()
 
     elapsed = time.monotonic() - t0
-    tool_calls = [{"id": buf.get("id", ""), "type": "function", "function": buf["function"]}
-                  for _, buf in sorted(tool_call_buf.items())
-                  if buf["function"].get("name")] if tool_call_buf else None
+    tool_calls = [ToolCall(
+        id=str(buf.get("id") or ""),
+        function=ToolFunctionCall.from_dict(buf["function"]),
+    ).to_dict()
+        for _, buf in sorted(tool_call_buf.items())
+        if buf["function"].get("name")
+    ] if tool_call_buf else None
 
     msg = {"role": "assistant", "content": collected_content or None, "tool_calls": tool_calls} if tool_calls else {"role": "assistant", "content": collected_content or None}
     if tool_calls:
