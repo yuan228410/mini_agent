@@ -6,6 +6,16 @@ import threading
 # 全局事件序号计数器（每个会话独立）
 _EVENT_SEQS: dict[str, int] = {}
 _EVENT_SEQS_LOCK = threading.Lock()
+_TERMINAL_EVENTS = {"error", "complete", "done", "aborted"}
+_MAX_PENDING_EVENTS = 2000
+
+
+def cleanup_session_seq(session_id: str):
+    """清理会话事件序号，避免长生命周期 Web 服务累积。"""
+    if not session_id:
+        return
+    with _EVENT_SEQS_LOCK:
+        _EVENT_SEQS.pop(session_id, None)
 
 class WebDisplay:
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = "", agent_id: str = "", suppress_text: bool = False):
@@ -63,6 +73,17 @@ class WebDisplay:
 
     def _enqueue(self, item: dict):
         with self._pending_lock:
+            if len(self._pending_events) >= _MAX_PENDING_EVENTS:
+                if item.get("event") in _TERMINAL_EVENTS:
+                    # 为终止事件腾位置：优先丢弃最旧的非终止事件。
+                    for i, pending in enumerate(self._pending_events):
+                        if pending.get("event") not in _TERMINAL_EVENTS:
+                            self._pending_events.pop(i)
+                            break
+                    else:
+                        self._pending_events.pop(0)
+                else:
+                    self._pending_events.pop(0)
             self._pending_events.append(item)
             if self._flush_scheduled:
                 return
@@ -73,16 +94,50 @@ class WebDisplay:
             with self._pending_lock:
                 self._flush_scheduled = False
 
+    def _put_with_priority(self, item: dict):
+        try:
+            self.queue.put_nowait(item)
+            return True
+        except asyncio.QueueFull:
+            if item.get("event") not in _TERMINAL_EVENTS:
+                return False
+            # 终止事件不允许静默丢弃，丢弃一个旧的非终止事件后重试。
+            try:
+                buffered = []
+                dropped = False
+                while True:
+                    old = self.queue.get_nowait()
+                    if not dropped and old.get("event") not in _TERMINAL_EVENTS:
+                        dropped = True
+                        continue
+                    buffered.append(old)
+            except asyncio.QueueEmpty:
+                pass
+            for old in buffered:
+                try:
+                    self.queue.put_nowait(old)
+                except asyncio.QueueFull:
+                    break
+            try:
+                self.queue.put_nowait(item)
+                return True
+            except asyncio.QueueFull:
+                return False
+        except Exception:
+            return False
+
     def _flush_pending(self):
+        from ..logger import logger as _dlog
         with self._pending_lock:
             pending = self._pending_events
             self._pending_events = []
             self._flush_scheduled = False
+        dropped = 0
         for item in pending:
-            try:
-                self.queue.put_nowait(item)
-            except Exception:
-                pass
+            if not self._put_with_priority(item):
+                dropped += 1
+        if dropped:
+            _dlog.warning(f"[Display] dropped {dropped} low-priority events sid={self.session_id}")
 
     def llm_round_start(self, model: str = ""):
         """LLM 调用开始"""

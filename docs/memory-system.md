@@ -230,18 +230,34 @@ Web 端多会话并发场景下，默认启用异步写入优化，将高频数�
 |------|------|
 | **批量写入** | 50 条消息或 100ms 时间窗口触发批量写入 |
 | **读取一致性** | 写入时缓存消息，读取时自动合并缓存和数据库 |
+| **flush 屏障** | `flush()` 会提交 `FlushTask` 并等待其之前的写入真实提交完成；超时抛 `TimeoutError` |
+| **队列背压策略** | 队列满时可配置等待、失败或同步写入兜底 |
 | **持久化保证** | atexit 注册 + SIGTERM/SIGINT 信号处理，异常退出时自动刷盘 |
-| **优雅关闭** | 停止前处理队列中所有剩余任务，不丢失数据 |
+| **优雅关闭** | `stop()` 先执行 `flush()`，再发送 `StopTask` 停止后台线程，避免只等队列空而漏掉正在提交的批次 |
 
 ### 配置参数
 
-```python
-# 可在代码中调整的参数
-BATCH_TIME_WINDOW = 0.1      # 批量时间窗口（秒）
-BATCH_SIZE_THRESHOLD = 50    # 批量数量阈值
-MAX_RETRY_COUNT = 3          # 写入失败重试次数
-QUEUE_MAX_SIZE = 10000       # 队列最大容量
+通过 `config.yaml` 的 `database.history` 配置：
+
+```yaml
+database:
+  history:
+    async_write: true
+    batch_size: 50
+    batch_timeout: 0.1
+    queue_size: 10000
+    retry_count: 3
+    submit_timeout: 1.0
+    on_full: block        # block | fail | sync_write
 ```
+
+队列满策略：
+
+| 策略 | 行为 |
+|------|------|
+| `block` | 等待最多 `submit_timeout` 秒，仍无法入队则记录失败并抛错 |
+| `fail` | 队列满立即记录失败并抛错 |
+| `sync_write` | 队列满时在当前线程同步写入，保证数据落库但可能拖慢当前请求 |
 
 ### 使用方式
 
@@ -271,7 +287,10 @@ stats = db.get_async_stats()
 #   "total_writes": 1000,      # 总写入次数
 #   "batch_writes": 20,        # 批量写入次数
 #   "cache_hits": 50,          # 缓存命中次数
-#   "write_errors": 0          # 写入错误次数
+#   "write_errors": 0,         # 写入错误次数
+#   "sync_fallback_writes": 0, # 队列满时同步兜底写入次数
+#   "queue_full_failures": 0,  # 队列满且未能处理的失败次数
+#   "flush_timeouts": 0        # flush 等待超时次数
 # }
 ```
 

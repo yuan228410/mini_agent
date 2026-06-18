@@ -7,7 +7,7 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
 from ..logger import logger
 
@@ -54,20 +54,40 @@ class ToolCache:
         "register_subagent",
     }
     
-    def __init__(self, maxsize: int = 100, ttl_seconds: float = 300):
+    def __init__(
+        self,
+        maxsize: int = 100,
+        ttl_seconds: float = 300,
+        *,
+        scope: str = "global",
+        cacheable_resolver: Callable[[str], bool] | None = None,
+    ):
         """
         Args:
             maxsize: 最大缓存条目数
             ttl_seconds: 缓存过期时间（秒）
+            scope: 缓存作用域标识，避免不同会话/工作区 key 碰撞
+            cacheable_resolver: 可选工具缓存策略，返回 False 时不缓存
         """
         self._cache: dict[str, CacheEntry] = {}
         self._lock = threading.Lock()
         self._pending: dict[str, threading.Event] = {}
         self._maxsize = maxsize
         self._ttl = ttl_seconds
+        self._scope = scope or "global"
+        self._cacheable_resolver = cacheable_resolver
         self._hits = 0
         self._misses = 0
-    
+
+    def _is_cacheable(self, tool_name: str, args: dict | None = None) -> bool:
+        if tool_name in self.BLACKLIST:
+            return False
+        if tool_name == "config" and args and args.get("action") == "write":
+            return False
+        if self._cacheable_resolver is None:
+            return True
+        return bool(self._cacheable_resolver(tool_name))
+
     def _key(self, tool_name: str, args: dict) -> str:
         """生成缓存 key（优化版：快速路径 + 降级方案）
         
@@ -83,16 +103,16 @@ class ToolCache:
         if args and all(isinstance(v, (str, int, float, bool, type(None))) for v in args.values()):
             # 使用 frozenset 保证顺序无关
             try:
-                key_str = f"{tool_name}:{frozenset(args.items())}"
+                key_str = f"{self._scope}:{tool_name}:{frozenset(args.items())}"
                 # 只对最终字符串做 hash，避免对每个值单独 hash
-                return f"{tool_name}:{hashlib.md5(key_str.encode()).hexdigest()[:12]}"
+                return f"{self._scope}:{tool_name}:{hashlib.md5(key_str.encode()).hexdigest()[:12]}"
             except (TypeError, ValueError):
                 pass  # 降级到 JSON 方案
         
         # 通用方案：JSON 序列化（支持复杂嵌套结构）
         args_json = json.dumps(args, sort_keys=True, default=str)
-        args_hash = hashlib.md5(args_json.encode()).hexdigest()[:12]
-        return f"{tool_name}:{args_hash}"
+        args_hash = hashlib.md5(f"{self._scope}:{args_json}".encode()).hexdigest()[:12]
+        return f"{self._scope}:{tool_name}:{args_hash}"
     
     def get(self, tool_name: str, args: dict) -> tuple[Any, bool]:
         """获取缓存
@@ -104,13 +124,7 @@ class ToolCache:
         Returns:
             (result, hit) - result 为缓存结果（未命中时为 None），hit 表示是否命中
         """
-        # 黑名单工具不缓存
-        if tool_name in self.BLACKLIST:
-            with self._lock:
-                self._misses += 1
-            return None, False
-        # config 的 write 操作不缓存，read/list/reload 可缓存
-        if tool_name == "config" and args.get("action") == "write":
+        if not self._is_cacheable(tool_name, args):
             with self._lock:
                 self._misses += 1
             return None, False
@@ -141,12 +155,10 @@ class ToolCache:
             args: 工具参数
             result: 工具结果
         """
-        # 黑名单工具不缓存
-        if tool_name in self.BLACKLIST:
-            return
-        # config write 不缓存，且清除该工具所有缓存
         if tool_name == "config" and args.get("action") == "write":
-            self._invalidate_prefix("config")
+            self._invalidate_tool("config")
+            return
+        if not self._is_cacheable(tool_name, args):
             return
         
         # 结果太大也不缓存（超过 1MB）
@@ -190,6 +202,11 @@ class ToolCache:
         Returns:
             (result, hit)
         """
+        if not self._is_cacheable(tool_name, args):
+            with self._lock:
+                self._misses += 1
+            return None, False
+
         key = self._key(tool_name, args)
 
         with self._lock:
@@ -224,13 +241,13 @@ class ToolCache:
 
     def mark_done(self, tool_name: str, args: dict, result: Any):
         """写入缓存并通知等待线程
-        
+
         即使结果为 None 或执行失败，也应调用此方法清理 pending 状态
         """
         key = self._key(tool_name, args)
         with self._lock:
-            # 只有非 None 结果才缓存
-            if result is not None:
+            # 只有非 None 且可缓存的结果才缓存；pending 始终清理
+            if result is not None and self._is_cacheable(tool_name, args):
                 self._cache[key] = CacheEntry(result, time.time())
             event = self._pending.pop(key, None)
         if event:
@@ -244,14 +261,18 @@ class ToolCache:
         if event:
             event.set()
 
-    def _invalidate_prefix(self, prefix: str) -> int:
+    def _invalidate_tool(self, tool_name: str) -> int:
+        prefix = f"{self._scope}:{tool_name}:"
         with self._lock:
-            keys_to_del = [k for k in self._cache if k.startswith(prefix + ":")]
+            keys_to_del = [k for k in self._cache if k.startswith(prefix)]
             for k in keys_to_del:
                 del self._cache[k]
             if keys_to_del:
-                logger.debug(f"[Cache] 清除 {prefix} 相关缓存: {len(keys_to_del)} 条")
+                logger.debug(f"[Cache] 清除 {tool_name} 相关缓存: {len(keys_to_del)} 条")
         return len(keys_to_del)
+
+    def _invalidate_prefix(self, prefix: str) -> int:
+        return self._invalidate_tool(prefix)
 
     def clear(self):
         """清空缓存（新对话时调用）"""

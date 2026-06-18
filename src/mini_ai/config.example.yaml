@@ -167,7 +167,9 @@ database:
     batch_timeout: 0.1          # 批量写入时间窗口（秒），默认 0.1（100ms）
     queue_size: 10000           # 写入队列最大容量，默认 10000
     retry_count: 3              # 写入失败重试次数，默认 3
-    
+    submit_timeout: 1.0         # 队列满时提交任务等待时间（秒），默认 1.0
+    on_full: block              # 队列满策略：block=等待 submit_timeout；fail=立即报错；sync_write=退回同步写入
+
   # 内存数据库配置（MemoryStore）
   memory:
     cache_size: 10000           # 每个会话缓存消息数上限，默认 10000

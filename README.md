@@ -26,8 +26,8 @@ uv run mini-ai --web
 
 | 特性 | 说明 | 文档 |
 |------|------|------|
-| 🔀 **多模型切换** | OpenAI / Anthropic 双协议，运行时 `/model` 一键切换，立即生效 | [架构设计](docs/architecture.md) |
-| ⚙️ **工具系统** | 25+ 内置工具，ToolRegistry 统一注册/分发，并行执行和结果截断 | [工具系统](docs/tools.md) |
+| 🔀 **多模型切换** | LLM router 统一分派 OpenAI / Anthropic 双协议，运行时 `/model` 一键切换，立即生效 | [架构设计](docs/architecture.md) |
+| ⚙️ **工具系统** | 25+ 内置工具，session-local ToolRegistry 统一注册/分发，metadata 驱动并行、缓存和计划模式可见性 | [工具系统](docs/tools.md) |
 | 🧠 **记忆系统** | 四层存储：对话历史 → 情景 → 长期 → 画像，自动压缩归档不丢失 | [记忆系统](docs/memory-system.md) |
 | 🤝 **多 Agent 协作** | 5 种子代理 + 队友 + DAG 工作流，支持动态注册和链式传递，Web 实时可视化 | [多 Agent 编排](docs/team-collaboration.md) |
 | 🌐 **MCP 协议** | stdio/streamable_http 连接 MCP 服务器，工具自动注册 | [架构设计](docs/architecture.md) |
@@ -36,20 +36,21 @@ uv run mini-ai --web
 | 📁 **工作空间** | 按项目隔离记忆/会话/历史，CLI 自动绑定 CWD | [CLI 命令](docs/cli-commands.md#工作空间) |
 | 🎭 **自定义人设** | 编辑 `SOUL.md` / `RULES.md` 改变 Agent 角色 | [架构设计](docs/architecture.md) |
 
-| 🧪 **测试覆盖** | 115 个测试用例，覆盖 cache/utils/runner/workspace/web/concurrency | [测试报告](tests/) |
+| 🧪 **测试覆盖** | 187 个后端测试用例，覆盖 cache/utils/runner/workspace/web/concurrency/reliability | [测试报告](tests/) |
 ## 项目结构
 
 ```
 src/mini_ai/
-├── main.py              # 主循环编排
+├── main.py              # CLI 入口与交互适配
 ├── config.py            # 配置加载，支持热加载
 ├── utils.py             # 公共工具函数（时间戳生成等）
-├── llm/                 # LLM 通信层（OpenAI / Anthropic 双协议）
+├── core/                # CLI/Web 共享编排（ApplicationService + persister + runtime context）
+├── llm/                 # LLM 通信层（router + OpenAI / Anthropic adapters）
 ├── cli/                 # CLI 交互层（终端渲染 + 斜杠命令）
 ├── runner/              # Agent 执行循环（state + executor + error_handler + loop）
 ├── context.py           # 系统提示词组装
 ├── memory/              # 记忆系统（存储 + 压缩 + 历史 DB + 会话管理）
-├── tools/               # 工具系统（ToolRegistry 注册/分发 + 缓存）
+├── tools/               # 工具系统（ToolRegistry + ToolMetadata + registry-local 缓存）
 ├── team/                # 多 Agent 编排（队友 + 黑板 + DAG）
 ├── subagents/           # 子代理定义
 ├── web/                 # Web 界面（FastAPI + Vue 3）

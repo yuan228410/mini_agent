@@ -113,9 +113,12 @@ def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
 
 
 def _tools_openai_to_anthropic(tools: list[dict]) -> list[dict]:
+    from ..tools.metadata import normalize_tool_definition
+
     result = []
     for t in tools:
-        fn = t["function"]
+        normalized = normalize_tool_definition(t)
+        fn = normalized["function"]
         result.append({
             "name": fn["name"],
             "description": fn.get("description", ""),
@@ -208,121 +211,106 @@ def chat(messages, tools=True, ctx=None):
 
     max_retries = TIMEOUTS.get("llm_retries", 3)
     retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
-    
-    # 使用智能重试策略
-    strategy = RetryStrategy(
-        max_retries=max_retries,
-        base_delay=retry_delay,
-        max_delay=60.0,
-    )
-    
+    strategy = RetryStrategy(max_retries=max_retries, base_delay=retry_delay, max_delay=60.0)
+
     t0 = time.monotonic()
     response = None
-    last_error = None
-    
-    for attempt in range(max_retries + 1):
-        try:
-            ensure_session_anthropic(ctx)
-            sess = get_session(ctx)
-            connect_timeout = TIMEOUTS.get("llm_connect", 30)
-            read_timeout = TIMEOUTS.get("llm", 120)
-            response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
-            
-            if response.status_code >= 400:
-                err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
-                
-                # 尝试解析错误详情
-                retry_after = None
-                try:
-                    error_data = response.json()
-                    if "error" in error_data:
-                        err_detail = error_data["error"]
-                        err_msg = f"HTTP {response.status_code}: {err_detail.get('message', err_msg)}"
-                        # 提取 retry_after
-                        if response.status_code == 429:
-                            retry_after_header = response.headers.get("Retry-After")
-                            if retry_after_header:
-                                try:
-                                    retry_after = float(retry_after_header)
-                                except ValueError:
-                                    pass
-                            if retry_after is None and "retry_after" in err_detail:
-                                retry_after = err_detail["retry_after"]
-                except (ValueError, KeyError):
-                    pass
-                
-                _is_overflow = detect_context_overflow(response.status_code, response.text[:500])
-                last_error = LLMError(err_msg, status_code=response.status_code, retry_after=retry_after, is_context_overflow=_is_overflow)
-                
-                # 上下文溢出：不重试，直接抛出让上层走 force_compact 路径
-                if _is_overflow:
-                    logger.warning(f"[Anth✗] 上下文溢出: {err_msg}")
-                    raise last_error
-                
-                # 判断是否重试
-                if strategy.should_retry(last_error, attempt):
-                    delay = strategy.get_delay(attempt, last_error)
-                    logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay:.1f}s 后重试")
-                    time.sleep(delay)
-                    continue
-                else:
+    try:
+        for attempt in range(max_retries + 1):
+            try:
+                ensure_session_anthropic(ctx)
+                sess = get_session(ctx)
+                connect_timeout = TIMEOUTS.get("llm_connect", 30)
+                read_timeout = TIMEOUTS.get("llm", 120)
+                response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
+
+                if response.status_code >= 400:
+                    err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
+                    retry_after = None
+                    try:
+                        error_data = response.json()
+                        if "error" in error_data:
+                            err_detail = error_data["error"]
+                            err_msg = f"HTTP {response.status_code}: {err_detail.get('message', err_msg)}"
+                            if response.status_code == 429:
+                                retry_after_header = response.headers.get("Retry-After")
+                                if retry_after_header:
+                                    try:
+                                        retry_after = float(retry_after_header)
+                                    except ValueError:
+                                        pass
+                                if retry_after is None and "retry_after" in err_detail:
+                                    retry_after = err_detail["retry_after"]
+                    except (ValueError, KeyError):
+                        pass
+
+                    _is_overflow = detect_context_overflow(response.status_code, response.text[:500])
+                    last_error = LLMError(err_msg, status_code=response.status_code, retry_after=retry_after, is_context_overflow=_is_overflow)
+                    if _is_overflow:
+                        logger.warning(f"[Anth✗] 上下文溢出: {err_msg}")
+                        raise last_error
+                    if strategy.should_retry(last_error, attempt):
+                        delay = strategy.get_delay(attempt, last_error)
+                        logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {err_msg}，{delay:.1f}s 后重试")
+                        response.close()
+                        response = None
+                        time.sleep(delay)
+                        continue
                     logger.error(f"[Anth✗] 不可重试的错误: {err_msg}")
                     raise last_error
-            
-            # 成功，跳出重试循环
-            break
-            
-        except requests.RequestException as e:
-            error_msg = str(e)
-            if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
-                error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
-            last_error = LLMError(error_msg)
-            
-            if strategy.should_retry(last_error, attempt):
-                delay = strategy.get_delay(attempt, last_error)
-                logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {error_msg}，{delay:.1f}s 后重试")
-                time.sleep(delay)
-            else:
-                logger.error(f"[Anth✗] 请求异常(已重试{attempt}次): {error_msg}")
-                raise last_error
+                break
+            except requests.RequestException as e:
+                error_msg = str(e)
+                if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+                    error_msg = f"请求超时（连接:{connect_timeout}s, 读取:{read_timeout}s）"
+                last_error = LLMError(error_msg)
+                if strategy.should_retry(last_error, attempt):
+                    delay = strategy.get_delay(attempt, last_error)
+                    logger.warning(f"[Anth↻] 重试 {attempt+1}/{max_retries}: {error_msg}，{delay:.1f}s 后重试")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"[Anth✗] 请求异常(已重试{attempt}次): {error_msg}")
+                    raise last_error
 
-    try:
         data = response.json()
+        if not isinstance(data, dict):
+            logger.error(f"[Anth✗] 响应格式异常: {type(data)}")
+            raise LLMError(f"响应格式异常: {type(data).__name__}", status_code=getattr(response, "status_code", 0))
+        usage = data.get("usage", {})
+        us = get_usage()
+        inp = usage.get("input_tokens", 0)
+        out = usage.get("output_tokens", 0)
+        if inp:
+            us["prompt_tokens"] = inp
+        else:
+            us["prompt_tokens"] = estimate_messages_tokens(messages)
+        if out:
+            us["completion_tokens"] += out
+        else:
+            content_text = data.get("content", [])
+            est = sum(estimate_tokens(b.get("text", "")) for b in content_text if isinstance(b, dict) and b.get("type") == "text")
+            if est:
+                us["completion_tokens"] += est
+
+        msg = _anthropic_to_openai_msg(data.get("content", []), data.get("stop_reason", ""))
+
+        elapsed = time.monotonic() - t0
+        if "tool_calls" in msg:
+            names = [tc["function"]["name"] for tc in msg["tool_calls"]]
+            logger.info(f"[Anth←] tool_calls={names} | {elapsed:.1f}s")
+        else:
+            text = (msg.get("content") or "")[:100]
+            logger.info(f"[Anth←] text={text} | {elapsed:.1f}s")
+
+        commit_usage()
+        return msg
     except ValueError as e:
-        logger.error(f"[Anth✗] 响应解析失败: {response.text[:500]}")
+        body = response.text[:500] if response is not None else ""
+        logger.error(f"[Anth✗] 响应解析失败: {body}")
         raise LLMError(f"响应解析失败: {e}", status_code=getattr(response, "status_code", 0))
-    if not isinstance(data, dict):
-        logger.error(f"[Anth✗] 响应格式异常: {type(data)}")
-        raise LLMError(f"响应格式异常: {type(data).__name__}", status_code=getattr(response, "status_code", 0))
-    usage = data.get("usage", {})
-    us = get_usage()
-    inp = usage.get("input_tokens", 0)
-    out = usage.get("output_tokens", 0)
-    if inp:
-        us["prompt_tokens"] = inp
-    else:
-        us["prompt_tokens"] = estimate_messages_tokens(messages)
-    if out:
-        us["completion_tokens"] += out
-    else:
-        content_text = data.get("content", [])
-        est = sum(estimate_tokens(b.get("text", "")) for b in content_text if isinstance(b, dict) and b.get("type") == "text")
-        if est:
-            us["completion_tokens"] += est
-
-    msg = _anthropic_to_openai_msg(data.get("content", []), data.get("stop_reason", ""))
-
-    elapsed = time.monotonic() - t0
-    if "tool_calls" in msg:
-        names = [tc["function"]["name"] for tc in msg["tool_calls"]]
-        logger.info(f"[Anth←] tool_calls={names} | {elapsed:.1f}s")
-    else:
-        text = (msg.get("content") or "")[:100]
-        logger.info(f"[Anth←] text={text} | {elapsed:.1f}s")
-
-    commit_usage()
-
-    return msg
+    finally:
+        if response:
+            response.close()
 
 
 def chat_stream(messages, tools=True, ctx=None, abort_event=None):

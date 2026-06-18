@@ -8,7 +8,8 @@ from datetime import datetime, timezone, timedelta
 from ..logger import logger
 
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
-from .cache import get_tool_cache
+from .cache import ToolCache, get_tool_cache
+from .metadata import metadata_for, normalize_tool_definition
 from ..utils import now_ts
 
 _MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
@@ -18,6 +19,28 @@ def _truncate(output: str) -> str:
         return output
     return output[:_MAX_RESULT_CHARS] + f"\n[已截断，原长 {len(output)} 字符]"
 
+
+class _BoundTool:
+    """Small module-like wrapper binding a tool definition to a closure."""
+
+    def __init__(self, definition: dict, execute, metadata=None):
+        self.definition = definition
+        self.execute = execute
+        self.metadata = metadata
+
+
+def _run_with_context(var_values, fn, args):
+    """Run a legacy contextvar-based tool with session-local bindings."""
+    tokens = []
+    try:
+        for var, value in var_values:
+            tokens.append((var, var.set(value)))
+        return fn(args)
+    finally:
+        for var, token in reversed(tokens):
+            var.reset(token)
+
+
 class ToolRegistry:
 
     def __init__(self):
@@ -25,14 +48,18 @@ class ToolRegistry:
         self._by_name: dict[str, object] = {}
         self._display = None
         self._project_path = ""
-        # 并行执行的工具白名单（不含写操作工具，避免文件竞态）
-        self._parallel_tools: set[str] = {
-            "dispatch_subagent", "spawn_teammate",
-            "read_file", "search_files", "list_dir",
-            "web_fetch", "list_skills", "load_skill",
-            "recall", "search_history",
-            "delete_skill",
-        }
+        self._tool_metadata: dict[str, object] = {}
+        self._cache = ToolCache(cacheable_resolver=self._is_cacheable)
+        # 兼容测试/外部扩展；新代码优先通过 ToolMetadata.parallel_safe 声明。
+        self._parallel_tools: set[str] = set()
+
+    def _normalize_module_definition(self, module) -> dict:
+        raw = module.definition() if callable(getattr(module, "definition", None)) else module.definition
+        meta = metadata_for(raw.get("function", {}).get("name", ""), getattr(module, "metadata", None))
+        normalized = normalize_tool_definition(raw, meta)
+        module.definition = normalized
+        self._tool_metadata[normalized["function"]["name"]] = meta
+        return normalized
 
     def _rebuild_index(self):
         self._by_name.clear()
@@ -41,9 +68,16 @@ class ToolRegistry:
     def add_tools(self, *modules):
         existing = {m.definition["function"]["name"] for m in self._tools}
         for m in modules:
-            if m.definition["function"]["name"] not in existing:
+            definition = self._normalize_module_definition(m)
+            name = definition["function"]["name"]
+            if name not in existing:
                 self._tools.append(m)
-                existing.add(m.definition["function"]["name"])
+                existing.add(name)
+            else:
+                for i, old in enumerate(self._tools):
+                    if old.definition["function"]["name"] == name:
+                        self._tools[i] = m
+                        break
         self._rebuild_index()
 
     def register_skills(self, skill_loader):
@@ -52,7 +86,12 @@ class ToolRegistry:
         load_skill.configure(loader=skill_loader)
         install_skill.configure(loader=skill_loader)
         delete_skill.configure(loader=skill_loader)
-        self.add_tools(list_skills, load_skill, install_skill, delete_skill)
+        self.add_tools(
+            _BoundTool(list_skills.definition, lambda args, _m=list_skills: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
+            _BoundTool(load_skill.definition, lambda args, _m=load_skill: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
+            _BoundTool(install_skill.definition, lambda args, _m=install_skill: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
+            _BoundTool(delete_skill.definition, lambda args, _m=delete_skill: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
+        )
 
     def register_subagents(self, subagent_loader):
         subagent_list = subagent_loader.list_specs()
@@ -60,22 +99,68 @@ class ToolRegistry:
             loader=subagent_loader,
             definition=dispatch_subagent.build_definition(subagent_list),
             project_path=self._project_path,
+            display=self._display,
+            registry=self,
         )
-        self.add_tools(dispatch_subagent)
+        self.add_tools(_BoundTool(
+            dispatch_subagent.definition,
+            lambda args, _m=dispatch_subagent: _run_with_context([
+                (_m._project_path_ctx, self._project_path),
+                (_m._display_ctx, self._display),
+                (_m._registry_ctx, self),
+            ], _m.execute, args),
+        ))
         register_subagent.configure(loader=subagent_loader)
         self.add_tools(register_subagent)
 
     def register_team(self, bus, manager):
         from . import team_tools
-        team_tools.configure(bus=bus, manager=manager)
+        team_tools.configure(bus=bus, manager=manager)  # legacy callers still rely on module functions
         team_tools.set_caller("lead")
-        self.add_tools(*team_tools.ALL_TEAM_TOOLS)
+
+        def sender():
+            return team_tools._sender()
+
+        bound = [
+            _BoundTool(team_tools._spawn_def, lambda args, _m=manager: _m.spawn(args.get("name", ""), args.get("role", ""), args.get("prompt", ""))),
+            _BoundTool(team_tools._list_def, lambda args, _m=manager: _m.list_all()),
+            _BoundTool(team_tools._send_def, lambda args, _b=bus: _b.send(sender(), args.get("to", ""), args.get("content", ""), args.get("msg_type", "message"))),
+            _BoundTool(team_tools._read_def, lambda args, _b=bus: json.dumps(_b.read_inbox(sender()), ensure_ascii=False, indent=2)),
+            _BoundTool(team_tools._broadcast_def, lambda args, _b=bus, _m=manager: _b.broadcast(sender(), args.get("content", ""), _m.member_names())),
+        ]
+
+        def dismiss(args, _b=bus, _m=manager):
+            targets = []
+            with _m.lock:
+                for member in _m.config.get("members", []):
+                    if member["status"] in ("idle", "working"):
+                        targets.append(member["name"])
+            if not targets:
+                return "当前没有活跃的队友"
+            for name in targets:
+                _b.send("lead", name, "任务结束，请退出。", "shutdown_request")
+            return f"已发送 shutdown 请求给 {len(targets)} 位队友: {', '.join(targets)}"
+
+        bound.append(_BoundTool(team_tools._dismiss_def, dismiss))
+        self.add_tools(*bound)
 
     def register_display(self, display):
         self._display = display
+        try:
+            dispatch_subagent.configure(display=display, registry=self)
+            if "dispatch_subagent" in self._by_name:
+                self.register_subagents(dispatch_subagent._loader)
+        except Exception:
+            pass
 
     def get_definitions(self) -> list[dict]:
-        return [m.definition for m in self._tools]
+        return [json.loads(json.dumps(m.definition, ensure_ascii=False)) for m in self._tools]
+
+    def _is_parallel_safe(self, name: str) -> bool:
+        return name in self._parallel_tools or bool(metadata_for(name, self._tool_metadata.get(name)).parallel_safe)
+
+    def _is_cacheable(self, name: str) -> bool:
+        return bool(metadata_for(name, self._tool_metadata.get(name)).cacheable)
 
     def dispatch(self, name: str, args: dict) -> str | None:
         mod = self._by_name.get(name)
@@ -100,7 +185,7 @@ class ToolRegistry:
             name = tc["function"]["name"]
             if name == "spawn_teammate":
                 spawned = True
-            if name in self._parallel_tools:
+            if self._is_parallel_safe(name):
                 parallel_calls.append(tc)
             else:
                 serial_calls.append(tc)
@@ -131,8 +216,8 @@ class ToolRegistry:
             logger.warning(f"[工具✗] {name} JSON解析失败: {raw_args[:200]}")
             return
         
-        # 检查缓存
-        cache = get_tool_cache()
+        # 检查会话级缓存
+        cache = self._cache
         cached_result, hit = cache.get(name, args)
         
         if hit:
@@ -200,7 +285,7 @@ class ToolRegistry:
 
     def _execute_parallel(self, calls: list[dict], messages: list[dict], display=None, persist_fn=None) -> None:
         results = {}
-        cache = get_tool_cache()
+        cache = self._cache
 
         # 在主线程为每个并行任务各捕获一份上下文副本（Context.run 不可并发进入同一对象）
         import contextvars as _cv
@@ -294,22 +379,95 @@ class ToolRegistry:
         return update_todos._store.render()
 
     def register_blackboard(self, blackboard, workflow_dirs=None, bus=None, manager=None):
-        from . import blackboard_tools
+        from . import blackboard_tools, workflow_tools
+        from .team_tools import _sender
         blackboard_tools.configure(blackboard=blackboard)
-        self.add_tools(*blackboard_tools.ALL_BLACKBOARD_TOOLS)
-        from . import workflow_tools
         workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs, bus=bus, manager=manager)
-        self.add_tools(*workflow_tools.ALL_WORKFLOW_TOOLS)
+
+        self.add_tools(
+            _BoundTool(blackboard_tools._write_def, lambda args, _bb=blackboard: _bb.put(args.get("key", ""), args.get("value", ""), author=_sender())),
+            _BoundTool(blackboard_tools._read_def, lambda args, _bb=blackboard: (_bb.get(args.get("key", ""), default=None) or f"blackboard[{args.get('key', '')}] 不存在")),
+            _BoundTool(blackboard_tools._list_def, lambda args, _bb=blackboard: "\n".join(_bb.list_keys(args.get("prefix", ""))) or "黑板为空"),
+        )
+
+        graphs: dict[int, object] = {}
+        graphs_lock = __import__("threading").Lock()
+        workflow_dirs = workflow_dirs or []
+
+        def run_workflow(args, _bb=blackboard, _bus=bus, _manager=manager, _graphs=graphs):
+            from ..team.task_graph import TaskGraph, TaskNode
+            from ..team.orchestrator import Orchestrator
+            from ..config import MODEL_CONFIG
+            tasks = args.get("tasks", [])
+            if not tasks:
+                return "Error: tasks 列表为空"
+            graph = TaskGraph(_bb)
+            for t in tasks:
+                graph.add_task(TaskNode(
+                    id=t["id"], agent=t["agent"], prompt=t["prompt"],
+                    depends_on=t.get("depends_on", []), condition=t.get("condition"),
+                    max_retry=t.get("max_retry", 1), timeout=t.get("timeout", 0),
+                ))
+            import threading as _threading
+            _graphs[_threading.current_thread().ident] = graph
+            display = self._display
+            orch = Orchestrator(graph, _bb, context_length=MODEL_CONFIG.get("context_length", 256000), bus=_bus, manager=_manager, display=display)
+            return orch.run()
+
+        def workflow_status(args, _graphs=graphs):
+            import threading as _threading
+            graph = _graphs.get(_threading.current_thread().ident)
+            if graph is None:
+                with graphs_lock:
+                    if _graphs:
+                        graph = next(iter(_graphs.values()))
+            return graph.render_status() if graph else "暂无工作流记录"
+
+        def load_workflow(args, _dirs=workflow_dirs):
+            import json as _json
+            import yaml as _yaml
+            name = args.get("name", "").strip()
+            if name == "list":
+                templates = []
+                for d in _dirs:
+                    if d.exists():
+                        for f in sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml")):
+                            templates.append(f.stem)
+                return "可用模板:\n" + "\n".join(f"  - {t}" for t in templates) if templates else "暂无预定义工作流模板"
+            for d in _dirs:
+                for ext in (".yaml", ".yml"):
+                    path = d / f"{name}{ext}"
+                    if path.exists():
+                        try:
+                            data = _yaml.safe_load(path.read_text(encoding="utf-8"))
+                            return _json.dumps(data.get("tasks", []), ensure_ascii=False, indent=2)
+                        except Exception as e:
+                            return f"Error: 解析 {path} 失败: {e}"
+            return f"Error: 工作流模板 '{name}' 不存在"
+
+        self.add_tools(
+            _BoundTool(workflow_tools._run_def, run_workflow),
+            _BoundTool(workflow_tools._status_def, workflow_status),
+            _BoundTool(workflow_tools._load_def, load_workflow),
+        )
 
     def register_memory_tools(self, memory_store):
         from . import memory_tools
         memory_tools.configure(memory_store=memory_store)
-        self.add_tools(*memory_tools.ALL_MEMORY_TOOLS)
+        self.add_tools(
+            _BoundTool(memory_tools._remember_def, lambda args, _m=memory_tools: _run_with_context([(_m._memory_store, memory_store)], _m._remember_exec, args)),
+            _BoundTool(memory_tools._recall_def, lambda args, _m=memory_tools: _run_with_context([(_m._memory_store, memory_store)], _m._recall_exec, args)),
+            _BoundTool(memory_tools._forget_def, lambda args, _m=memory_tools: _run_with_context([(_m._memory_store, memory_store)], _m._forget_exec, args)),
+        )
 
     def register_history_tools(self, history_db, workspace: str = "default"):
         from . import history_tools
         history_tools.configure(history_db=history_db, workspace=workspace)
-        self.add_tools(*history_tools.ALL_HISTORY_TOOLS)
+        bindings = [(history_tools._history_db, history_db), (history_tools._current_workspace, workspace)]
+        self.add_tools(
+            _BoundTool(history_tools._search_def, lambda args, _m=history_tools: _run_with_context(bindings, _m._search_exec, args)),
+            _BoundTool(history_tools._manage_def, lambda args, _m=history_tools: _run_with_context(bindings, _m._manage_exec, args)),
+        )
 
 # ── 模块级默认实例 ──
 

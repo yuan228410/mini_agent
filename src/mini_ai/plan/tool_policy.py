@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from enum import Enum
 
+from ..tools.metadata import metadata_for
+
 
 class ToolPolicy(str, Enum):
     PLAN_DISCUSSION = "plan_discussion"
@@ -35,6 +37,7 @@ def filter_tools(tools: list[dict] | None, policy: ToolPolicy | str) -> list[dic
     result: list[dict] = []
     for tool in tools:
         name = tool.get("function", {}).get("name", "")
-        if name in allowed:
+        meta = tool.get("metadata") or {}
+        if meta.get("allowed_in_plan") or metadata_for(name).allowed_in_plan or name in allowed:
             result.append(tool)
     return result

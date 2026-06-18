@@ -227,7 +227,7 @@ def _load_and_validate(config_path: Path) -> dict:
 def _apply_config(raw: dict) -> None:
     """从 raw dict 刷新所有模块级配置变量。"""
     global MODEL_CONFIG, AVAILABLE_MODELS, TIMEOUTS, COMPACTOR, TEAMMATE, TOOL, IMAGE
-    global API_MODE, STREAMING, RUNNER, THINKING, DISPLAY, WEB, LOGGING, PLAN, MCP, SKILL_PATHS, SUBAGENT_MODELS
+    global API_MODE, STREAMING, RUNNER, THINKING, DISPLAY, WEB, LOGGING, PLAN, MCP, DATABASE, SKILL_PATHS, SUBAGENT_MODELS
 
     active_model = raw["active_model"]
     models = raw["models"]
@@ -316,12 +316,20 @@ def _apply_config(raw: dict) -> None:
             "batch_timeout": 0.1,
             "queue_size": 10000,
             "retry_count": 3,
+            "submit_timeout": 1.0,
+            "on_full": "block",
         },
         "memory": {
             "cache_size": 10000,
         }
     }
-    DATABASE = {**_database_defaults, **(raw.get("database") or {})}
+    _database_raw = raw.get("database") or {}
+    DATABASE = copy.deepcopy(_database_defaults)
+    for _section, _values in _database_raw.items():
+        if isinstance(_values, dict) and isinstance(DATABASE.get(_section), dict):
+            DATABASE[_section] = {**DATABASE[_section], **_values}
+        else:
+            DATABASE[_section] = copy.deepcopy(_values)
 
 
 # ── 公开 API ──
@@ -358,12 +366,24 @@ import requests as _requests
 
 
 class RequestContext:
-    __slots__ = ("model_config", "display", "http_session")
+    __slots__ = ("model_config", "display", "http_session", "_owns_http_session")
 
     def __init__(self, model_config: dict, display=None, http_session: _requests.Session | None = None):
         self.model_config = model_config
         self.display = display
         self.http_session = http_session or _requests.Session()
+        self._owns_http_session = http_session is None
+
+    def close(self):
+        """关闭本请求拥有的 HTTP session。"""
+        if self._owns_http_session and self.http_session is not None:
+            self.http_session.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
 
 
 def switch_model(name: str) -> str | None:

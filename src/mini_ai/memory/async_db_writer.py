@@ -14,7 +14,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from queue import Empty, Queue
+from queue import Empty, Full, Queue
 from typing import Any, Callable, Optional
 
 from ..logger import logger
@@ -37,7 +37,8 @@ class WriteTask:
 @dataclass
 class FlushTask:
     """刷盘任务（标记）"""
-    pass
+    done: threading.Event = field(default_factory=threading.Event)
+    error: Exception | None = None
 
 
 @dataclass
@@ -75,17 +76,40 @@ class AsyncDBWriter:
     MAX_RETRY_COUNT = 3  # 最大重试次数
     QUEUE_MAX_SIZE = 10000  # 队列最大容量
     
-    def __init__(self, db_path: Path, conn_factory: Optional[Callable[[], sqlite3.Connection]] = None):
+    def __init__(
+        self,
+        db_path: Path,
+        conn_factory: Optional[Callable[[], sqlite3.Connection]] = None,
+        *,
+        batch_time_window: float | None = None,
+        batch_size_threshold: int | None = None,
+        max_retry_count: int | None = None,
+        queue_max_size: int | None = None,
+        submit_timeout: float = 1.0,
+        on_full: str = "block",
+    ):
         """初始化异步写入器
-        
+
         Args:
             db_path: 数据库路径
             conn_factory: 数据库连接工厂（用于测试）
+            batch_time_window: 批量写入时间窗口
+            batch_size_threshold: 批量写入数量阈值
+            max_retry_count: 最大重试次数
+            queue_max_size: 队列最大容量
+            submit_timeout: 队列满时等待时间
+            on_full: 队列满策略，block/fail/sync_write
         """
         self.db_path = Path(db_path)
         self._conn_factory = conn_factory
         self._conn: Optional[sqlite3.Connection] = None
-        
+        self.BATCH_TIME_WINDOW = batch_time_window if batch_time_window is not None else self.BATCH_TIME_WINDOW
+        self.BATCH_SIZE_THRESHOLD = batch_size_threshold if batch_size_threshold is not None else self.BATCH_SIZE_THRESHOLD
+        self.MAX_RETRY_COUNT = max_retry_count if max_retry_count is not None else self.MAX_RETRY_COUNT
+        self.QUEUE_MAX_SIZE = queue_max_size if queue_max_size is not None else self.QUEUE_MAX_SIZE
+        self.SUBMIT_TIMEOUT = submit_timeout
+        self.ON_FULL = on_full
+
         # 写入队列
         self._queue: Queue = Queue(maxsize=self.QUEUE_MAX_SIZE)
         
@@ -112,6 +136,9 @@ class AsyncDBWriter:
             "cache_misses": 0,
             "queue_full_warnings": 0,
             "write_errors": 0,
+            "sync_fallback_writes": 0,
+            "queue_full_failures": 0,
+            "flush_timeouts": 0,
         }
         self._stats_lock = threading.Lock()
         
@@ -124,31 +151,16 @@ class AsyncDBWriter:
         """紧急刷盘（程序退出时调用）"""
         if not self._started:
             return
-        
+
         logger.info("[AsyncDBWriter] 执行紧急刷盘...")
-        
-        # 先设置停止标志，防止新任务进入
-        self._stop_event.set()
-        
-        # 发送刷盘任务
         try:
-            self._queue.put_nowait(FlushTask())
-        except Exception:
-            pass
-        
-        # 等待队列清空（最多等 5 秒）
-        timeout = 5.0
-        start = time.time()
-        while not self._queue.empty() and (time.time() - start) < timeout:
-            time.sleep(0.01)
-        
-        # 如果队列还有数据，直接写入
-        if not self._queue.empty():
+            self.stop(timeout=5.0)
+        except Exception as e:
+            logger.warning(f"[AsyncDBWriter] 正常停止失败，尝试保底刷盘: {e}")
+            self._stop_event.set()
             self._flush_remaining_tasks()
-        
-        # 确保数据库连接关闭
-        self._close_connection()
-        
+            self._close_connection()
+
         logger.info("[AsyncDBWriter] 紧急刷盘完成")
     
     def _flush_remaining_tasks(self):
@@ -190,28 +202,35 @@ class AsyncDBWriter:
     
     def stop(self, timeout: float = 5.0):
         """停止后台写入线程
-        
+
         Args:
             timeout: 等待超时时间（秒）
         """
         if not self._started:
             return
-        
+
         logger.info("[AsyncDBWriter] 停止中...")
-        
-        # 发送停止信号
+
+        # 先可靠刷盘，再发送停止信号
+        try:
+            self.flush(timeout=timeout)
+        except Exception as e:
+            logger.warning(f"[AsyncDBWriter] 停止前 flush 失败: {e}")
         self._stop_event.set()
-        self._queue.put(StopTask())
-        
+        try:
+            self._queue.put(StopTask(), timeout=min(timeout, 1.0))
+        except Full:
+            logger.warning("[AsyncDBWriter] 停止信号入队超时")
+
         # 等待线程结束
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=timeout)
             if self._thread.is_alive():
                 logger.warning("[AsyncDBWriter] 线程未能在超时内停止")
-        
+
         # 关闭数据库连接
         self._close_connection()
-        
+
         self._started = False
         logger.info(f"[AsyncDBWriter] 已停止，统计: {self._stats}")
     
@@ -236,7 +255,35 @@ class AsyncDBWriter:
                 logger.warning(f"[AsyncDBWriter] 关闭连接失败: {e}")
             finally:
                 self._conn = None
-    
+
+    def _enqueue_write_task(self, task: WriteTask):
+        """按配置策略提交写入任务。"""
+        try:
+            self._queue.put_nowait(task)
+            return
+        except Full:
+            with self._stats_lock:
+                self._stats["queue_full_warnings"] += 1
+            logger.warning(f"[AsyncDBWriter] 队列已满（{self._queue.qsize()}），策略={self.ON_FULL}")
+
+        if self.ON_FULL == "fail":
+            with self._stats_lock:
+                self._stats["queue_full_failures"] += 1
+            raise Full("AsyncDBWriter queue is full")
+
+        if self.ON_FULL == "sync_write":
+            with self._stats_lock:
+                self._stats["sync_fallback_writes"] += 1
+            self._write_batch([task])
+            return
+
+        try:
+            self._queue.put(task, timeout=self.SUBMIT_TIMEOUT)
+        except Full:
+            with self._stats_lock:
+                self._stats["queue_full_failures"] += 1
+            raise
+
     def submit_write(self, workspace: str, session_id: str, role: str,
                      content: str, metadata: str = "", 
                      callback: Optional[Callable[[int], None]] = None) -> int:
@@ -284,15 +331,8 @@ class AsyncDBWriter:
         })
         
         # 加入队列
-        try:
-            self._queue.put_nowait(task)
-        except Exception:
-            # 队列满，记录警告
-            with self._stats_lock:
-                self._stats["queue_full_warnings"] += 1
-            logger.warning(f"[AsyncDBWriter] 队列已满（{self._queue.qsize()}），等待...")
-            self._queue.put(task, timeout=1.0)  # 阻塞等待
-        
+        self._enqueue_write_task(task)
+
         return task_id
     
     def submit_batch(self, workspace: str, session_id: str, 
@@ -341,53 +381,47 @@ class AsyncDBWriter:
                 "_task_id": task_id,
             })
             
-            try:
-                self._queue.put_nowait(task)
-                count += 1
-            except Exception:
-                # 队列满，阻塞等待
-                with self._stats_lock:
-                    self._stats["queue_full_warnings"] += 1
-                self._queue.put(task, timeout=1.0)
-                count += 1
+            self._enqueue_write_task(task)
+            count += 1
         
         return count
     
     def flush(self, timeout: float = 5.0):
-        """等待所有写入任务完成
-        
+        """等待 flush 任务之前的所有写入真实落库。
+
         Args:
             timeout: 超时时间
         """
-        if not self._started or self._queue.empty():
+        if not self._started:
             return
-        
-        # 发送刷盘任务
-        flush_task = FlushTask()
-        flush_done = threading.Event()
-        
-        def on_flush():
-            flush_done.set()
-        
-        # 使用特殊标记等待刷盘完成
+
         original_size = self._queue.qsize()
-        self._queue.put(flush_task)
-        
-        # 等待队列清空
-        start = time.time()
-        while not self._queue.empty() and (time.time() - start) < timeout:
-            time.sleep(0.01)
-        
-        logger.debug(f"[AsyncDBWriter] flush 完成，处理了 {original_size} 个任务")
+        flush_task = FlushTask()
+        try:
+            self._queue.put(flush_task, timeout=timeout)
+        except Full as e:
+            with self._stats_lock:
+                self._stats["flush_timeouts"] += 1
+            raise TimeoutError("提交 flush 任务超时") from e
+
+        if not flush_task.done.wait(timeout=timeout):
+            with self._stats_lock:
+                self._stats["flush_timeouts"] += 1
+            raise TimeoutError("等待 flush 完成超时")
+        if flush_task.error:
+            raise flush_task.error
+
+        logger.debug(f"[AsyncDBWriter] flush 完成，处理了 {original_size} 个排队任务")
     
     def _write_loop(self):
         """后台写入循环"""
         logger.debug("[AsyncDBWriter] 写入线程启动")
-        
+
         batch = []
         last_flush_time = time.time()
-        
-        while not self._stop_event.is_set():
+
+        while True:
+            task = None
             try:
                 # 尝试获取任务
                 try:
@@ -398,23 +432,30 @@ class AsyncDBWriter:
                         self._write_batch(batch)
                         batch = []
                         last_flush_time = time.time()
+                    if self._stop_event.is_set():
+                        break
                     continue
-                
+
                 # 处理特殊任务
                 if isinstance(task, StopTask):
                     logger.debug("[AsyncDBWriter] 收到停止信号")
                     break
                 elif isinstance(task, FlushTask):
-                    # 立即刷盘
-                    if batch:
-                        self._write_batch(batch)
-                        batch = []
-                    last_flush_time = time.time()
+                    try:
+                        if batch:
+                            self._write_batch(batch)
+                            batch = []
+                        last_flush_time = time.time()
+                    except Exception as e:
+                        task.error = e
+                        logger.error(f"[AsyncDBWriter] flush 失败: {e}", exc_info=True)
+                    finally:
+                        task.done.set()
                     continue
-                
+
                 # 添加到批处理
                 batch.append(task)
-                
+
                 # 检查是否达到批量阈值
                 if len(batch) >= self.BATCH_SIZE_THRESHOLD:
                     self._write_batch(batch)
@@ -425,25 +466,35 @@ class AsyncDBWriter:
                     self._write_batch(batch)
                     batch = []
                     last_flush_time = time.time()
-                
+
             except Exception as e:
                 logger.error(f"[AsyncDBWriter] 写入循环异常: {e}", exc_info=True)
-        
+            finally:
+                if task is not None:
+                    self._queue.task_done()
+
         # 退出前处理剩余任务（包括队列中的）
         remaining_tasks = []
         while not self._queue.empty():
+            task = None
             try:
                 task = self._queue.get_nowait()
-                if not isinstance(task, (StopTask, FlushTask)):
+                if isinstance(task, FlushTask):
+                    task.error = RuntimeError("AsyncDBWriter stopped before flush completed")
+                    task.done.set()
+                elif not isinstance(task, StopTask):
                     remaining_tasks.append(task)
             except Empty:
                 break
-        
+            finally:
+                if task is not None:
+                    self._queue.task_done()
+
         if batch or remaining_tasks:
             all_remaining = batch + remaining_tasks
             logger.info(f"[AsyncDBWriter] 退出前写入 {len(all_remaining)} 条剩余消息")
             self._write_batch(all_remaining)
-        
+
         logger.debug("[AsyncDBWriter] 写入线程退出")
     
     def _write_batch(self, tasks: list[WriteTask]):

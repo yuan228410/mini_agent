@@ -6,7 +6,10 @@
 
 - `definition` — OpenAI Function Calling 的工具定义（JSON Schema）
 - `execute(args)` — 工具执行函数
-- `configure(**kwargs)` — 可选，注入外部依赖
+- `metadata` — 可选，声明并行、缓存、计划模式等调度能力
+- `configure(**kwargs)` — 可选兼容接口，用于旧的模块级依赖注入
+
+CLI/Web 每个会话都会创建独立的 `ToolRegistry`。有状态工具（memory/history/skills/team/blackboard/workflow/subagent）优先通过 `_BoundTool` 闭包或 `contextvars` 绑定当前会话的 MemoryStore、HistoryDB、SkillLoader、MessageBus、Blackboard、Display 和 registry，避免不同 Web 会话之间串状态。模块级 `configure(**kwargs)` 仍保留给旧调用路径和兼容工具使用。
 
 ### ToolBase 基类
 
@@ -19,6 +22,7 @@ class MyTool(ToolBase):
     name = "my_tool"
     description = "做某事"
     parameters = {"type": "object", "properties": {...}, "required": [...]}
+    metadata = {"parallel_safe": True, "cacheable": True, "side_effect_free": True}
 
     @staticmethod
     def execute(args: dict) -> str:
@@ -29,9 +33,24 @@ definition = MyTool.definition()
 execute = MyTool.execute
 ```
 
-`ToolBase` 自动生成 `definition()` 格式，并提供 `_truncate()` 辅助方法截断过长输出。
+`ToolBase` 自动生成 `definition()` 格式，并通过 `normalize_tool_definition()` 标准化参数 schema、附加内部 metadata。发送给 OpenAI/Anthropic provider 前，LLM adapter 会剥离内部 metadata，只保留 provider 接受的标准 function definition。
 
 添加新工具只需在 `tools/` 目录下创建新模块，通过 `ToolRegistry.add_tools()` 注册即可。
+
+### ToolMetadata
+
+`tools/metadata.py` 定义工具调度元数据：
+
+| 字段 | 说明 |
+|------|------|
+| `parallel_safe` | 是否允许和其他并行安全工具一起在线程池执行 |
+| `cacheable` | 是否允许在当前 `ToolRegistry` 的局部缓存中缓存结果 |
+| `side_effect_free` | 是否无副作用，供策略和审计使用 |
+| `allowed_in_plan` | 计划模式下是否可见 |
+| `allowed_for_teammate` | 是否允许队友使用 |
+| `capabilities` | 能力标签，如 `filesystem.read`、`history.read`、`agent.spawn` |
+
+内置工具的默认 metadata 集中在 `DEFAULT_TOOL_METADATA`。旧的 `_parallel_tools` 仅作为兼容扩展保留，新代码优先声明 metadata。
 
 ## 内置工具
 
@@ -156,42 +175,40 @@ dispatch_subagent(type="vision", task="分析这张图片 https://example.com/im
 
 ### 工具结果缓存
 
-工具执行结果自动缓存，减少同一对话中重复调用相同工具的开销。
+工具执行结果在当前 `ToolRegistry` 内自动缓存，减少同一会话中重复调用相同只读工具的开销。缓存不跨 registry/会话共享，避免不同用户、workspace 或 memory/history 实例之间交叉污染。
 
 **特性：**
 
+- **Registry-local 作用域**：每个 `ToolRegistry` 持有独立 `ToolCache`
+- **Metadata 控制**：只有 `ToolMetadata.cacheable=True` 的工具允许缓存
 - **LRU 淘汰**：默认缓存 100 条，超过时淘汰最旧的
 - **TTL 过期**：默认 300 秒后过期
-- **黑名单过滤**：有副作用的工具不缓存（如 `write_file`、`run_command`、`send_message` 等）
+- **安全兜底黑名单**：写文件、执行命令、消息发送、黑板写入、队友/工作流触发等有副作用工具永不缓存
 - **大结果跳过**：超过 1MB 的结果不缓存
 
 **使用方式：**
 
 ```python
-from mini_ai.tools.cache import get_tool_cache
+registry = ToolRegistry()
+registry.add_tools(read_file, search_files)
 
-# 查看缓存统计
-cache = get_tool_cache()
-stats = cache.stats()
+# 查看当前会话 registry 的缓存统计
+stats = registry._cache.stats()
 # {'size': 10, 'hits': 25, 'misses': 15, 'hit_rate': '62.5%'}
-
-# 清空缓存（新对话时自动调用）
-cache.clear()
 ```
 
-**黑名单工具（不缓存）：**
+`mini_ai.tools.cache.get_tool_cache()` 仍存在，但仅作为旧代码/兼容路径的全局缓存入口；主流程工具执行使用 `ToolRegistry._cache`。
+
+**不可缓存工具示例：**
 
 - 文件写入：`write_file`、`edit_file`、`delete_file`、`rename_file`
 - 命令执行：`run_command`
 - 消息发送：`send_message`、`broadcast`
 - 黑板写入：`blackboard_write`
-- 记忆管理：`remember`、`forget`
+- 记忆/历史有状态读写：`remember`、`forget`、`recall`、`search_history`、`manage_history`
 - 技能管理：`install_skill`、`delete_skill`
-- 配置修改：`config`（write 操作清除缓存，read/list/reload 可缓存）
-- 历史管理：`manage_history`
-- 队友管理：`spawn_teammate`、`dismiss_team`
-- 工作流：`run_workflow`、`workflow_status`
-- 子代理注册：`register_subagent`
+- 配置写入：`config(action="write")` 不缓存，并清除当前 registry 中 config 相关缓存
+- 队友/工作流/子代理触发：`spawn_teammate`、`dismiss_team`、`run_workflow`、`workflow_status`、`dispatch_subagent`、`register_subagent`
 
 **并发安全机制：**
 
@@ -223,22 +240,38 @@ cache.mark_done(tool_name, args, result)
 
 ### 并行执行
 
-以下工具标记为可并行执行，通过 `ThreadPoolExecutor` 并发运行：
+工具是否可并行由 `ToolMetadata.parallel_safe` 控制。LLM 一次返回的多个工具调用会先按 metadata 分为并行组和串行组：并行组通过 `ThreadPoolExecutor` 并发运行，串行组逐一执行。并行线程中通过 `copy_context()` 保持 `contextvars` 上下文（如 team caller、session-local 工具绑定）。
+
+默认并行安全的典型工具：
 
 - **子代理/队友**：`dispatch_subagent`、`spawn_teammate`
-- **文件读取**：`read_file`、`search_files`、`list_dir`
+- **文件读取**：`read_file`、`search_files`、`list_dir`、`read_image`
 - **网络抓取**：`web_fetch`
 - **技能查询**：`list_skills`、`load_skill`
 - **记忆/历史检索**：`recall`、`search_history`
-- **技能删除**：`delete_skill`
 
-LLM 一次返回的多个工具调用会先按类型分组（并行组 / 串行组），再逐组执行：并行组内的工具并发运行，串行组的工具逐一顺序执行。并行线程中通过 `copy_context()` 保持 `contextvars` 上下文（如 `team_caller` 身份）。
+> 写操作工具（`write_file`、`edit_file`、`install_skill` 等）默认保持串行执行，避免同一文件或共享状态上的竞态覆盖。
 
-> 写操作工具（`write_file`、`edit_file`、`install_skill` 等）保持串行执行，避免同一文件上的竞态覆盖。
+### 有状态工具隔离
 
-### 依赖注入
+CLI/Web 每个会话创建自己的 `ToolRegistry`，并将当前会话状态绑定到工具执行闭包：
 
-工具通过 `configure(**kwargs)` 注入外部依赖（如 MemoryStore、HistoryDB），使用 `contextvars.ContextVar` 替代全局变量，Web 模式多会话并发安全。
+- `register_memory_tools(store)` 绑定当前 MemoryStore
+- `register_history_tools(history_db, workspace)` 绑定当前 HistoryDB 和 workspace
+- `register_skills(skill_loader)` 绑定当前 SkillLoader
+- `register_team(bus, manager)` 绑定当前 MessageBus / TeammateManager
+- `register_blackboard(blackboard, ...)` 绑定当前 Blackboard 和 workflow 图状态
+- `register_subagents(subagent_loader)` 绑定当前 project_path、display 和 registry
+
+这意味着同名工具在不同 Web 会话中可以指向不同的 memory/history/team/blackboard 实例。旧模块级 `configure(**kwargs)` 仍会调用，保证旧代码可用，但主流程以 registry-local 绑定为准。
+
+### 计划模式工具过滤
+
+计划模式只暴露只读/规划安全工具。`plan/tool_policy.py` 会读取工具定义中的 metadata：
+
+- `allowed_in_plan=True` 的工具可在 `/plan` 期间使用
+- 执行模式仍会过滤掉只应内部使用或不适合暴露给 lead 的工具
+- provider 请求前会剥离 metadata，避免 OpenAI/Anthropic API 收到内部字段
 
 ### 工具白名单
 

@@ -360,21 +360,52 @@ def ws_key(username: str, workspace: str | None) -> str:
     return SessionManager.ws_key(username, workspace)
 
 def safe_queue_put(queue, item, loop=None):
-    """线程安全投递队列事件；QueueFull/loop 关闭时静默丢弃。"""
+    """线程安全投递队列事件。
+
+    终止类事件会尽量腾出一个普通事件槽位；返回 bool 表示是否成功投递。
+    """
+    terminal_events = {"error", "complete", "done", "aborted"}
+    result = {"ok": False}
+
     def _put():
         try:
             queue.put_nowait(item)
+            result["ok"] = True
+            return
         except Exception:
             pass
+        if item.get("event") in terminal_events:
+            try:
+                buffered = []
+                dropped = False
+                while True:
+                    old = queue.get_nowait()
+                    if not dropped and old.get("event") not in terminal_events:
+                        dropped = True
+                        continue
+                    buffered.append(old)
+            except Exception:
+                pass
+            for old in buffered:
+                try:
+                    queue.put_nowait(old)
+                except Exception:
+                    break
+            try:
+                queue.put_nowait(item)
+                result["ok"] = True
+            except Exception:
+                result["ok"] = False
 
     if loop is not None:
         try:
             loop.call_soon_threadsafe(_put)
         except Exception:
-            pass
-        return
+            return False
+        return True
 
     _put()
+    return result["ok"]
 
 def abort_all_sessions():
     SessionManager.instance().abort_all()

@@ -12,7 +12,10 @@ from ..utils import now_ts
 
 _loader = None
 _definition = None
-_project_path_ctx = __import__("contextvars").ContextVar("dispatch_project_path", default=None)
+_contextvars = __import__("contextvars")
+_project_path_ctx = _contextvars.ContextVar("dispatch_project_path", default=None)
+_display_ctx = _contextvars.ContextVar("dispatch_display", default=None)
+_registry_ctx = _contextvars.ContextVar("dispatch_registry", default=None)
 
 # 支持的图片格式
 IMAGE_FORMATS = {
@@ -24,7 +27,7 @@ IMAGE_FORMATS = {
     ".bmp": "image/bmp",
 }
 
-def configure(loader=None, definition=None, project_path=None):
+def configure(loader=None, definition=None, project_path=None, display=None, registry=None):
     global _loader, _definition
     if loader is not None:
         _loader = loader
@@ -32,6 +35,10 @@ def configure(loader=None, definition=None, project_path=None):
         _definition = definition
     if project_path is not None:
         _project_path_ctx.set(project_path)
+    if display is not None:
+        _display_ctx.set(display)
+    if registry is not None:
+        _registry_ctx.set(registry)
 
 def get_project_path():
     val = _project_path_ctx.get()
@@ -341,13 +348,15 @@ def execute(args: dict, abort_event: threading.Event | None = None) -> str:
 
     sub_display = None
     try:
-        from ..tools import _registry
-        lead_display = _registry._display
+        lead_display = _display_ctx.get()
+        if lead_display is None:
+            from ..tools import _registry
+            lead_display = _registry._display
         if lead_display and hasattr(lead_display, 'queue'):
             from ..web.display import WebDisplay
-            sub_display = WebDisplay(lead_display.queue, lead_display.loop)
+            sub_display = WebDisplay(lead_display.queue, lead_display.loop, session_id=getattr(lead_display, 'session_id', ''))
             sub_display.set_teammate(f"sub:{spec['name']}")
-            
+
             # 推送 agent_start 事件
             sub_display._push("agent_start", {
                 "agent_type": f"sub:{spec['name']}",
@@ -375,7 +384,7 @@ def execute(args: dict, abort_event: threading.Event | None = None) -> str:
         ctx = RequestContext(model_config=model_config)
 
     try:
-        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event, context_length=MODEL_CONFIG.get("context_length", 256000))
+        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event, context_length=MODEL_CONFIG.get("context_length", 256000), tool_registry=_registry_ctx.get())
         logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
         return result or f"[{spec['name']}] 超出轮次限制或执行失败"
     except Exception as e:

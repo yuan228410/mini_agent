@@ -6,7 +6,7 @@ import requests
 
 from ..config import TIMEOUTS
 from .base import (
-    get_config, get_api_url, get_api_key, get_model, get_api_mode,
+    get_config, get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
     get_usage, get_session, ensure_session_openai, detect_context_overflow,
     estimate_tokens, estimate_messages_tokens,
@@ -50,15 +50,20 @@ def _apply_model_params(payload: dict, ctx=None):
         payload["reasoning_effort"] = effort
 
 
+def _provider_tools(tools: list[dict]) -> list[dict]:
+    """Strip internal metadata before sending tool definitions to providers."""
+    return [{"type": t.get("type", "function"), "function": t["function"]} for t in tools]
+
+
 def _attach_tools(payload: dict, tools) -> list[str] | None:
     tool_names = None
     if tools is True:
         defs = get_definitions()
-        payload["tools"] = defs
+        payload["tools"] = _provider_tools(defs)
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in defs]
     elif tools:
-        payload["tools"] = tools
+        payload["tools"] = _provider_tools(tools)
         payload["tool_choice"] = "auto"
         tool_names = [d["function"]["name"] for d in tools]
     return tool_names
@@ -66,9 +71,6 @@ def _attach_tools(payload: dict, tools) -> list[str] | None:
 
 def chat(messages, tools=True, ctx=None):
     ensure_session_openai(ctx)
-    if get_api_mode(ctx) == "anthropic":
-        from .anthropic import chat as anth_chat
-        return anth_chat(messages, tools, ctx=ctx)
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs}
     _apply_model_params(payload, ctx)
@@ -221,10 +223,6 @@ def chat(messages, tools=True, ctx=None):
 
 def chat_stream(messages, tools=True, ctx=None, abort_event=None):
     ensure_session_openai(ctx)
-    if get_api_mode(ctx) == "anthropic":
-        from .anthropic import chat_stream as anth_stream
-        yield from anth_stream(messages, tools, ctx=ctx)
-        return
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs, "stream": True, "stream_options": {"include_usage": True}}
     _apply_model_params(payload, ctx)

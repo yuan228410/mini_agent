@@ -1,5 +1,7 @@
 """文件浏览与预览 API"""
+import asyncio
 import os
+import time
 from datetime import datetime
 from ...utils import _UTC8
 from pathlib import Path
@@ -105,6 +107,131 @@ def _is_binary_file(filepath: Path, ext: str) -> bool:
 def _format_time(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=_UTC8).isoformat()
 
+
+def _list_files_sync(root: Path, target: Path, path: str, max_items: int = 2000) -> dict:
+    items = []
+    try:
+        entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    except PermissionError:
+        return {"error": "权限不足"}
+
+    truncated = False
+    for entry in entries:
+        if len(items) >= max_items:
+            truncated = True
+            break
+        try:
+            if entry.name in _IGNORE_DIRS:
+                continue
+            if entry.name.startswith(".") and entry.is_dir():
+                continue
+            rel = str(entry.relative_to(root))
+            if entry.is_dir():
+                items.append({"name": entry.name, "type": "dir", "path": rel})
+            else:
+                st = entry.stat()
+                lang = _EXT_LANG.get(entry.suffix.lower(), "")
+                items.append({
+                    "name": entry.name, "type": "file", "path": rel,
+                    "size": st.st_size, "language": lang,
+                    "modified": _format_time(st.st_mtime),
+                })
+        except (OSError, PermissionError):
+            continue
+
+    breadcrumb = []
+    if path:
+        parts = Path(path).parts
+        for i, part in enumerate(parts):
+            breadcrumb.append({"name": part, "path": str(Path(*parts[:i+1]))})
+
+    return {
+        "root": str(root),
+        "current_path": path,
+        "breadcrumb": breadcrumb,
+        "items": items,
+        "truncated": truncated,
+    }
+
+
+def _read_text_window(target: Path, offset: int, limit: int) -> tuple[str, int, bool]:
+    content_parts = []
+    total_lines = 0
+    end = offset + limit
+    with target.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if offset <= total_lines < end:
+                content_parts.append(line)
+            total_lines += 1
+    return "".join(content_parts), total_lines, end < total_lines
+
+
+def _search_files_sync(root: Path, target: Path, query: str, max_results: int = 100, max_scanned: int = 20000, deadline_ms: int = 1500) -> dict:
+    results = []
+    query_lower = query.lower()
+    scanned = 0
+    truncated = False
+    deadline = time.monotonic() + deadline_ms / 1000
+    stack = [target]
+
+    while stack:
+        if scanned >= max_scanned or time.monotonic() > deadline:
+            truncated = True
+            break
+        current = stack.pop()
+        try:
+            entries = list(current.iterdir())
+        except (OSError, PermissionError):
+            continue
+        for entry in entries:
+            scanned += 1
+            if scanned >= max_scanned or time.monotonic() > deadline:
+                truncated = True
+                break
+            try:
+                if entry.name in _IGNORE_DIRS:
+                    continue
+                is_dir = entry.is_dir()
+                if is_dir and entry.name.startswith("."):
+                    continue
+                if is_dir:
+                    stack.append(entry)
+                if query_lower in entry.name.lower() and len(results) < max_results:
+                    rel = str(entry.relative_to(root))
+                    if is_dir:
+                        results.append({"name": entry.name, "type": "dir", "path": rel})
+                    else:
+                        st = entry.stat()
+                        lang = _EXT_LANG.get(entry.suffix.lower(), "")
+                        results.append({
+                            "name": entry.name, "type": "file", "path": rel,
+                            "size": st.st_size, "language": lang,
+                            "modified": _format_time(st.st_mtime),
+                        })
+                elif len(results) >= max_results:
+                    truncated = True
+                    break
+            except (OSError, PermissionError):
+                continue
+    results.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
+    return {"results": results, "query": query, "scanned": scanned, "truncated": truncated}
+
+
+def _browse_dirs_sync(root: Path) -> dict:
+    parent = str(root.parent) if root != root.parent else ""
+    dirs = []
+    try:
+        for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
+            if entry.is_dir() and not entry.name.startswith(".") and entry.name not in _IGNORE_DIRS:
+                try:
+                    has_children = any(e.is_dir() for e in entry.iterdir())
+                except (OSError, PermissionError):
+                    has_children = False
+                dirs.append({"name": entry.name, "path": str(entry), "has_children": has_children})
+    except PermissionError:
+        return {"error": "无权限访问", "current": str(root), "parent": parent, "dirs": []}
+    return {"current": str(root), "parent": parent, "dirs": dirs}
+
 @router.get("/files/list")
 async def list_files(
     path: str = Query(default=""),
@@ -124,42 +251,7 @@ async def list_files(
     if not target.is_dir():
         return {"error": "不是目录"}
 
-    items = []
-    try:
-        entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
-    except PermissionError:
-        return {"error": "权限不足"}
-
-    for entry in entries:
-        if entry.name in _IGNORE_DIRS:
-            continue
-        if entry.name.startswith(".") and entry.is_dir():
-            continue
-
-        rel = str(entry.relative_to(root))
-        if entry.is_dir():
-            items.append({"name": entry.name, "type": "dir", "path": rel})
-        else:
-            st = entry.stat()
-            lang = _EXT_LANG.get(entry.suffix.lower(), "")
-            items.append({
-                "name": entry.name, "type": "file", "path": rel,
-                "size": st.st_size, "language": lang,
-                "modified": _format_time(st.st_mtime),
-            })
-
-    breadcrumb = []
-    if path:
-        parts = Path(path).parts
-        for i, part in enumerate(parts):
-            breadcrumb.append({"name": part, "path": str(Path(*parts[:i+1]))})
-
-    return {
-        "root": str(root),
-        "current_path": path,
-        "breadcrumb": breadcrumb,
-        "items": items,
-    }
+    return await asyncio.to_thread(_list_files_sync, root, target, path)
 
 @router.get("/files/read")
 async def read_file(
@@ -204,14 +296,9 @@ async def read_file(
         }
 
     try:
-        with target.open("r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
+        content, total_lines, has_more = await asyncio.to_thread(_read_text_window, target, offset, limit)
     except Exception as e:
         return {"error": f"读取失败: {e}"}
-
-    total_lines = len(lines)
-    chunk = lines[offset:offset + limit]
-    content = "".join(chunk)
 
     return {
         "path": path,
@@ -220,7 +307,7 @@ async def read_file(
         "offset": offset,
         "limit": limit,
         "total_lines": total_lines,
-        "has_more": (offset + limit) < total_lines,
+        "has_more": has_more,
         "size": size,
         "modified": mtime,
         "is_binary": False,
@@ -265,35 +352,7 @@ async def search_files(
     if not target or not target.exists():
         return {"error": "路径不存在"}
 
-    results = []
-    query_lower = query.lower()
-    try:
-        for entry in target.rglob("*"):
-            if entry.name in _IGNORE_DIRS:
-                continue
-            if entry.is_dir() and entry.name.startswith("."):
-                continue
-            # 跳过被忽略目录中的文件
-            parts = set(entry.parts)
-            if parts & _IGNORE_DIRS:
-                continue
-            if query_lower in entry.name.lower():
-                rel = str(entry.relative_to(root))
-                if entry.is_dir():
-                    results.append({"name": entry.name, "type": "dir", "path": rel})
-                else:
-                    st = entry.stat()
-                    lang = _EXT_LANG.get(entry.suffix.lower(), "")
-                    results.append({
-                        "name": entry.name, "type": "file", "path": rel,
-                        "size": st.st_size, "language": lang,
-                        "modified": _format_time(st.st_mtime),
-                    })
-    except PermissionError:
-        pass
-
-    results.sort(key=lambda x: (x["type"] != "dir", x["name"].lower()))
-    return {"results": results[:100], "query": query}
+    return await asyncio.to_thread(_search_files_sync, root, target, query)
 
 @router.get("/files/browse")
 async def browse_dirs(path: str = Query(default=""), username: str = Query(...)):
@@ -302,16 +361,4 @@ async def browse_dirs(path: str = Query(default=""), username: str = Query(...))
     root = Path(path).resolve()
     if not root.exists() or not root.is_dir():
         return {"error": f"路径不存在: {path}", "current": path, "parent": "", "dirs": []}
-    parent = str(root.parent) if root != root.parent else ""
-    dirs = []
-    try:
-        for entry in sorted(root.iterdir(), key=lambda p: p.name.lower()):
-            if entry.is_dir() and not entry.name.startswith(".") and entry.name not in ("__pycache__", "node_modules", ".venv", "venv", "dist", "build"):
-                try:
-                    has_children = any(e.is_dir() for e in entry.iterdir())
-                except PermissionError:
-                    has_children = False
-                dirs.append({"name": entry.name, "path": str(entry), "has_children": has_children})
-    except PermissionError:
-        return {"error": "无权限访问", "current": path, "parent": parent, "dirs": []}
-    return {"current": str(root), "parent": parent, "dirs": dirs}
+    return await asyncio.to_thread(_browse_dirs_sync, root)

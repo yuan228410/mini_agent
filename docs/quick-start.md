@@ -62,14 +62,15 @@ mini_ai/
 ├── docs/                      # 设计文档
 ├── examples/                  # 功能示例
 ├── src/mini_ai/               # 包源码
-│   ├── main.py                # 主循环编排
+│   ├── main.py                # CLI 入口与交互适配
 │   ├── config.py              # 配置加载
-│   ├── llm/                   # LLM 通信层（OpenAI / Anthropic 双协议）
+│   ├── core/                  # CLI/Web 共享编排（ApplicationService + persister）
+│   ├── llm/                   # LLM 通信层（router + OpenAI / Anthropic adapters）
 │   ├── cli/                   # CLI 交互层（终端渲染 + 斜杠命令）
-│   ├── runner.py              # 统一 Agent 执行循环
+│   ├── runner/                # 统一 Agent 执行循环
 │   ├── context.py             # 系统提示词组装
 │   ├── memory/                # 记忆系统（四层存储 + 压缩 + 会话管理）
-│   ├── tools/                 # 工具系统（ToolRegistry 注册/分发）
+│   ├── tools/                 # 工具系统（ToolRegistry + ToolMetadata + 缓存）
 │   ├── team/                  # 多 Agent 编排（队友 + 黑板 + DAG）
 │   ├── subagents/             # 子代理定义
 │   ├── web/                   # Web 界面（FastAPI + Vue 3）

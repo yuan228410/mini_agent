@@ -36,6 +36,7 @@ def run_tool_loop(
     ctx=None,
     bus=None,
     compactor=None,
+    tool_registry=None,
 ) -> tuple[dict | None, bool]:
     """统一工具循环
     
@@ -142,9 +143,12 @@ def run_tool_loop(
                 executor.finalize_response(msg, messages)
                 return msg, state.spawned_teammate
             
-            # 执行工具（直接调用 tools.handle_tool_calls，不再经过 executor）
-            from ..tools import handle_tool_calls
-            tool_spawned = handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
+            # 执行工具（优先使用会话级 ToolRegistry）
+            if tool_registry is not None:
+                tool_spawned = tool_registry.handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
+            else:
+                from ..tools import handle_tool_calls
+                tool_spawned = handle_tool_calls(msg, messages, display=display, persist_fn=executor.persist_fn)
             
             # 检查工具错误
             # 注意：这里检测的是 execute_tools 内部处理的字符串格式错误（⚠ 开头）
@@ -382,7 +386,7 @@ def _recover_from_overflow(messages: list[dict], compactor, ctx, state: LoopStat
         logger.error(f"[runner] force_compact 异常: {e}", exc_info=True)
         return False
 
-def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abort_event: threading.Event | None = None, tool_names: list[str] | None = None, context_length: int = 128000, compactor=None) -> str | None:
+def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abort_event: threading.Event | None = None, tool_names: list[str] | None = None, context_length: int = 128000, compactor=None, tool_registry=None) -> str | None:
     """轻量 agent 循环
     
     Args:
@@ -401,12 +405,13 @@ def run_agent(messages: list[dict], max_turns: int = 10, ctx=None, bus=None, abo
     from ..tools import get_definitions
 
     try:
+        definitions = tool_registry.get_definitions() if tool_registry is not None else get_definitions()
         if tool_names:
             # 根据工具名过滤
-            tools = [d for d in get_definitions() if d.get("function", {}).get("name") in tool_names]
+            tools = [d for d in definitions if d.get("function", {}).get("name") in tool_names]
         else:
-            tools = get_definitions()
-        msg, _ = run_tool_loop(messages, tools, max_turns=max_turns, ctx=ctx, bus=bus, abort_event=abort_event, context_length=context_length, compactor=compactor)
+            tools = definitions
+        msg, _ = run_tool_loop(messages, tools, max_turns=max_turns, ctx=ctx, bus=bus, abort_event=abort_event, context_length=context_length, compactor=compactor, tool_registry=tool_registry)
     except Exception as e:
         logger.error(f"[run_agent] 异常: {e}", exc_info=True)
         # 将异常转换为错误消息返回，让调用方知道发生了什么

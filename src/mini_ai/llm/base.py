@@ -268,12 +268,22 @@ def get_session(ctx=None) -> requests.Session:
     return _local.session
 
 
+def close_thread_session():
+    """关闭当前线程持有的默认 HTTP session。"""
+    sess = getattr(_local, "session", None)
+    if sess is not None:
+        sess.close()
+        delattr(_local, "session")
+
+
 def ensure_session_openai(ctx=None):
     cfg = get_config(ctx)
     sess = get_session(ctx)
     key = cfg["api_key"]
 
     auth_value = f"Bearer {key}"
+    sess.headers.pop("x-api-key", None)
+    sess.headers.pop("anthropic-version", None)
     if sess.headers.get("Authorization") != auth_value:
         sess.headers.update({
             "Authorization": auth_value,
@@ -288,6 +298,7 @@ def ensure_session_anthropic(ctx=None):
     cfg = get_config(ctx)
     sess = get_session(ctx)
     key = cfg["api_key"]
+    sess.headers.pop("Authorization", None)
     if sess.headers.get("x-api-key") != key:
         sess.headers.update({
             "x-api-key": key,

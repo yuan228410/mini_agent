@@ -13,17 +13,19 @@ from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG, STREAMING,
 from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
 from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
-from .core import ChatSession, HistoryPersister
+from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
 from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
-from .tools import (get_definitions, register, register_subagents, register_team,
+from .tools import (ToolRegistry, get_definitions, register, register_subagents, register_team,
                    inject_todos as _inject_todos,
                     register_display, register_blackboard, register_memory_tools,
-                    register_history_tools, set_project_path)
+                    register_history_tools, set_project_path,
+                    read_file, read_image, write_file, edit_file, delete_file, rename_file,
+                    run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
 from .plan.artifact_parser import strip_artifact_blocks
 from .plan.prompts import build_plan_user_message
 from .plan.schema import PlanArtifact
@@ -112,6 +114,7 @@ class SessionContext:
     team_mgr: TeammateManager
     blackboard: Blackboard
     lead_event: threading.Event
+    tool_registry: object | None = None
     cmd: CommandHandler = None  # 主循环 handler，reload 解包时赋予
 
 
@@ -142,6 +145,9 @@ def _create_workspace_session(
     logger.info(f"[Workspace] {ws_name} → {ws_dir} (project: {ws.project_path or Path.cwd()})")
 
     set_project_path(ws.project_path or str(Path.cwd()))
+    tool_registry = ToolRegistry()
+    tool_registry.add_tools(read_file, read_image, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
+    tool_registry._project_path = ws.project_path or str(Path.cwd())
 
     # ── 技能 ──
     user_skills_dir = user_data_dir(username) / "skills"
@@ -150,14 +156,18 @@ def _create_workspace_session(
                                user_skills_dir=user_skills_dir,
                                workspace_skills_dir=ws_skills_dir)
     register(skill_loader)
+    tool_registry.register_skills(skill_loader)
     register_subagents(_subagent_loader)
+    tool_registry.register_subagents(_subagent_loader)
 
     # ── Team + Bus ──
     bus = MessageBus(ws_dir / ".team" / "inbox")
     app_ctx.bus = bus
     team_mgr = TeammateManager(team_dir=ws_dir / ".team", bus=bus, project_dir=ws_dir)
     register_team(bus, team_mgr)
+    tool_registry.register_team(bus, team_mgr)
     register_display(disp)
+    tool_registry.register_display(disp)
 
     # ── MCP ──
     _init_mcp(app_ctx)
@@ -166,6 +176,7 @@ def _create_workspace_session(
     bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
     workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
     register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
+    tool_registry.register_blackboard(bb, workflow_dirs=workflow_dirs, bus=bus, manager=team_mgr)
 
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
@@ -224,7 +235,9 @@ def _create_workspace_session(
         workspace_memory_dir=ws_memory_dir,
     )
     register_memory_tools(store)
+    tool_registry.register_memory_tools(store)
     register_history_tools(history_db, ws_name)
+    tool_registry.register_history_tools(history_db, ws_name)
 
     # ── Context ──
     ctx_builder = ContextBuilder(DATA_DIR)
@@ -294,6 +307,7 @@ def _create_workspace_session(
         team_mgr=team_mgr,
         blackboard=bb,
         lead_event=lead_event,
+        tool_registry=tool_registry,
         cmd=cmd,
     )
     return session, messages
@@ -422,7 +436,8 @@ def main():
     current_session_id = session.session_id
     current_username = session.username
     cmd = session.cmd
-    
+    tool_registry = session.tool_registry
+
     # 设置 session_id 到 contextvars（用于日志跟踪）
     from .logger import set_session_id
     set_session_id(current_session_id)
@@ -517,39 +532,37 @@ def main():
         disp.user_label(ts)
 
         try:
-            reset_usage()
             planning_turn = cmd.plan.state in ('planning', 'awaiting_user', 'awaiting_approval')
             tools = filter_tools(_lead_tool_defs(_app_ctx), ToolPolicy.PLAN_READONLY if planning_turn else ToolPolicy.EXECUTION)
 
-            # 使用 HistoryPersister 统一持久化
-            _cli_persister = HistoryPersister(history_db, _get_workspace_name(), current_session_id)
-
-            msg, _ = run_tool_loop(
-                messages, tools,
-                streaming=STREAMING,
-                display=disp,
-                inject_fn=_inject_todos,
-                ctx=cmd.ctx,
-                persist_fn=_cli_persister,
-                bus=bus,
-                context_length=MODEL_CONFIG.get("context_length", 256000),
+            result = ApplicationService().run_turn(
+                messages=messages,
+                tools=tools,
+                history_db=history_db,
+                workspace=_get_workspace_name(),
+                session_id=current_session_id,
                 compactor=compactor,
+                bus=bus,
+                plan_store=PlanStore(history_db, _get_workspace_name(), current_session_id) if planning_turn else None,
+                plan_state=cmd,
+                user_text_for_history=original_user_input,
+                options=RunTurnOptions(
+                    streaming=STREAMING,
+                    display=disp,
+                    request_context=cmd.ctx,
+                    plan_turn=planning_turn,
+                    tool_registry=tool_registry,
+                    context_length=MODEL_CONFIG.get("context_length", 256000),
+                    persist_user_history=False,
+                ),
             )
-            _cli_persister.flush_deferred(messages)  # 异常时跳过，避免写入不完整消息
+            msg = result.message
 
-            if planning_turn and msg and msg.get("content"):
-                raw_plan_text = msg["content"]
-                msg["content"] = strip_artifact_blocks(raw_plan_text) or "计划已更新。"
-                artifact = PlanService().update_from_response(
-                    session_key=current_session_id,
-                    sm=cmd,
-                    store=PlanStore(history_db, _get_workspace_name(), current_session_id),
-                    user_text=original_user_input,
-                    assistant_text=raw_plan_text,
-                    display=None,
-                )
-                cmd.plan.current_plan = artifact.to_dict()
-                cmd.plan.state = artifact.status
+            if planning_turn and result.raw_plan_text:
+                artifact = PlanArtifact.from_dict(cmd.plan.current_plan)
+                if artifact:
+                    cmd.plan.current_plan = artifact.to_dict()
+                    cmd.plan.state = artifact.status
                 cmd._render_plan()
                 disp.info("输入 /act 批准执行，或继续输入修改意见。")
 

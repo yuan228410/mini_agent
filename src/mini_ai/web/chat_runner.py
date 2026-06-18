@@ -8,8 +8,13 @@ from concurrent.futures import ThreadPoolExecutor
 from ..config import DATA_DIR, MODEL_CONFIG, STREAMING, PACKAGE_DIR, RequestContext, get_model_config
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..runner import run_tool_loop
-from ..tools import register_memory_tools, register_history_tools, register, inject_todos as _inject_todos
-from ..tools import register_team, register_blackboard
+from ..core import ApplicationService, RunTurnOptions
+from ..tools import (
+    ToolRegistry, register_memory_tools, register_history_tools, register, inject_todos as _inject_todos,
+    register_team, register_blackboard,
+    read_file, read_image, write_file, edit_file, delete_file, rename_file,
+    run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill,
+)
 from ..logger import logger, set_session_id
 from ..plan.artifact_parser import strip_artifact_blocks
 from ..plan.prompts import build_plan_user_message
@@ -65,26 +70,39 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 base = resolve_base(username, workspace)
                 comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
                 comp = get_or_create_components(username, comp_key, base, workspace)
+                tool_registry = ToolRegistry()
+                tool_registry.add_tools(read_file, read_image, write_file, edit_file, delete_file, rename_file, run_command, search_files, list_dir, web_fetch, update_todos, config_tool, delete_skill)
                 register_memory_tools(comp["store"])
+                tool_registry.register_memory_tools(comp["store"])
                 register_history_tools(comp["history_db"], workspace or "default")
+                tool_registry.register_history_tools(comp["history_db"], workspace or "default")
                 register(comp["skill_loader"])
+                tool_registry.register_skills(comp["skill_loader"])
                 if comp.get("project_path"):
                     from ..tools import set_project_path
                     set_project_path(comp["project_path"])
+                    tool_registry._project_path = comp["project_path"]
+                from .deps import SUBAGENT_LOADER, _MCP_LOADER
+                tool_registry.register_subagents(SUBAGENT_LOADER)
+                if _MCP_LOADER:
+                    tool_registry.add_tools(*_MCP_LOADER.get_tool_modules())
                 if comp.get("bus") and comp.get("team_mgr"):
                     register_team(comp["bus"], comp["team_mgr"])
+                    tool_registry.register_team(comp["bus"], comp["team_mgr"])
                 if comp.get("blackboard"):
                     workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
                     register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
+                    tool_registry.register_blackboard(comp["blackboard"], workflow_dirs=workflow_dirs, bus=comp.get("bus"), manager=comp.get("team_mgr"))
 
                 if tools is None:
-                    tools = lead_tool_defs()
+                    tools = [d for d in tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
                 all_tools = tools
 
                 if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
                     messages[0]["content"] = build_system_prompt(username, comp_key, base, workspace)
 
                 disp = WebDisplay(queue, loop, session_id=comp_key, suppress_text=plan_turn)
+                tool_registry.register_display(disp)
                 from ..tools import _registry
                 _registry.register_display(disp)
 
@@ -130,29 +148,34 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         messages[0]["name"] = auto_name
                         _save_session_name(base, comp_key, auto_name)
 
-                reset_usage()
                 logger.debug(f"[Web] run_tool_loop start key={session_key} plan_turn={plan_turn} tools={len(tools)}")
 
-                # 使用 HistoryPersister 统一持久化
-                from ..core.persister import HistoryPersister
-                persister = HistoryPersister(comp["history_db"], workspace or "default", comp_key, sanitize_plan_artifacts=plan_turn)
-
-                msg, _ = run_tool_loop(
-                    messages, tools,
-                    streaming=STREAMING,
-                    display=disp,
-                    inject_fn=_inject_todos,
-                    abort_event=abort_event,
-                    max_turns=max_turns,
-                    ctx=ctx,
-                    persist_fn=persister,
-                    bus=comp.get("bus"),
-                    context_length=cfg.get("context_length", 256000),
+                result = ApplicationService().run_turn(
+                    messages=messages,
+                    tools=tools,
+                    history_db=comp["history_db"],
+                    workspace=workspace or "default",
+                    session_id=comp_key,
                     compactor=comp.get("compactor"),
+                    bus=comp.get("bus"),
+                    plan_store=PlanStore(comp["history_db"], workspace or "default", comp_key) if (plan_turn or approved_plan) else None,
+                    plan_state=sm,
+                    user_text_for_history=(user_msgs[-1].get("_plan_original_content", user_msgs[-1].get("content", "")) if user_msgs else None),
+                    options=RunTurnOptions(
+                        streaming=STREAMING,
+                        display=disp,
+                        request_context=ctx,
+                        abort_event=abort_event,
+                        max_turns=max_turns,
+                        plan_turn=plan_turn,
+                        approved_plan=approved_plan,
+                        tool_registry=tool_registry,
+                        context_length=cfg.get("context_length", 256000),
+                        persist_user_history=False,
+                        plan_session_key=session_key,
+                    ),
                 )
-
-                # flush deferred assistant
-                persister.flush_deferred(messages)
+                msg = result.message
 
                 sm.touch(session_key)
 
@@ -196,6 +219,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                                     max_turns=3, ctx=ctx, persist_fn=persister,
                                     bus=bus, context_length=cfg.get("context_length", 256000),
                                     compactor=comp.get("compactor"),
+                                    tool_registry=tool_registry,
                                 )
                                 persister.flush_deferred(messages)
                                 if msg2 and msg2.get("content"):
@@ -253,7 +277,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
                 # ── 正常流程 ──
-                raw_plan_text = msg.get("content") if (plan_turn and msg) else None
+                raw_plan_text = result.raw_plan_text if plan_turn else None
                 if msg and msg.get("content") and msg["content"].strip():
                     if plan_turn:
                         display_content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
@@ -272,33 +296,18 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         asst_ts = now_ts()
                         messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts, "kind": "chat"})
 
-                if plan_turn and raw_plan_text:
-                    store = PlanStore(comp["history_db"], workspace or "default", comp_key)
-                    PlanService().update_from_response(
-                        session_key=session_key,
-                        sm=sm,
-                        store=store,
-                        user_text=user_msgs[-1].get("_plan_original_content", user_msgs[-1].get("content", "")) if user_msgs else "",
-                        assistant_text=raw_plan_text,
-                        display=disp,
-                    )
-
-                if approved_plan:
-                    store = PlanStore(comp["history_db"], workspace or "default", comp_key)
-                    PlanService().mark_completed(session_key=session_key, sm=sm, store=store, display=disp)
-
-                # 使用 maybe_compact 统一压缩逻辑
-                usage = get_usage()
-                if comp["compactor"].maybe_compact(messages, usage["prompt_tokens"], llm_chat, ctx, cfg.get("context_length", 256000)):
-                    messages[0]["content"] = build_system_prompt(username, comp_key, base, workspace)
-
+                usage = result.usage
                 safe_queue_put(queue, {"event": "complete", "data": {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}}, loop)
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
             finally:
-                sm.set_status(session_key, "idle")
-                sm.dec_ref(session_key)
-                set_session_id(None)
+                try:
+                    if 'ctx' in locals() and ctx is not None:
+                        ctx.close()
+                finally:
+                    sm.set_status(session_key, "idle")
+                    sm.dec_ref(session_key)
+                    set_session_id(None)
 
     except Exception as _sync_err:
         logger.error(f"[Web⚠] run_tool_loop_sync 异常: {_sync_err}", exc_info=True)

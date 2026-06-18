@@ -73,6 +73,18 @@ display:
 web:
   history_limit: 200
 
+database:
+  history:
+    async_write: true
+    batch_size: 50
+    batch_timeout: 0.1
+    queue_size: 10000
+    retry_count: 3
+    submit_timeout: 1.0
+    on_full: block
+  memory:
+    cache_size: 10000
+
 runner:
   context_usage_limit: 0.88
 
@@ -214,6 +226,36 @@ logging:
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `history_limit` | `200` | Web 端前端展示历史消息条数，`compactor.context_limit` 控制 LLM 上下文加载量 |
+
+### database
+
+历史消息和记忆相关的数据库配置。
+
+#### database.history
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `async_write` | `true` | 是否启用异步写入。Web 多会话推荐开启，CLI 或极端实时持久化场景可关闭 |
+| `batch_size` | `50` | 异步写入批量提交阈值（条数） |
+| `batch_timeout` | `0.1` | 异步写入批量时间窗口（秒） |
+| `queue_size` | `10000` | 写入队列最大容量 |
+| `retry_count` | `3` | SQLite 写入失败重试次数 |
+| `submit_timeout` | `1.0` | 队列满时提交写入任务最多等待时间（秒） |
+| `on_full` | `block` | 写入队列满时的策略：`block` / `fail` / `sync_write` |
+
+`on_full` 策略：
+
+| 策略 | 行为 | 适用场景 |
+|------|------|----------|
+| `block` | 等待最多 `submit_timeout` 秒，仍无法入队则报错 | 默认策略，兼顾可靠性和背压 |
+| `fail` | 队列满立即抛错并记录统计 | 希望尽早暴露写入压力的测试/监控场景 |
+| `sync_write` | 队列满时退回当前线程同步写入 | 优先保证数据落库，接受偶发请求变慢 |
+
+#### database.memory
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `cache_size` | `10000` | MemoryStore 每个会话缓存消息数上限 |
 
 ### runner
 

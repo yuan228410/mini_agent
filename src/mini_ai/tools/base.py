@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from ..config import TOOL
+from .metadata import metadata_for, normalize_tool_definition
 
 _MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
 
@@ -31,18 +32,19 @@ class ToolBase:
     name: str = ""
     description: str = ""
     parameters: dict = {}
+    metadata = None
 
     @classmethod
     def definition(cls) -> dict:
         """生成 OpenAI function calling 格式的工具定义"""
-        return {
+        return normalize_tool_definition({
             "type": "function",
             "function": {
                 "name": cls.name,
                 "description": cls.description,
                 "parameters": cls.parameters,
             },
-        }
+        }, metadata_for(cls.name, cls.metadata))
 
     @staticmethod
     def execute(args: dict) -> str:

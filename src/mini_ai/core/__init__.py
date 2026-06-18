@@ -7,6 +7,9 @@ def __getattr__(name):
     if name == "ChatSession":
         from .chat_session import ChatSession
         return ChatSession
+    if name in ("ApplicationService", "RunTurnOptions", "RunTurnResult"):
+        from .application_service import ApplicationService, RunTurnOptions, RunTurnResult
+        return {"ApplicationService": ApplicationService, "RunTurnOptions": RunTurnOptions, "RunTurnResult": RunTurnResult}[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
-__all__ = ["DisplayProtocol", "HistoryPersister", "ChatSession"]
+__all__ = ["DisplayProtocol", "HistoryPersister", "ChatSession", "ApplicationService", "RunTurnOptions", "RunTurnResult"]

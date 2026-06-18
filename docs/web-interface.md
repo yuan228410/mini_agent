@@ -11,7 +11,7 @@
 Web 后端按职责拆分为：
 
 - `web/session_manager.py` — `SessionManager` 单例 + `SessionState` dataclass，统一管理所有会话状态（替代原 13 个全局 dict）
-- `web/chat_runner.py` — `run_tool_loop_sync()`，后台线程执行工具循环，推送事件到 WS 队列
+- `web/chat_runner.py` — `run_tool_loop_sync()`，后台线程组装会话级组件并调用 `ApplicationService.run_turn()`，推送事件到 WS 队列
 - `web/routes/sessions.py` — 会话 CRUD REST API（创建/列表/删除/重命名）
 - `web/routes/chat.py` — WebSocket 端点 + 聊天历史/导出/重置
 - `web/display.py` — `WebDisplay` 适配器，实现 `DisplayProtocol` 协议
@@ -24,8 +24,9 @@ Web 后端按职责拆分为：
 
 所有会话状态（消息、模型、状态、引用计数等）封装在 `SessionState` dataclass 中，由 `SessionManager` 单例统一管理。对外暴露方法而非裸 dict，其他路由通过 `SessionManager.instance()` 获取。
 
-### 持久化与压缩
+### 持久化、压缩与核心编排
 
+- `core/application_service.py` — `ApplicationService.run_turn()` 统一 CLI/Web 每轮对话的工具过滤、LLM/tool loop、持久化、plan 更新和压缩
 - `core/persister.py` — `HistoryPersister` 统一 CLI/Web 的 DB 写入逻辑（tool/assistant/deferred-assistant）
 - `Compactor.maybe_compact()` — 统一日常压缩入口，消除 CLI/Web 双写
 
@@ -206,7 +207,7 @@ data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 
 ### WebSocket 模式
 
-前端建立持久 WebSocket 连接，支持中断生成（`{"type": "abort"}`）。
+前端建立持久 WebSocket 连接，支持中断生成（`{"type": "abort"}`）。断线时前端只缓存可安全重放的消息类型（`chat`、`plan.start`、`plan.message`、`plan.select_option`、`plan.approve`、`plan.apply_decision`），pending queue 最多 50 条、TTL 2 分钟；`abort` 等非可重放消息离线时直接丢弃。每条排队消息会附加 `client_message_id`，便于后端/日志识别。
 
 `WS /api/chat/ws` 消息协议：
 
@@ -217,7 +218,7 @@ data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 {"type": "abort", "session_id": "xxx", "username": "xxx"}
 ```
 
-**服务端 → 客户端：** `{"event": "...", "data": {...}}`，事件类型包括 `thinking_start`/`thinking`/`thinking_end`/`text`/`tool_start`/`tool_result`/`done`/`aborted`/`error`。
+**服务端 → 客户端：** `{"event": "...", "data": {...}}`，事件类型包括 `thinking_start`/`thinking`/`thinking_end`/`text`/`tool_start`/`tool_result`/`done`/`complete`/`aborted`/`error`。`WebDisplay` 和 `safe_queue_put()` 对终止事件（`error`、`complete`、`done`、`aborted`）做优先投递；队列满时会优先丢弃普通低优先级事件，保证前端最终能收到结束/错误信号。
 
 ### 中断机制
 
@@ -239,7 +240,9 @@ data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 | `/api/chat/history` | GET | 获取会话历史，参数: `session_id`, `workspace` |
 | `/api/chat/reset` | POST | 重置会话，body: `{"session_id": "xxx"}` |
 | `/api/chat/export` | GET | 导出会话为 Markdown 文件下载，参数: `session_id`, `username`, `workspace` |
-| `/api/files/list` | GET | 获取工作空间文件列表 |
+| `/api/files/list` | GET | 获取工作空间文件列表，返回 `items`、`truncated` 等字段 |
+| `/api/files/read` | GET | 窗口式读取文件内容，参数含 `path`、`offset`、`limit`，返回 `content`、`total_lines`、`has_more` |
+| `/api/files/search` | GET | 搜索工作空间文件内容，返回 `results`、`query`、`scanned`、`truncated` |
 | `/api/files/browse` | GET | 浏览目录结构 |
 | `/api/models` | GET | 获取模型列表及当前激活模型 |
 | `/api/models/switch` | POST | 切换模型，body: `{"name": "deepseek"}` |
@@ -256,14 +259,14 @@ data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 
 ### 多用户 + 会话持久化 + 并发安全
 
-后端维护 `_SESSIONS: dict[str, dict[str, list[dict]]]`，按 `username` → `session_id` 两级隔离。
+后端通过 `SessionManager` 单例维护 `SessionState`，key 为 `username:workspace:session_id`。每个会话有独立 messages、model、status、plan state、lock、abort_event、components 和引用计数；不同会话可并行生成，同一会话通过会话锁串行化关键读写。
 
 **请求上下文隔离（RequestContext）：**
 - 每个请求构建 `RequestContext`，封装独立的 `model_config`/`display`/`http_session`
 - CLI/Web 统一使用 `RequestContext`，不再依赖全局 `_display`/`MODEL_CONFIG`/`_session`
 - 多用户并发互不影响：用户 A 的工具调用结果显示到 A 的 WebDisplay，用户 B 的请求用 B 的 HTTP Session
-- `_run_tool_loop_sync` 返回 `(msg, usage)` 元组，在 executor 线程内读取 `_get_usage()`，避免跨线程读到零值
-- `_sessions_lock = threading.Lock()` 保护 `_SESSIONS` 字典并发读写
+- `_run_tool_loop_sync` 返回 `(msg, usage)` 元组，在 executor 线程内读取 usage，避免跨线程读到零值
+- `SessionManager` 内部用锁保护会话状态、引用计数和 active task 登记
 
 **Per-session 模型切换：**
 - `_SESSION_MODELS` 记录每个会话的模型选择（`username:session_id` → model_name）
@@ -297,8 +300,17 @@ data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 **多会话并行：**
 - 前端 `_states: Map<string, SessionState>` 管理每个会话的独立消息/流式状态
 - 切换会话从 Map 恢复，不中断其他会话的 LLM 生成
-- 后端 `_SESSION_LOCKS` 仅序列化同一会话的消息读写，不同会话不同线程并行
+- 后端 `SessionState.lock` 仅序列化同一会话的消息读写，不同会话不同线程并行
 - WS 连接共用，事件按 `session_id` 路由到对应会话状态
+
+### 文件浏览 API 性能策略
+
+文件列表、读取、搜索和目录浏览接口会将阻塞文件系统操作放到后台线程执行，避免卡住 FastAPI event loop：
+
+- `/api/files/list` 有最大返回数量，超出时 `truncated=true`
+- `/api/files/read` 按 `offset`/`limit` 窗口读取大文件，返回 `has_more` 提示前端继续加载
+- `/api/files/search` 有扫描文件数和时间上限，返回 `scanned` 与 `truncated` 便于前端提示结果是否完整
+- `/api/files/browse` 同样在后台线程遍历目录
 
 ### 错误处理与恢复
 
@@ -330,7 +342,7 @@ data: {"elapsed": 12.5, "completed": 3, "failed": 0, "total": 3}
 - **Compactor** — 上下文超阈值自动压缩 + 记忆更新，复用 `config.yaml` 的 `compactor` 配置
 - **历史加载量** — `web.history_limit`（默认 200）控制前端展示的消息条数，`compactor.context_limit`（默认 50）控制 LLM 上下文加载量，`compactor.keep_recent` 控制压缩后保留的完整消息数，三者独立配置
 - **ContextBuilder** — 系统提示词含记忆 + 技能 + 项目规范（CLAUDE.md/AGENTS.md per-workspace 共享）
-- **工具绑定** — `remember`/`recall`/`forget`/`search_history` 工具在每轮 `_run_tool_loop_sync` 中动态绑定当前会话实例
+- **工具绑定** — 每轮 `_run_tool_loop_sync` 创建会话级 `ToolRegistry`，将 `remember`/`recall`/`forget`/`search_history`、skills、subagents、team、blackboard、workflow 等有状态工具绑定到当前会话实例
 - **项目规范共享** — 同一工作空间下所有会话共享 CLAUDE.md/AGENTS.md（通过 ContextBuilder + project_path 读取）
 
 存储路径：

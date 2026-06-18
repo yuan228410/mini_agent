@@ -4,14 +4,50 @@ const _FETCH_TIMEOUT = 8000
 
 const _origFetch = window.fetch.bind(window)
 
-async function _fetch(url: string, init?: RequestInit): Promise<Response> {
+export class ApiError extends Error {
+  status: number
+  data: any
+  url: string
+
+  constructor(message: string, status: number, data: any, url: string) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.data = data
+    this.url = url
+  }
+}
+
+async function _parseErrorBody(resp: Response): Promise<any> {
+  const text = await resp.text().catch(() => '')
+  if (!text) return null
+  try { return JSON.parse(text) } catch { return text }
+}
+
+async function _fetch(url: string, init?: RequestInit & { timeout?: number }): Promise<Response> {
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), _FETCH_TIMEOUT)
+  const timer = setTimeout(() => controller.abort(), init?.timeout ?? _FETCH_TIMEOUT)
   try {
     const resp = await _origFetch(url, { ...init, signal: controller.signal })
+    if (!resp.ok) {
+      const data = await _parseErrorBody(resp)
+      const message = typeof data === 'string'
+        ? data
+        : data?.error || data?.message || `HTTP ${resp.status}`
+      throw new ApiError(message, resp.status, data, url)
+    }
     return resp
   } finally {
     clearTimeout(timer)
+  }
+}
+
+async function _fetchJson<T>(url: string, init?: RequestInit & { timeout?: number }): Promise<T> {
+  const resp = await _fetch(url, init)
+  try {
+    return await resp.json() as T
+  } catch (e) {
+    throw new ApiError(`响应不是有效 JSON: ${e instanceof Error ? e.message : String(e)}`, resp.status, null, url)
   }
 }
 
@@ -124,7 +160,15 @@ let _wsConnected = false
 const _eventHandlers: ((event: WsEvent) => void)[] = []
 
 // Pending messages queue for offline resilience
-const _pendingMessages: any[] = []
+interface PendingWsMessage {
+  id: string
+  createdAt: number
+  payload: any
+}
+const _pendingMessages: PendingWsMessage[] = []
+const _PENDING_MAX = 50
+const _PENDING_TTL_MS = 2 * 60 * 1000
+const _QUEUEABLE_WS_TYPES = new Set(['chat', 'plan.start', 'plan.message', 'plan.select_option', 'plan.approve', 'plan.apply_decision'])
 
 // 导出连接状态查询函数
 export function isWsConnected(): boolean {
@@ -327,8 +371,9 @@ function _flushPendingMessages() {
   console.log(`[WS] Flushing ${_pendingMessages.length} pending messages`)
   const pending = [..._pendingMessages]
   _pendingMessages.length = 0
+  const now = Date.now()
   for (const p of pending) {
-    wsSend(p)
+    if (now - p.createdAt <= _PENDING_TTL_MS) wsSend(p.payload)
   }
 }
 
@@ -340,7 +385,14 @@ export interface ImageData {
 
 function _sendOrQueue(msg: any) {
   if (!_ws || _ws.readyState !== WebSocket.OPEN) {
-    _pendingMessages.push(msg)
+    if (!_QUEUEABLE_WS_TYPES.has(msg.type)) {
+      console.warn(`[WS] Dropped non-queueable offline message: ${msg.type}`)
+      return
+    }
+    const now = Date.now()
+    msg.client_message_id = msg.client_message_id || `${msg.type}-${now}-${Math.random().toString(36).slice(2)}`
+    _pendingMessages.push({ id: msg.client_message_id, createdAt: now, payload: msg })
+    while (_pendingMessages.length > _PENDING_MAX) _pendingMessages.shift()
     console.log(`[WS] Queued message (offline), pending=${_pendingMessages.length}`)
     return
   }

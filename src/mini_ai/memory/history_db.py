@@ -98,18 +98,16 @@ class HistoryDB:
         if self._async_write:
             from ..config import DATABASE
             db_config = DATABASE.get("history", {})
-            self._async_writer = AsyncDBWriter(self.db_path)
-            
-            # 应用配置参数
-            if db_config.get("batch_size"):
-                self._async_writer.BATCH_SIZE_THRESHOLD = db_config["batch_size"]
-            if db_config.get("batch_timeout"):
-                self._async_writer.BATCH_TIME_WINDOW = db_config["batch_timeout"]
-            if db_config.get("queue_size"):
-                self._async_writer.QUEUE_MAX_SIZE = db_config["queue_size"]
-            if db_config.get("retry_count"):
-                self._async_writer.MAX_RETRY_COUNT = db_config["retry_count"]
-            
+            self._async_writer = AsyncDBWriter(
+                self.db_path,
+                batch_size_threshold=db_config.get("batch_size"),
+                batch_time_window=db_config.get("batch_timeout"),
+                queue_max_size=db_config.get("queue_size"),
+                max_retry_count=db_config.get("retry_count"),
+                submit_timeout=db_config.get("submit_timeout", 1.0),
+                on_full=db_config.get("on_full", "block"),
+            )
+
             self._async_writer.start()
         
         atexit.register(self.close)
