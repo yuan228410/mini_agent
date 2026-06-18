@@ -77,6 +77,55 @@ export type WsEventName =
   | 'workflow_start' | 'task_start' | 'task_end' | 'workflow_end'
   | 'agent_start'
 
+export type WorkflowTaskStatus = 'pending' | 'running' | 'done' | 'failed' | 'skipped'
+export type WorkflowStatus = 'idle' | 'running' | 'done' | 'failed'
+
+export interface WorkflowTaskInfo {
+  id: string
+  agent: string
+  prompt: string
+  depends_on: string[]
+}
+
+export interface WorkflowTaskState extends WorkflowTaskInfo {
+  status: WorkflowTaskStatus
+  result?: string
+}
+
+export interface WorkflowState {
+  status: WorkflowStatus
+  tasks: Record<string, WorkflowTaskState>
+  elapsed?: number
+  completed?: number
+  failed?: number
+  total?: number
+}
+
+export interface WorkflowStartData extends WsBaseData {
+  tasks: WorkflowTaskInfo[]
+  total: number
+}
+
+export interface WorkflowTaskStartData extends WsBaseData {
+  id: string
+  agent: string
+  prompt: string
+}
+
+export interface WorkflowTaskEndData extends WsBaseData {
+  id: string
+  status: WorkflowTaskStatus
+  result_preview?: string
+  error?: string
+}
+
+export interface WorkflowEndData extends WsBaseData {
+  elapsed?: number
+  completed?: number
+  failed?: number
+  total?: number
+}
+
 export interface WsBaseData {
   session_id?: string
   agent_id?: string
@@ -109,10 +158,10 @@ export type WsEvent =
   | { event: 'inbox_message'; data: WsBaseData & { to: string; from: string; count: number } }
   | { event: 'info'; data: WsBaseData & { message: string } }
   | { event: 'error'; data: WsBaseData & { error: string } }
-  | { event: 'workflow_start'; data: WsBaseData & { tasks: any[]; total: number } }
-  | { event: 'task_start'; data: WsBaseData & { id: string; agent: string; prompt: string } }
-  | { event: 'task_end'; data: WsBaseData & { id: string; status: string; result_preview?: string; error?: string } }
-  | { event: 'workflow_end'; data: WsBaseData & { elapsed?: number; completed?: number; failed?: number; total?: number } }
+  | { event: 'workflow_start'; data: WorkflowStartData }
+  | { event: 'task_start'; data: WorkflowTaskStartData }
+  | { event: 'task_end'; data: WorkflowTaskEndData }
+  | { event: 'workflow_end'; data: WorkflowEndData }
   | { event: 'agent_start'; data: WsBaseData & { agent_type: string; task?: string; role?: string; max_turns?: number } }
 
 export interface ModelInfo {

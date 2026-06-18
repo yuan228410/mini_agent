@@ -6,7 +6,7 @@ import {
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, exportSession,
   getSystemPrompt, getTodos, getTools,
-  type WsEvent, type HistoryMessage, type ImageData,
+  type WsEvent, type HistoryMessage, type ImageData, type WorkflowState, type WorkflowTaskStatus,
 } from '../api'
 import MessageItem from './MessageItem.vue'
 import InputBar, { type ImageFile } from './InputBar.vue'
@@ -27,7 +27,7 @@ interface Message {
   timestamp?: string
   teammate?: string
   teammateColor?: string
-  workflow?: { status: string; tasks: Record<string, { status: string; agent: string; prompt?: string; result?: string }> }
+  workflow?: WorkflowState
   main?: boolean
   kind?: 'chat' | 'plan_discussion' | 'plan_artifact' | 'plan_interaction' | 'system_notice'
   plan?: PlanArtifact
@@ -52,23 +52,6 @@ interface SessionState {
   _seenEvents: Set<string>
   // 最近一次流式事件时间（按会话隔离）
   _lastWsEventTime: number
-}
-
-// 工作流状态定义
-interface WorkflowState {
-  status: 'idle' | 'running' | 'done' | 'failed'
-  tasks: Record<string, {
-    id: string
-    agent: string
-    status: 'pending' | 'running' | 'done' | 'failed'
-    prompt?: string
-    result?: string
-    depends_on?: string[]
-  }>
-  elapsed?: number
-  completed?: number
-  failed?: number
-  total?: number
 }
 
 const SESSION_KEY = 'mini-ai-session-id'
@@ -1000,7 +983,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           s.workflowState.status = 'running'
           s.workflowState.total = total
         }
-        tasks.forEach((t: any) => {
+        tasks.forEach((t) => {
           s.workflowState!.tasks[t.id] = {
             id: t.id,
             agent: t.agent,
@@ -1012,7 +995,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
         console.log('[ChatView] workflow_start: workflowState updated:', s.workflowState)
 
         let content = `🔀 **工作流启动** (${total} 个任务)\n\n`
-        tasks.forEach((t: any) => {
+        tasks.forEach((t) => {
           const deps = t.depends_on && t.depends_on.length > 0 ? ` ← ${t.depends_on.join(', ')}` : ''
           content += `- **${t.id}** (${t.agent})${deps}\n`
         })
@@ -1021,7 +1004,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           content,
           timestamp: _localTs(),
           streaming: false,
-          workflow: { status: 'running', tasks: {} }
+          workflow: { status: 'running', tasks: {} as WorkflowState['tasks'] }
         })
         _updateUI(s)
         // 通知 WorkflowPanel
@@ -1037,7 +1020,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
         // 更新会话级别工作流状态
         if (s.workflowState) {
           if (!s.workflowState.tasks[taskId]) {
-            s.workflowState.tasks[taskId] = { id: taskId, agent, status: 'running', prompt }
+            s.workflowState.tasks[taskId] = { id: taskId, agent, status: 'running', prompt, depends_on: [] }
           } else {
             s.workflowState.tasks[taskId].status = 'running'
           }
@@ -1046,9 +1029,17 @@ function _processEvent(s: SessionState, event: WsEvent) {
         // 更新工作流消息
         const wfMsg = s.messages.slice().reverse().find(m => m.workflow)
         if (wfMsg && wfMsg.workflow) {
-          wfMsg.workflow.tasks[taskId] = { status: 'running', agent }
-          const runningCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'running').length
-          const doneCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'done').length
+          const existing = wfMsg.workflow.tasks[taskId]
+          wfMsg.workflow.tasks[taskId] = {
+            id: taskId,
+            agent,
+            status: 'running',
+            prompt: existing?.prompt || prompt,
+            depends_on: existing?.depends_on || [],
+            result: existing?.result,
+          }
+          const runningCount = Object.values(wfMsg.workflow.tasks).filter((t) => t.status === 'running').length
+          const doneCount = Object.values(wfMsg.workflow.tasks).filter((t) => t.status === 'done').length
           wfMsg.workflow.status = runningCount > 0 ? 'running' : 'idle'
           _updateUI(s)
         }
@@ -1069,33 +1060,39 @@ function _processEvent(s: SessionState, event: WsEvent) {
       {
         const taskId = event.data.id || ''
         const status = event.data.status || 'done'
+        const terminalStatus: WorkflowTaskStatus = status === 'done' || status === 'skipped' ? status : 'failed'
         const result = event.data.result_preview || event.data.error || ''
 
         // 更新会话级别工作流状态
         if (s.workflowState && s.workflowState.tasks[taskId]) {
-          s.workflowState.tasks[taskId].status = status === 'done' ? 'done' : 'failed'
+          s.workflowState.tasks[taskId].status = terminalStatus
           s.workflowState.tasks[taskId].result = result
         }
 
         // 更新工作流消息
         const wfMsg = s.messages.slice().reverse().find(m => m.workflow)
         if (wfMsg && wfMsg.workflow) {
+          const existing = wfMsg.workflow.tasks[taskId]
           wfMsg.workflow.tasks[taskId] = {
-            status,
-            agent: wfMsg.workflow.tasks[taskId]?.agent || '',
+            id: taskId,
+            agent: existing?.agent || '',
+            status: terminalStatus,
+            prompt: existing?.prompt || '',
+            depends_on: existing?.depends_on || [],
             result: result.slice(0, 100)
           }
-          const runningCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'running').length
-          const doneCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'done').length
-          const failedCount = Object.values(wfMsg.workflow.tasks).filter((t: any) => t.status === 'failed').length
+          const runningCount = Object.values(wfMsg.workflow.tasks).filter((t) => t.status === 'running').length
+          const doneCount = Object.values(wfMsg.workflow.tasks).filter((t) => t.status === 'done').length
+          const failedCount = Object.values(wfMsg.workflow.tasks).filter((t) => t.status === 'failed').length
           wfMsg.workflow.status = runningCount > 0 ? 'running' : (failedCount > 0 ? 'failed' : 'done')
           _updateUI(s)
         }
         // 添加任务完成通知
-        const icon = status === 'done' ? '✅' : '❌'
+        const icon = terminalStatus === 'done' ? '✅' : terminalStatus === 'skipped' ? '⏭' : '❌'
+        const statusText = terminalStatus === 'done' ? '完成' : terminalStatus === 'skipped' ? '跳过' : '失败'
         s.messages.push({
           role: 'assistant',
-          content: `${icon} **${taskId}** ${status === 'done' ? '完成' : '失败'}${result ? `: ${result.slice(0, 100)}${result.length > 100 ? '...' : ''}` : ''}`,
+          content: `${icon} **${taskId}** ${statusText}${result ? `: ${result.slice(0, 100)}${result.length > 100 ? '...' : ''}` : ''}`,
           timestamp: _localTs(),
           streaming: false,
           teammate: `wf:${taskId}`,

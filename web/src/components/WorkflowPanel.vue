@@ -1,19 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
+import type { WorkflowEndData, WorkflowStartData, WorkflowState, WorkflowTaskEndData, WorkflowTaskStartData, WorkflowTaskStatus } from '../api'
 
-interface TaskInfo {
-  id: string
-  agent: string
-  status: 'pending' | 'running' | 'done' | 'failed'
-  prompt?: string
-  result?: string
-  depends_on?: string[]  // 依赖的任务ID列表
-}
+type TaskInfo = WorkflowState['tasks'][string]
 
 interface GraphNode {
   id: string
   agent: string
-  status: 'pending' | 'running' | 'done' | 'failed'
+  status: WorkflowTaskStatus
   prompt?: string
   x: number
   y: number
@@ -23,16 +17,7 @@ interface GraphNode {
 interface GraphEdge {
   from: string
   to: string
-  status: 'pending' | 'running' | 'done' | 'failed'  // 连线状态取决于源节点
-}
-
-interface WorkflowState {
-  status: 'idle' | 'running' | 'done' | 'failed'
-  tasks: Record<string, TaskInfo>
-  elapsed?: number
-  completed?: number
-  failed?: number
-  total?: number
+  status: WorkflowTaskStatus  // 连线状态取决于源节点
 }
 
 const props = defineProps<{
@@ -203,11 +188,11 @@ const pendingTasks = computed(() =>
   Object.values(workflowState.value.tasks)
     .filter(t => t.status === 'pending')
 )
-const doneTasks = computed(() => 
+const doneTasks = computed(() =>
   Object.values(workflowState.value.tasks)
-    .filter(t => t.status === 'done')
+    .filter(t => t.status === 'done' || t.status === 'skipped')
 )
-const failedTasks = computed(() => 
+const failedTasks = computed(() =>
   Object.values(workflowState.value.tasks)
     .filter(t => t.status === 'failed')
 )
@@ -218,7 +203,13 @@ const progress = computed(() => {
   return Math.round((done / total) * 100)
 })
 
-function handleWorkflowEvent(event: CustomEvent) {
+type WorkflowPanelEvent =
+  | { event: 'workflow_start'; data: WorkflowStartData }
+  | { event: 'task_start'; data: WorkflowTaskStartData }
+  | { event: 'task_end'; data: WorkflowTaskEndData }
+  | { event: 'workflow_end'; data: WorkflowEndData }
+
+function handleWorkflowEvent(event: CustomEvent<WorkflowPanelEvent>) {
   const detail = event.detail
   if (!detail || !detail.event) return
 
@@ -228,10 +219,9 @@ function handleWorkflowEvent(event: CustomEvent) {
       localState.value = {
         status: 'running',
         tasks: {},
-        total: detail.data?.total || detail.data?.tasks?.length || 0
+        total: detail.data.total || detail.data.tasks.length || 0
       }
-      const tasks = detail.data?.tasks || []
-      tasks.forEach((t: any) => {
+      detail.data.tasks.forEach((t) => {
         localState.value.tasks[t.id] = {
           id: t.id,
           agent: t.agent,
@@ -243,13 +233,15 @@ function handleWorkflowEvent(event: CustomEvent) {
       break
 
     case 'task_start':
-      if (detail.data?.id) {
+      if (detail.data.id) {
         const taskId = detail.data.id
         if (!localState.value.tasks[taskId]) {
           localState.value.tasks[taskId] = {
             id: taskId,
             agent: detail.data.agent || '',
-            status: 'running'
+            status: 'running',
+            prompt: detail.data.prompt || '',
+            depends_on: []
           }
         } else {
           localState.value.tasks[taskId].status = 'running'
@@ -258,20 +250,20 @@ function handleWorkflowEvent(event: CustomEvent) {
       break
 
     case 'task_end':
-      if (detail.data?.id) {
+      if (detail.data.id) {
         const taskId = detail.data.id
         if (localState.value.tasks[taskId]) {
-          localState.value.tasks[taskId].status = detail.data.status === 'done' ? 'done' : 'failed'
+          localState.value.tasks[taskId].status = detail.data.status === 'done' || detail.data.status === 'skipped' ? detail.data.status : 'failed'
           localState.value.tasks[taskId].result = detail.data.result_preview || detail.data.error
         }
       }
       break
 
     case 'workflow_end':
-      localState.value.status = detail.data?.failed > 0 ? 'failed' : 'done'
-      localState.value.elapsed = detail.data?.elapsed
-      localState.value.completed = detail.data?.completed
-      localState.value.failed = detail.data?.failed
+      localState.value.status = (detail.data.failed || 0) > 0 ? 'failed' : 'done'
+      localState.value.elapsed = detail.data.elapsed
+      localState.value.completed = detail.data.completed
+      localState.value.failed = detail.data.failed
       // 确保所有未完成的任务都标记为最终状态
       Object.keys(localState.value.tasks).forEach(taskId => {
         const task = localState.value.tasks[taskId]
@@ -306,27 +298,30 @@ function getAgentIcon(agent: string): string {
   return '🤖'
 }
 
-function statusGradient(s: string): string {
+function statusGradient(s: WorkflowTaskStatus): string {
   if (s === 'running') return 'linear-gradient(135deg, #2196f3 0%, #42a5f5 100%)'
   if (s === 'pending') return 'linear-gradient(135deg, #ff9800 0%, #ffb74d 100%)'
   if (s === 'done') return 'linear-gradient(135deg, #4caf50 0%, #81c784 100%)'
   if (s === 'failed') return 'linear-gradient(135deg, #f44336 0%, #e57373 100%)'
+  if (s === 'skipped') return 'linear-gradient(135deg, #9e9e9e 0%, #bdbdbd 100%)'
   return 'linear-gradient(135deg, #9e9e9e 0%, #bdbdbd 100%)'
 }
 
-function statusIcon(s: string): string {
+function statusIcon(s: WorkflowTaskStatus): string {
   if (s === 'running') return '⚡'
   if (s === 'pending') return '⏳'
   if (s === 'done') return '✓'
   if (s === 'failed') return '✗'
+  if (s === 'skipped') return '⏭'
   return '○'
 }
 
-function statusLabel(s: string) {
+function statusLabel(s: WorkflowTaskStatus) {
   if (s === 'running') return '执行中'
   if (s === 'pending') return '等待中'
   if (s === 'done') return '已完成'
   if (s === 'failed') return '失败'
+  if (s === 'skipped') return '已跳过'
   return s
 }
 
@@ -492,7 +487,7 @@ onUnmounted(() => {
               <span class="section-count success">{{ doneTasks.length }}</span>
             </div>
             <div class="task-grid">
-              <div v-for="task in doneTasks" :key="task.id" class="task-card done" @click="toggleExpand(task.id)">
+              <div v-for="task in doneTasks" :key="task.id" :class="['task-card', task.status]" @click="toggleExpand(task.id)">
                 <div class="task-status-bar" :style="{ background: statusGradient(task.status) }"></div>
                 <div class="task-body">
                   <div class="task-header">
@@ -617,11 +612,15 @@ onUnmounted(() => {
                class="graph-canvas">
             <!-- 定义箭头标记 -->
             <defs>
-              <marker id="arrowhead" markerWidth="10" markerHeight="10" 
+              <marker id="arrowhead" markerWidth="10" markerHeight="10"
                       refX="9" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill="#9e9e9e" />
               </marker>
-              <marker id="arrowhead-running" markerWidth="10" markerHeight="10" 
+              <marker id="arrowhead-pending" markerWidth="10" markerHeight="10"
+                      refX="9" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#ff9800" />
+              </marker>
+              <marker id="arrowhead-running" markerWidth="10" markerHeight="10"
                       refX="9" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill="#2196f3" />
               </marker>
@@ -629,9 +628,13 @@ onUnmounted(() => {
                       refX="9" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill="#4caf50" />
               </marker>
-              <marker id="arrowhead-failed" markerWidth="10" markerHeight="10" 
+              <marker id="arrowhead-failed" markerWidth="10" markerHeight="10"
                       refX="9" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill="#f44336" />
+              </marker>
+              <marker id="arrowhead-skipped" markerWidth="10" markerHeight="10"
+                      refX="9" refY="3" orient="auto">
+                <path d="M0,0 L0,6 L9,3 z" fill="#9e9e9e" />
               </marker>
             </defs>
             
@@ -1082,6 +1085,12 @@ onUnmounted(() => {
   opacity: 0.85;
 }
 
+.task-card.skipped {
+  opacity: 0.75;
+  border-style: dashed;
+  border-color: #9e9e9e;
+}
+
 .task-card.failed {
   border-color: #f44336;
 }
@@ -1450,6 +1459,11 @@ onUnmounted(() => {
   stroke-dasharray: 5, 5;
 }
 
+.graph-edge.skipped {
+  stroke: #9e9e9e;
+  stroke-dasharray: 5, 5;
+}
+
 .graph-node {
   cursor: pointer;
 }
@@ -1486,6 +1500,11 @@ onUnmounted(() => {
   stroke-width: 2;
 }
 
+.node-bg.skipped {
+  stroke: #9e9e9e;
+  stroke-dasharray: 3, 3;
+}
+
 .node-status-bar {
   transition: fill 0.3s ease;
 }
@@ -1510,6 +1529,10 @@ onUnmounted(() => {
 
 .node-status-bar.failed {
   fill: #f44336;
+}
+
+.node-status-bar.skipped {
+  fill: #9e9e9e;
 }
 
 .node-icon {
