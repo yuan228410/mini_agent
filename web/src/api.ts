@@ -322,6 +322,49 @@ export interface WorkspacesResponse {
   active: string
 }
 
+export interface ApiMutationResponse {
+  status?: 'ok'
+  message?: string
+  error?: string
+}
+
+export interface DeleteSessionResponse extends ApiMutationResponse {
+  status?: 'ok'
+}
+
+export interface BatchDeleteSessionsResponse extends ApiMutationResponse {
+  deleted: number
+}
+
+export interface RenameSessionResponse extends ApiMutationResponse {
+  name?: string
+}
+
+export interface WorkspaceMutationResponse extends ApiMutationResponse {
+  project_path?: string
+}
+
+interface SessionRequestBody extends UsernamePayload {
+  workspace?: string
+}
+
+interface SessionIdRequestBody extends SessionRequestBody {
+  session_id: string
+}
+
+interface BatchDeleteSessionsRequestBody extends SessionRequestBody {
+  session_ids: string[]
+}
+
+interface RenameSessionRequestBody extends SessionIdRequestBody {
+  name: string
+}
+
+interface CreateWorkspaceRequestBody extends UsernamePayload {
+  name: string
+  project_path?: string
+}
+
 function _username(): string {
   return getUsername() || 'default'
 }
@@ -769,7 +812,7 @@ export function closeWs() {
 // ── Session APIs ──
 
 export async function createSession(workspace?: string): Promise<{ session_id: string }> {
-  const body: any = { ..._usernameBody() }
+  const body: SessionRequestBody = { ..._usernameBody() }
   if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/session', {
     method: 'POST',
@@ -787,8 +830,8 @@ export async function getSessions(workspace?: string): Promise<SessionsResponse>
   return resp.json()
 }
 
-export async function deleteSession(sessionId: string, workspace?: string): Promise<any> {
-  const body: any = { session_id: sessionId, ..._usernameBody() }
+export async function deleteSession(sessionId: string, workspace?: string): Promise<DeleteSessionResponse> {
+  const body: SessionIdRequestBody = { session_id: sessionId, ..._usernameBody() }
   if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/session', {
     method: 'DELETE',
@@ -798,8 +841,8 @@ export async function deleteSession(sessionId: string, workspace?: string): Prom
   return resp.json()
 }
 
-export async function batchDeleteSessions(sessionIds: string[], workspace?: string): Promise<any> {
-  const body: any = { session_ids: sessionIds, ..._usernameBody() }
+export async function batchDeleteSessions(sessionIds: string[], workspace?: string): Promise<BatchDeleteSessionsResponse> {
+  const body: BatchDeleteSessionsRequestBody = { session_ids: sessionIds, ..._usernameBody() }
   if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/sessions/batch_delete', {
     method: 'POST',
@@ -809,8 +852,8 @@ export async function batchDeleteSessions(sessionIds: string[], workspace?: stri
   return resp.json()
 }
 
-export async function renameSession(sessionId: string, name: string, workspace?: string): Promise<any> {
-  const body: any = { session_id: sessionId, name, ..._usernameBody() }
+export async function renameSession(sessionId: string, name: string, workspace?: string): Promise<RenameSessionResponse> {
+  const body: RenameSessionRequestBody = { session_id: sessionId, name, ..._usernameBody() }
   if (workspace) body.workspace = workspace
   const resp = await _fetch('/api/session/rename', {
     method: 'PATCH',
@@ -841,8 +884,8 @@ export async function getWorkspaces(): Promise<WorkspacesResponse> {
   return resp.json()
 }
 
-export async function createWorkspace(name: string, projectPath?: string): Promise<any> {
-  const body: any = { name, ..._usernameBody() }
+export async function createWorkspace(name: string, projectPath?: string): Promise<WorkspaceMutationResponse> {
+  const body: CreateWorkspaceRequestBody = { name, ..._usernameBody() }
   if (projectPath) body.project_path = projectPath
   const resp = await _fetch('/api/workspaces', {
     method: 'POST',
@@ -852,7 +895,7 @@ export async function createWorkspace(name: string, projectPath?: string): Promi
   return resp.json()
 }
 
-export async function addWorkspace(path: string): Promise<any> {
+export async function addWorkspace(path: string): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch('/api/workspaces/add', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -861,7 +904,7 @@ export async function addWorkspace(path: string): Promise<any> {
   return resp.json()
 }
 
-export async function switchWorkspace(name: string): Promise<any> {
+export async function switchWorkspace(name: string): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch('/api/workspaces/switch', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -870,7 +913,7 @@ export async function switchWorkspace(name: string): Promise<any> {
   return resp.json()
 }
 
-export async function removeWorkspace(name: string, deleteData: boolean = false): Promise<any> {
+export async function removeWorkspace(name: string, deleteData: boolean = false): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch(`/api/workspaces/${encodeURIComponent(name)}?delete_data=${deleteData}&username=${encodeURIComponent(_username())}`, {
     method: 'DELETE',
   })
@@ -882,7 +925,7 @@ export async function listRemovedWorkspaces(): Promise<{ removed: RemovedWorkspa
   return resp.json()
 }
 
-export async function restoreWorkspace(name: string): Promise<any> {
+export async function restoreWorkspace(name: string): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch('/api/workspaces/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -891,7 +934,7 @@ export async function restoreWorkspace(name: string): Promise<any> {
   return resp.json()
 }
 
-export async function deleteRemovedWorkspace(name: string): Promise<any> {
+export async function deleteRemovedWorkspace(name: string): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch(`/api/workspaces/removed/${encodeURIComponent(name)}?username=${encodeURIComponent(_username())}`, {
     method: 'DELETE',
   })

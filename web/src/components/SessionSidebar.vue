@@ -57,7 +57,7 @@ async function loadWorkspaces() {
     const resp = await getWorkspaces()
     workspaces.value = resp.workspaces || []
     // 如果 activeWorkspace 不在列表中，切回 default
-    if (activeWorkspace.value && !workspaces.value.some((w: any) => w.name === activeWorkspace.value)) {
+    if (activeWorkspace.value && !workspaces.value.some((w) => w.name === activeWorkspace.value)) {
       activeWorkspace.value = 'default'
       localStorage.setItem(WORKSPACE_KEY, 'default')
       emit('workspace-change', 'default')
