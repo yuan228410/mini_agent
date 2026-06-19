@@ -152,7 +152,7 @@ class SessionManager:
         """兼容旧调用；新代码应使用 get_plan_state/is_planning。"""
         return self.is_planning(key)
 
-    def set_last_usage(self, key: str, usage: dict):
+    def set_last_usage(self, key: str, usage: UsageDict):
         with self._lock:
             s = self._sessions.get(key)
             if s:

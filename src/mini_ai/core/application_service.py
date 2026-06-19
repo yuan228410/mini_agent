@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import threading
 from dataclasses import dataclass
-from typing import Any
 
 from ..config import MODEL_CONFIG, STREAMING, RequestContext
 from ..llm import chat as llm_chat, get_usage, reset_usage
@@ -18,7 +17,7 @@ from ..utils import now_ts
 from .display_protocol import DisplayProtocol
 from .persister import HistoryPersister
 from .runtime_context import SessionRuntimeContext
-from .runtime_types import HistoryDBProtocol, MessageBusProtocol, MessageDict, PlanStateStoreProtocol, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol
+from .runtime_types import HistoryDBProtocol, MessageBusProtocol, MessageDict, PlanStateStoreProtocol, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol, UsageDict
 
 
 @dataclass
@@ -39,7 +38,7 @@ class RunTurnOptions:
 @dataclass
 class RunTurnResult:
     message: MessageDict | None
-    usage: dict[str, Any]
+    usage: UsageDict
     raw_plan_text: str | None = None
 
 

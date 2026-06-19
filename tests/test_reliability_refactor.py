@@ -904,3 +904,22 @@ def test_tool_modules_use_explicit_argument_and_definition_aliases():
         team_tools._dismiss,
     ):
         assert typing.get_type_hints(fn)["args"] == ToolArgs
+
+
+def test_provider_usage_uses_explicit_usage_aliases():
+    import typing
+    from mini_ai.core.application_service import RunTurnResult
+    from mini_ai.core.runtime_types import UsageDict
+    from mini_ai.llm import base
+    from mini_ai.llm.provider_types import ProviderUsage
+    from mini_ai.runner.executor import ToolExecutor
+    from mini_ai.web.session_manager import SessionManager, SessionState
+
+    assert typing.get_type_hints(base)["_global_usage"] == UsageDict
+    assert typing.get_type_hints(base.get_usage)["return"] == UsageDict
+    assert typing.get_type_hints(base.get_global_usage)["return"] == UsageDict
+    assert typing.get_type_hints(RunTurnResult)["usage"] == UsageDict
+    assert typing.get_type_hints(SessionState)["last_usage"] == UsageDict
+    assert typing.get_type_hints(SessionManager.set_last_usage)["usage"] == UsageDict
+    assert typing.get_type_hints(ToolExecutor._call_llm_stream)
+    assert ProviderUsage == UsageDict

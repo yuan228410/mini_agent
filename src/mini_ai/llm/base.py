@@ -5,7 +5,7 @@ import requests
 
 from ..config import MODEL_CONFIG
 from ..core.messages import to_provider_messages
-from ..core.runtime_types import MessageDict
+from ..core.runtime_types import MessageDict, UsageDict
 
 
 def get_config(ctx=None):
@@ -152,12 +152,12 @@ def estimate_messages_tokens(messages: list[MessageDict]) -> int:
 # 最终调用 commit_usage() 原子提交到全局。
 
 _global_usage_lock = threading.Lock()
-_global_usage: dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+_global_usage: UsageDict = {"prompt_tokens": 0, "completion_tokens": 0}
 
 # 线程局部可变 usage（供 openai.py/anthropic.py 在单次 LLM 调用中累积）
 _local = threading.local()
 
-def get_usage() -> dict:
+def get_usage() -> UsageDict:
     """返回线程局部 usage（可变引用，供 LLM 层累积）"""
     if not hasattr(_local, "last_usage"):
         _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
@@ -179,7 +179,7 @@ def commit_usage():
         _global_usage["completion_tokens"] += _local.last_usage.get("completion_tokens", 0)
     _local.last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
-def get_global_usage() -> dict:
+def get_global_usage() -> UsageDict:
     """返回全局 usage 快照（供前端/WebDisplay 使用，线程安全）"""
     with _global_usage_lock:
         return dict(_global_usage)

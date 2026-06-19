@@ -12,7 +12,7 @@ from typing import Callable
 from ..logger import logger
 from ..utils import now_ts
 from ..core.display_protocol import DisplayProtocol
-from ..core.runtime_types import MessageDict, RequestContextProtocol, ToolDefinition
+from ..core.runtime_types import MessageDict, RequestContextProtocol, ToolDefinition, UsageDict
 
 class ToolExecutor:
     """工具执行器
@@ -130,7 +130,7 @@ class ToolExecutor:
             
             msg = None
             thinking_seen = False
-            last_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+            last_usage: UsageDict = {"prompt_tokens": 0, "completion_tokens": 0}
             stream_error = None
             stream_overflow = False
             

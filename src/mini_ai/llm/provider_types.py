@@ -8,11 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..core.runtime_types import MessageDict, ToolDefinition
+from ..core.runtime_types import MessageDict, ToolDefinition, UsageDict
 
 ProviderPayload = dict[str, Any]
 ProviderMessage = MessageDict
 ProviderToolDefinition = ToolDefinition
 ProviderStreamChunk = dict[str, Any]
+ProviderUsage = UsageDict
 ToolCallBuffer = dict[str, Any]
 AnthropicContentBlock = dict[str, Any]
