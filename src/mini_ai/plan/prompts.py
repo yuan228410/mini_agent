@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from .schema import PlanArtifact
+from .schema import PlanArtifact, PlanArtifactDict
 
 
 PLAN_MODE_INSTRUCTION = """你现在处于计划模式。目标是和用户充分讨论方案，而不是执行修改。
@@ -70,7 +70,7 @@ PLAN_MODE_INSTRUCTION = """你现在处于计划模式。目标是和用户充�
 """
 
 
-def build_plan_user_message(user_text: str, current_plan: dict | None = None, selected_option_id: str | None = None) -> str:
+def build_plan_user_message(user_text: str, current_plan: PlanArtifactDict | None = None, selected_option_id: str | None = None) -> str:
     parts = [PLAN_MODE_INSTRUCTION]
     if current_plan:
         parts.append("当前计划产物：\n```json\n" + json.dumps(current_plan, ensure_ascii=False, indent=2) + "\n```")
@@ -80,7 +80,7 @@ def build_plan_user_message(user_text: str, current_plan: dict | None = None, se
     return "\n\n".join(parts)
 
 
-def build_execution_instruction(plan: PlanArtifact | dict) -> str:
+def build_execution_instruction(plan: PlanArtifact | PlanArtifactDict) -> str:
     if isinstance(plan, PlanArtifact):
         payload = plan.to_dict()
     else:

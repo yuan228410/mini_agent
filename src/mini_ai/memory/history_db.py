@@ -22,6 +22,7 @@ from .history_types import (
     HistorySessionSummary,
     HistoryStorageRow,
 )
+from ..core.runtime_types import PlanStateValue
 
 
 def _process_multimodal_content(content: str | list[Any], metadata: str = "") -> tuple[str, str]:
@@ -625,7 +626,7 @@ class HistoryDB:
                 pass
         return plans
 
-    def mark_plan_status(self, workspace: str, session_id: str, plan_id: str, status: str) -> None:
+    def mark_plan_status(self, workspace: str, session_id: str, plan_id: str, status: PlanStateValue) -> None:
         with self._lock:
             self._ensure_conn()
             with self._conn:

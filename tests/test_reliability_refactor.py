@@ -723,3 +723,42 @@ def test_history_persistence_uses_explicit_boundary_types():
     assert typing.get_type_hints(AsyncDBWriter.get_stats)["return"] == HistoryAsyncStats
     assert pool_hints["return"] == HistoryPoolStats
     assert HistoryRuntimeMessage == MessageDict
+
+
+def test_plan_artifacts_use_explicit_serialization_aliases():
+    import typing
+    from mini_ai.core.runtime_types import HistoryDBProtocol, PlanArtifactDict, PlanStateValue
+    from mini_ai.plan import artifact_parser, prompts
+    from mini_ai.plan.schema import PlanArtifact, PlanSessionState, PlanSessionStateDict
+    from mini_ai.plan.service import PlanService
+    from mini_ai.plan.store import PlanStore
+
+    artifact_to_dict = typing.get_type_hints(PlanArtifact.to_dict)
+    artifact_from_dict = typing.get_type_hints(PlanArtifact.from_dict)
+    session_to_dict = typing.get_type_hints(PlanSessionState.to_dict)
+    store_init = typing.get_type_hints(PlanStore.__init__)
+    store_current = typing.get_type_hints(PlanStore.current)
+    store_list = typing.get_type_hints(PlanStore.list)
+    store_mark = typing.get_type_hints(PlanStore.mark_status)
+    parser_hints = typing.get_type_hints(artifact_parser.parse_plan_artifact)
+    prompt_hints = typing.get_type_hints(prompts.build_plan_user_message)
+    instruction_hints = typing.get_type_hints(prompts.build_execution_instruction)
+    service_instruction = typing.get_type_hints(PlanService.execution_instruction)
+    service_todos = typing.get_type_hints(PlanService.seed_execution_todos)
+    service_fallback = typing.get_type_hints(PlanService._fallback_artifact)
+    history_protocol = typing.get_type_hints(HistoryDBProtocol.save_plan)
+
+    assert artifact_to_dict["return"] == PlanArtifactDict
+    assert artifact_from_dict["data"] == PlanArtifactDict | None
+    assert session_to_dict["return"] is PlanSessionStateDict
+    assert store_init["history_db"] is HistoryDBProtocol
+    assert store_current["return"] == PlanArtifactDict | None
+    assert store_list["return"] == list[PlanArtifactDict]
+    assert store_mark["status"] == PlanStateValue
+    assert parser_hints["previous"] == PlanArtifactDict | None
+    assert prompt_hints["current_plan"] == PlanArtifactDict | None
+    assert instruction_hints["plan"] == PlanArtifact | PlanArtifactDict
+    assert service_instruction["artifact"] == PlanArtifact | PlanArtifactDict
+    assert service_todos["artifact"] == PlanArtifact | PlanArtifactDict
+    assert service_fallback["current"] == PlanArtifactDict | None
+    assert history_protocol["artifact"] == PlanArtifactDict

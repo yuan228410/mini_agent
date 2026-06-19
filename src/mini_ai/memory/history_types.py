@@ -8,11 +8,11 @@ from __future__ import annotations
 
 from typing import Any, TypeAlias, TypedDict
 
-from ..core.runtime_types import MessageDict, MetadataDict
+from ..core.runtime_types import MessageDict, MetadataDict, PlanArtifactDict
 
 HistoryMetadata: TypeAlias = MetadataDict
 HistoryRuntimeMessage: TypeAlias = MessageDict
-HistoryPlanArtifact: TypeAlias = dict[str, Any]
+HistoryPlanArtifact: TypeAlias = PlanArtifactDict
 HistoryAsyncStats: TypeAlias = dict[str, int | bool]
 
 

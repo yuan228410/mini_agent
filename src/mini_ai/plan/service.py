@@ -3,7 +3,7 @@ from __future__ import annotations
 from ..utils import now_ts
 from .artifact_parser import parse_plan_artifact, strip_artifact_blocks
 from .prompts import build_execution_instruction
-from .schema import PlanArtifact, PlanSessionState, new_plan_id
+from .schema import PlanArtifact, PlanArtifactDict, PlanSessionState, new_plan_id
 from .state_machine import ensure_transition
 
 
@@ -191,10 +191,10 @@ class PlanService:
         sm.set_plan_state(session_key, PlanSessionState(state="cancelled", current_plan=artifact.to_dict() if artifact else None, updated_at=now_ts()))
         self._emit(display, "cancelled", plan=artifact.to_dict() if artifact else None, mode="chat")
 
-    def execution_instruction(self, artifact: PlanArtifact | dict) -> str:
+    def execution_instruction(self, artifact: PlanArtifact | PlanArtifactDict) -> str:
         return build_execution_instruction(artifact)
 
-    def seed_execution_todos(self, *, artifact: PlanArtifact | dict, session_key: str, display=None) -> str:
+    def seed_execution_todos(self, *, artifact: PlanArtifact | PlanArtifactDict, session_key: str, display=None) -> str:
         payload = artifact.to_dict() if isinstance(artifact, PlanArtifact) else artifact
         steps = payload.get("steps") or []
         todos = [
@@ -222,7 +222,7 @@ class PlanService:
             for decision in step.decisions
         )
 
-    def _fallback_artifact(self, current: dict | None, user_text: str, assistant_text: str) -> PlanArtifact:
+    def _fallback_artifact(self, current: PlanArtifactDict | None, user_text: str, assistant_text: str) -> PlanArtifact:
         previous = current or {}
         return PlanArtifact(
             plan_id=previous.get("plan_id") or new_plan_id(),

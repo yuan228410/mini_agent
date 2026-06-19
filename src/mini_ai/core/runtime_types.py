@@ -23,6 +23,8 @@ MetadataDict = dict[str, Any]
 DisplayEventPayload = dict[str, Any]
 DisplayWireEvent = dict[str, Any]
 HistoryContent = str | list[Any]
+PlanArtifactDict = dict[str, Any]
+PlanStateValue = str
 
 
 class SessionComponents(TypedDict, total=False):
@@ -69,6 +71,10 @@ class ToolRegistryProtocol(Protocol):
 class HistoryDBProtocol(Protocol):
     def append(self, workspace: str, session_id: str, role: str, content: HistoryContent, metadata: str = "") -> int | None: ...
     def load_session(self, workspace: str, session_id: str, limit: int = 0) -> list[MessageDict]: ...
+    def save_plan(self, workspace: str, session_id: str, artifact: PlanArtifactDict) -> None: ...
+    def get_current_plan(self, workspace: str, session_id: str) -> PlanArtifactDict | None: ...
+    def list_plans(self, workspace: str, session_id: str) -> list[PlanArtifactDict]: ...
+    def mark_plan_status(self, workspace: str, session_id: str, plan_id: str, status: PlanStateValue) -> None: ...
 
 
 class MemoryStoreProtocol(Protocol):

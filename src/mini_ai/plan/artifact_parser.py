@@ -4,13 +4,13 @@ import json
 import re
 
 from ..utils import now_ts
-from .schema import PlanArtifact, PlanDecision, PlanDecisionOption, PlanOption, PlanStep, new_plan_id
+from .schema import PlanArtifact, PlanArtifactDict, PlanDecision, PlanDecisionOption, PlanOption, PlanStep, new_plan_id
 
 _PLAN_BLOCK_RE = re.compile(r"```plan-artifact\s*(\{[\s\S]*?\})\s*```", re.IGNORECASE)
 _JSON_BLOCK_RE = re.compile(r"```json\s*(\{[\s\S]*?\})\s*```", re.IGNORECASE)
 
 
-def _loads_json_object(text: str) -> dict | None:
+def _loads_json_object(text: str) -> PlanArtifactDict | None:
     stripped = (text or "").strip()
     if not (stripped.startswith("{") and stripped.endswith("}")):
         return None
@@ -21,7 +21,7 @@ def _loads_json_object(text: str) -> dict | None:
     return raw if isinstance(raw, dict) else None
 
 
-def _find_trailing_plan_json(text: str) -> tuple[dict, int, int] | None:
+def _find_trailing_plan_json(text: str) -> tuple[PlanArtifactDict, int, int] | None:
     decoder = json.JSONDecoder()
     for start in [m.start() for m in re.finditer(r"\{", text)][::-1]:
         try:
@@ -48,7 +48,7 @@ def strip_artifact_blocks(text: str) -> str:
     return text.strip()
 
 
-def _looks_like_plan_artifact(raw: dict | None) -> bool:
+def _looks_like_plan_artifact(raw: PlanArtifactDict | None) -> bool:
     if not raw:
         return False
     return bool({"goal", "summary", "steps", "options"} & set(raw.keys()))
@@ -62,7 +62,7 @@ def _as_str_list(value) -> list[str]:
     return [str(value)]
 
 
-def _option(data: dict, idx: int) -> PlanOption:
+def _option(data: PlanArtifactDict, idx: int) -> PlanOption:
     risk = str(data.get("risk_level") or "medium")
     if risk not in {"low", "medium", "high"}:
         risk = "medium"
@@ -78,7 +78,7 @@ def _option(data: dict, idx: int) -> PlanOption:
     )
 
 
-def _decision_option(data: dict, idx: int) -> PlanDecisionOption:
+def _decision_option(data: PlanArtifactDict, idx: int) -> PlanDecisionOption:
     return PlanDecisionOption(
         id=str(data.get("id") or f"choice-{idx + 1}"),
         title=str(data.get("title") or f"选项 {idx + 1}"),
@@ -87,7 +87,7 @@ def _decision_option(data: dict, idx: int) -> PlanDecisionOption:
     )
 
 
-def _decision(data: dict, idx: int) -> PlanDecision:
+def _decision(data: PlanArtifactDict, idx: int) -> PlanDecision:
     return PlanDecision(
         id=str(data.get("id") or f"decision-{idx + 1}"),
         title=str(data.get("title") or f"决策 {idx + 1}"),
@@ -99,7 +99,7 @@ def _decision(data: dict, idx: int) -> PlanDecision:
     )
 
 
-def _step(data: dict, idx: int) -> PlanStep:
+def _step(data: PlanArtifactDict, idx: int) -> PlanStep:
     return PlanStep(
         id=str(data.get("id") or f"step-{idx + 1}"),
         title=str(data.get("title") or f"步骤 {idx + 1}"),
@@ -111,7 +111,7 @@ def _step(data: dict, idx: int) -> PlanStep:
     )
 
 
-def parse_plan_artifact(text: str, *, previous: dict | None = None, goal: str = "") -> PlanArtifact | None:
+def parse_plan_artifact(text: str, *, previous: PlanArtifactDict | None = None, goal: str = "") -> PlanArtifact | None:
     match = _PLAN_BLOCK_RE.search(text) or _JSON_BLOCK_RE.search(text)
     if match:
         try:

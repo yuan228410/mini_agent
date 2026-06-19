@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from typing import Literal
+from typing import Literal, TypedDict
 import uuid
 
+from ..core.runtime_types import PlanArtifactDict as PlanArtifactDict
 from ..utils import now_ts
 
 
@@ -18,6 +19,13 @@ PlanState = Literal[
     "cancelled",
     "superseded",
 ]
+
+class PlanSessionStateDict(TypedDict):
+    state: PlanState
+    current_plan: PlanArtifactDict | None
+    approved_plan: PlanArtifactDict | None
+    selected_option_id: str | None
+    updated_at: str
 
 
 @dataclass
@@ -79,11 +87,11 @@ class PlanArtifact:
     created_at: str = field(default_factory=now_ts)
     updated_at: str = field(default_factory=now_ts)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> PlanArtifactDict:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict | None) -> "PlanArtifact | None":
+    def from_dict(cls, data: PlanArtifactDict | None) -> "PlanArtifact | None":
         if not data:
             return None
         field_names = set(cls.__dataclass_fields__.keys())
@@ -118,12 +126,12 @@ class PlanArtifact:
 @dataclass
 class PlanSessionState:
     state: PlanState = "idle"
-    current_plan: dict | None = None
-    approved_plan: dict | None = None
+    current_plan: PlanArtifactDict | None = None
+    approved_plan: PlanArtifactDict | None = None
     selected_option_id: str | None = None
     updated_at: str = field(default_factory=now_ts)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> PlanSessionStateDict:
         return asdict(self)
 
     @property
