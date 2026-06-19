@@ -6,12 +6,22 @@ const _FETCH_TIMEOUT = 8000
 
 const _origFetch = window.fetch.bind(window)
 
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonObject | JsonArray
+export interface JsonObject { [key: string]: JsonValue | undefined }
+export interface JsonArray extends Array<JsonValue> {}
+
+interface ApiErrorBody extends JsonObject {
+  error?: JsonValue
+  message?: JsonValue
+}
+
 export class ApiError extends Error {
   status: number
-  data: unknown
+  data: JsonValue
   url: string
 
-  constructor(message: string, status: number, data: unknown, url: string) {
+  constructor(message: string, status: number, data: JsonValue, url: string) {
     super(message)
     this.name = 'ApiError'
     this.status = status
@@ -20,10 +30,15 @@ export class ApiError extends Error {
   }
 }
 
-async function _parseErrorBody(resp: Response): Promise<unknown> {
+function _asApiErrorBody(data: JsonValue): ApiErrorBody | null {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null
+  return data as ApiErrorBody
+}
+
+async function _parseErrorBody(resp: Response): Promise<JsonValue> {
   const text = await resp.text().catch(() => '')
   if (!text) return null
-  try { return JSON.parse(text) } catch { return text }
+  try { return JSON.parse(text) as JsonValue } catch { return text }
 }
 
 async function _fetch(url: string, init?: RequestInit & { timeout?: number }): Promise<Response> {
@@ -33,7 +48,7 @@ async function _fetch(url: string, init?: RequestInit & { timeout?: number }): P
     const resp = await _origFetch(url, { ...init, signal: controller.signal })
     if (!resp.ok) {
       const data = await _parseErrorBody(resp)
-      const errorData = data && typeof data === 'object' ? data as { error?: unknown; message?: unknown } : null
+      const errorData = _asApiErrorBody(data)
       const message = typeof data === 'string'
         ? data
         : typeof errorData?.error === 'string'
@@ -211,7 +226,7 @@ export type WsEvent =
   | { event: 'tool_start'; data: WsBaseData & { name: string; args?: string; tool_call_id?: string } }
   | { event: 'tool_result'; data: WsBaseData & { name: string; result: string; elapsed?: number; tool_call_id?: string } }
   | { event: 'todos'; data: WsBaseData & { content: string } }
-  | { event: 'done' | 'complete'; data: WsBaseData & { error?: string; error_context?: unknown } }
+  | { event: 'done' | 'complete'; data: WsBaseData & { error?: string; error_context?: JsonValue } }
   | { event: 'plan_event'; data: WsBaseData & PlanEventData }
   | { event: 'mode_change'; data: WsBaseData & { mode?: string } }
   | { event: 'aborted'; data: WsBaseData & { error?: string } }
@@ -1141,11 +1156,12 @@ export async function getCommands(): Promise<CommandsResponse> {
   return _json(resp)
 }
 
-export interface ToolDefinition {
+export type ToolParameterSchema = JsonObject
+
+export interface ToolDefinition extends JsonObject {
   name?: string
   description?: string
-  parameters?: unknown
-  [key: string]: unknown
+  parameters?: ToolParameterSchema
 }
 
 export interface ToolsResponse {
@@ -1235,52 +1251,52 @@ export interface DisplaySettings {
   tool_detail?: string
 }
 
-export interface CompactorSettings {
+export interface CompactorSettings extends JsonObject {
   context_limit?: number
   keep_recent?: number
   keep_budget_ratio?: number
   early_compact_ratio?: number
   max_cached_summaries?: number
-  [key: string]: unknown
 }
 
-export interface RunnerSettings {
+export interface RunnerSettings extends JsonObject {
   max_turns?: number
   context_usage_limit?: number
-  [key: string]: unknown
 }
 
-export interface PlanSettings {
+export interface PlanSettings extends JsonObject {
   approval?: boolean
-  [key: string]: unknown
 }
 
-export interface ToolSettings {
+export interface ToolSettings extends JsonObject {
   max_result_chars?: number
-  [key: string]: unknown
 }
 
-export interface WebSettings {
+export interface WebSettings extends JsonObject {
   history_limit?: number
-  [key: string]: unknown
 }
 
-export interface LoggingSettings {
+export interface LoggingSettings extends JsonObject {
   level?: string
-  [key: string]: unknown
 }
 
-export interface McpSettings {
+export interface McpSettings extends JsonObject {
   enabled?: boolean
-  servers?: Record<string, McpServerConfig>
+  servers?: Record<string, McpServerConfig & JsonObject>
 }
 
-export interface TeammateSettings {
+export interface TeammateSettings extends JsonObject {
   max_teammates?: number
   max_turns?: number
   idle_timeout?: number
   max_history?: number
-  [key: string]: unknown
+}
+
+export interface TimeoutSettings extends JsonObject {
+  llm?: number
+  tool?: number
+  mcp?: number
+  teammate_idle?: number
 }
 
 export interface SettingsResponse {
@@ -1290,7 +1306,7 @@ export interface SettingsResponse {
   thinking: ThinkingSettings
   display: DisplaySettings
   compactor: CompactorSettings
-  timeouts: Record<string, unknown>
+  timeouts: TimeoutSettings
   runner: RunnerSettings
   plan: PlanSettings
   tool: ToolSettings
@@ -1469,8 +1485,9 @@ export async function exportSession(sessionId: string, workspace?: string, limit
     clearTimeout(timer)
   }
   if (!resp.ok) {
-    const data = await resp.json().catch(() => ({}))
-    throw new Error(data.error || '导出失败')
+    const data = await _parseErrorBody(resp)
+    const errorData = _asApiErrorBody(data)
+    throw new Error(typeof errorData?.error === 'string' ? errorData.error : '导出失败')
   }
   const blob = await resp.blob()
   const url = URL.createObjectURL(blob)
