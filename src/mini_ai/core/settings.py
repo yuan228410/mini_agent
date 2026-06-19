@@ -8,7 +8,17 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from typing import Any
+
+from .runtime_types import (
+    ConfigDict,
+    DatabaseConfigDict,
+    DatabaseHistoryConfigDict,
+    DisplayConfigDict,
+    ModelConfigDict,
+    RunnerConfigDict,
+    TimeoutConfigDict,
+    ToolConfigDict,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,12 +32,12 @@ class ModelSettings:
     max_tokens: int | None = None
     top_p: float | None = None
     reasoning_effort: str | None = None
-    headers: dict[str, Any] = field(default_factory=dict)
-    thinking: dict[str, Any] = field(default_factory=dict)
-    extra: dict[str, Any] = field(default_factory=dict)
+    headers: ConfigDict = field(default_factory=dict)
+    thinking: ConfigDict = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ModelSettings":
+    def from_dict(cls, data: ModelConfigDict | None) -> "ModelSettings":
         raw = copy.deepcopy(data or {})
         known = {
             "api_url", "api_key", "model", "api_mode", "context_length",
@@ -49,7 +59,7 @@ class ModelSettings:
             extra={k: v for k, v in raw.items() if k not in known},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ModelConfigDict:
         data = {
             "api_url": self.api_url,
             "api_key": self.api_key,
@@ -82,10 +92,10 @@ class TimeoutSettings:
     lead_wait: float = 1800
     lead_poll_interval: float = 2
     web_fetch: float = 20
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "TimeoutSettings":
+    def from_dict(cls, data: TimeoutConfigDict | None) -> "TimeoutSettings":
         raw = copy.deepcopy(data or {})
         known = {
             "llm", "llm_connect", "llm_retries", "llm_retry_delay",
@@ -103,7 +113,7 @@ class TimeoutSettings:
             extra={k: v for k, v in raw.items() if k not in known},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> TimeoutConfigDict:
         data = {
             "llm": self.llm,
             "llm_connect": self.llm_connect,
@@ -122,10 +132,10 @@ class TimeoutSettings:
 class RunnerSettings:
     context_usage_limit: float = 0.88
     max_turns: int = 20
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "RunnerSettings":
+    def from_dict(cls, data: RunnerConfigDict | None) -> "RunnerSettings":
         raw = copy.deepcopy(data or {})
         return cls(
             context_usage_limit=float(raw.get("context_usage_limit", 0.88)),
@@ -133,7 +143,7 @@ class RunnerSettings:
             extra={k: v for k, v in raw.items() if k not in {"context_usage_limit", "max_turns"}},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> RunnerConfigDict:
         data = {"context_usage_limit": self.context_usage_limit, "max_turns": self.max_turns}
         data.update(copy.deepcopy(self.extra))
         return data
@@ -143,10 +153,10 @@ class RunnerSettings:
 class DisplaySettings:
     thinking_mode: str = "collapsed"
     tool_detail: str = "summary"
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "DisplaySettings":
+    def from_dict(cls, data: DisplayConfigDict | None) -> "DisplaySettings":
         raw = copy.deepcopy(data or {})
         return cls(
             thinking_mode=str(raw.get("thinking_mode") or "collapsed"),
@@ -154,7 +164,7 @@ class DisplaySettings:
             extra={k: v for k, v in raw.items() if k not in {"thinking_mode", "tool_detail"}},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> DisplayConfigDict:
         data = {"thinking_mode": self.thinking_mode, "tool_detail": self.tool_detail}
         data.update(copy.deepcopy(self.extra))
         return data
@@ -163,17 +173,17 @@ class DisplaySettings:
 @dataclass(frozen=True, slots=True)
 class ToolSettings:
     max_result_chars: int = 8000
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "ToolSettings":
+    def from_dict(cls, data: ToolConfigDict | None) -> "ToolSettings":
         raw = copy.deepcopy(data or {})
         return cls(
             max_result_chars=int(raw.get("max_result_chars", 8000)),
             extra={k: v for k, v in raw.items() if k != "max_result_chars"},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ToolConfigDict:
         data = {"max_result_chars": self.max_result_chars}
         data.update(copy.deepcopy(self.extra))
         return data
@@ -188,10 +198,10 @@ class DatabaseHistorySettings:
     retry_count: int = 3
     submit_timeout: float = 1.0
     on_full: str = "block"
-    extra: dict[str, Any] = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "DatabaseHistorySettings":
+    def from_dict(cls, data: DatabaseHistoryConfigDict | None) -> "DatabaseHistorySettings":
         raw = copy.deepcopy(data or {})
         known = {
             "async_write", "batch_size", "batch_timeout", "queue_size",
@@ -208,7 +218,7 @@ class DatabaseHistorySettings:
             extra={k: v for k, v in raw.items() if k not in known},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> DatabaseHistoryConfigDict:
         data = {
             "async_write": self.async_write,
             "batch_size": self.batch_size,
@@ -225,11 +235,11 @@ class DatabaseHistorySettings:
 @dataclass(frozen=True, slots=True)
 class DatabaseSettings:
     history: DatabaseHistorySettings = field(default_factory=DatabaseHistorySettings)
-    memory: dict[str, Any] = field(default_factory=dict)
-    extra: dict[str, Any] = field(default_factory=dict)
+    memory: ConfigDict = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | None) -> "DatabaseSettings":
+    def from_dict(cls, data: DatabaseConfigDict | None) -> "DatabaseSettings":
         raw = copy.deepcopy(data or {})
         return cls(
             history=DatabaseHistorySettings.from_dict(raw.get("history") or {}),
@@ -237,7 +247,7 @@ class DatabaseSettings:
             extra={k: v for k, v in raw.items() if k not in {"history", "memory"}},
         )
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> DatabaseConfigDict:
         data = {"history": self.history.to_dict(), "memory": copy.deepcopy(self.memory)}
         data.update(copy.deepcopy(self.extra))
         return data
@@ -257,12 +267,12 @@ class SettingsSnapshot:
     def from_config_dicts(
         cls,
         *,
-        model_config: dict[str, Any] | None,
-        timeouts: dict[str, Any] | None = None,
-        runner: dict[str, Any] | None = None,
-        display: dict[str, Any] | None = None,
-        tool: dict[str, Any] | None = None,
-        database: dict[str, Any] | None = None,
+        model_config: ModelConfigDict | None,
+        timeouts: TimeoutConfigDict | None = None,
+        runner: RunnerConfigDict | None = None,
+        display: DisplayConfigDict | None = None,
+        tool: ToolConfigDict | None = None,
+        database: DatabaseConfigDict | None = None,
         streaming: bool = True,
     ) -> "SettingsSnapshot":
         return cls(

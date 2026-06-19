@@ -21,6 +21,15 @@ ToolWirePayload = dict[str, Any]
 ToolFunctionPayload = dict[str, Any]
 UsageDict = dict[str, int | float | str | bool | None]
 MetadataDict = dict[str, Any]
+ConfigDict = dict[str, Any]
+RawConfigDict = ConfigDict
+ModelConfigDict = ConfigDict
+TimeoutConfigDict = ConfigDict
+RunnerConfigDict = ConfigDict
+DisplayConfigDict = ConfigDict
+ToolConfigDict = ConfigDict
+DatabaseHistoryConfigDict = ConfigDict
+DatabaseConfigDict = ConfigDict
 DisplayEventPayload = dict[str, Any]
 DisplayWireEvent = dict[str, Any]
 HistoryContent = str | list[Any]
@@ -84,7 +93,7 @@ class Closable(Protocol):
 
 
 class RequestContextProtocol(Closable, Protocol):
-    model_config: dict[str, Any]
+    model_config: ModelConfigDict
     display: DisplayProtocol | None
 
 

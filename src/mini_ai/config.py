@@ -10,7 +10,18 @@ import sys
 import time
 import threading
 from pathlib import Path
-from typing import Callable, TypedDict, Literal, Any
+from typing import Callable
+
+from .core.runtime_types import (
+    ConfigDict,
+    DatabaseConfigDict,
+    DisplayConfigDict,
+    ModelConfigDict,
+    RawConfigDict,
+    RunnerConfigDict,
+    TimeoutConfigDict,
+    ToolConfigDict,
+)
 
 import yaml
 
@@ -47,14 +58,14 @@ _config_path = DATA_DIR / "config.yaml"
 # ── 模块级状态（init_config 填充）──
 
 _config_error: str | None = None
-_raw: dict = {}
-MODEL_CONFIG: dict = {}
+_raw: RawConfigDict = {}
+MODEL_CONFIG: ModelConfigDict = {}
 AVAILABLE_MODELS: list[str] = []
-TIMEOUTS: dict = {}
-COMPACTOR: dict = {}
-TEAMMATE: dict = {}
-TOOL: dict = {}
-IMAGE: dict = {
+TIMEOUTS: TimeoutConfigDict = {}
+COMPACTOR: ConfigDict = {}
+TEAMMATE: ConfigDict = {}
+TOOL: ToolConfigDict = {}
+IMAGE: ConfigDict = {
     "max_size": 10 * 1024 * 1024,           # 10MB
     "compress_threshold": 500 * 1024,       # 500KB
     "compress_max_dimension": 800,          # 800px
@@ -62,16 +73,16 @@ IMAGE: dict = {
 }
 API_MODE: str = "openai"
 STREAMING: bool = True
-RUNNER: dict = {"context_usage_limit": 0.88, "max_turns": 20}
-THINKING: dict = {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
-DISPLAY: dict = {"thinking_mode": "collapsed", "tool_detail": "summary"}
-WEB: dict = {"history_limit": 200}
-LOGGING: dict = {}
-PLAN: dict = {"approval": True}
-MCP: dict = {"enabled": False}
+RUNNER: RunnerConfigDict = {"context_usage_limit": 0.88, "max_turns": 20}
+THINKING: ConfigDict = {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
+DISPLAY: DisplayConfigDict = {"thinking_mode": "collapsed", "tool_detail": "summary"}
+WEB: ConfigDict = {"history_limit": 200}
+LOGGING: ConfigDict = {}
+PLAN: ConfigDict = {"approval": True}
+MCP: ConfigDict = {"enabled": False}
 SKILL_PATHS: list[Path] = []
-SUBAGENT_MODELS: dict = {}
-DATABASE: dict = {
+SUBAGENT_MODELS: ConfigDict = {}
+DATABASE: DatabaseConfigDict = {
     "history": {
         "async_write": None,  # None 表示自动选择（Web 端 true，CLI 端 false）
         "batch_size": 50,
@@ -198,7 +209,7 @@ def _ensure_initialized(config_path: Path) -> None:
             shutil.copy2(t, d)
 
 
-def _load_and_validate(config_path: Path) -> dict:
+def _load_and_validate(config_path: Path) -> RawConfigDict:
     if not config_path.exists():
         return {}
 
@@ -224,7 +235,7 @@ def _load_and_validate(config_path: Path) -> dict:
     return raw
 
 
-def _apply_config(raw: dict) -> None:
+def _apply_config(raw: RawConfigDict) -> None:
     """从 raw dict 刷新所有模块级配置变量。"""
     global MODEL_CONFIG, AVAILABLE_MODELS, TIMEOUTS, COMPACTOR, TEAMMATE, TOOL, IMAGE
     global API_MODE, STREAMING, RUNNER, THINKING, DISPLAY, WEB, LOGGING, PLAN, MCP, DATABASE, SKILL_PATHS, SUBAGENT_MODELS
@@ -354,7 +365,7 @@ def init_config() -> None:
 init_config()
 
 
-def get_model_config(name: str) -> dict | None:
+def get_model_config(name: str) -> ModelConfigDict | None:
     """获取指定名称的模型配置"""
     models = _raw.get("models", {})
     if name not in models:
@@ -368,7 +379,7 @@ import requests as _requests
 class RequestContext:
     __slots__ = ("model_config", "display", "http_session", "_owns_http_session")
 
-    def __init__(self, model_config: dict, display=None, http_session: _requests.Session | None = None):
+    def __init__(self, model_config: ModelConfigDict, display=None, http_session: _requests.Session | None = None):
         self.model_config = model_config
         self.display = display
         self.http_session = http_session or _requests.Session()
@@ -422,64 +433,64 @@ class AppConfig:
     """
 
     def __init__(self):
-        self._model_config: dict = MODEL_CONFIG
+        self._model_config: ModelConfigDict = MODEL_CONFIG
         self._available_models: list[str] = AVAILABLE_MODELS
-        self._timeouts: dict = TIMEOUTS
-        self._compactor: dict = COMPACTOR
-        self._teammate: dict = TEAMMATE
-        self._tool: dict = TOOL
-        self._image: dict = IMAGE
+        self._timeouts: TimeoutConfigDict = TIMEOUTS
+        self._compactor: ConfigDict = COMPACTOR
+        self._teammate: ConfigDict = TEAMMATE
+        self._tool: ToolConfigDict = TOOL
+        self._image: ConfigDict = IMAGE
         self._api_mode: str = API_MODE
         self._streaming: bool = STREAMING
-        self._runner: dict = RUNNER
-        self._thinking: dict = THINKING
-        self._display: dict = DISPLAY
-        self._web: dict = WEB
-        self._logging: dict = LOGGING
-        self._plan: dict = PLAN
-        self._mcp: dict = MCP
+        self._runner: RunnerConfigDict = RUNNER
+        self._thinking: ConfigDict = THINKING
+        self._display: DisplayConfigDict = DISPLAY
+        self._web: ConfigDict = WEB
+        self._logging: ConfigDict = LOGGING
+        self._plan: ConfigDict = PLAN
+        self._mcp: ConfigDict = MCP
         self._skill_paths: list[Path] = SKILL_PATHS
-        self._subagent_models: dict = SUBAGENT_MODELS
-        self._database: dict = DATABASE
+        self._subagent_models: ConfigDict = SUBAGENT_MODELS
+        self._database: DatabaseConfigDict = DATABASE
 
     @property
-    def model_config(self) -> dict: return MODEL_CONFIG
+    def model_config(self) -> ModelConfigDict: return MODEL_CONFIG
     @property
     def available_models(self) -> list[str]: return AVAILABLE_MODELS
     @property
-    def timeouts(self) -> dict: return TIMEOUTS
+    def timeouts(self) -> TimeoutConfigDict: return TIMEOUTS
     @property
-    def compactor(self) -> dict: return COMPACTOR
+    def compactor(self) -> ConfigDict: return COMPACTOR
     @property
-    def teammate(self) -> dict: return TEAMMATE
+    def teammate(self) -> ConfigDict: return TEAMMATE
     @property
-    def tool(self) -> dict: return TOOL
+    def tool(self) -> ToolConfigDict: return TOOL
     @property
-    def image(self) -> dict: return IMAGE
+    def image(self) -> ConfigDict: return IMAGE
     @property
     def api_mode(self) -> str: return API_MODE
     @property
     def streaming(self) -> bool: return STREAMING
     @property
-    def runner(self) -> dict: return RUNNER
+    def runner(self) -> RunnerConfigDict: return RUNNER
     @property
-    def thinking(self) -> dict: return THINKING
+    def thinking(self) -> ConfigDict: return THINKING
     @property
-    def display(self) -> dict: return DISPLAY
+    def display(self) -> DisplayConfigDict: return DISPLAY
     @property
-    def web(self) -> dict: return WEB
+    def web(self) -> ConfigDict: return WEB
     @property
-    def logging(self) -> dict: return LOGGING
+    def logging(self) -> ConfigDict: return LOGGING
     @property
-    def plan(self) -> dict: return PLAN
+    def plan(self) -> ConfigDict: return PLAN
     @property
-    def mcp(self) -> dict: return MCP
+    def mcp(self) -> ConfigDict: return MCP
     @property
     def skill_paths(self) -> list[Path]: return SKILL_PATHS
     @property
-    def subagent_models(self) -> dict: return SUBAGENT_MODELS
+    def subagent_models(self) -> ConfigDict: return SUBAGENT_MODELS
     @property
-    def database(self) -> dict: return DATABASE
+    def database(self) -> DatabaseConfigDict: return DATABASE
 
 
 app_config = AppConfig()

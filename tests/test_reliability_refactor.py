@@ -923,3 +923,101 @@ def test_provider_usage_uses_explicit_usage_aliases():
     assert typing.get_type_hints(SessionManager.set_last_usage)["usage"] == UsageDict
     assert typing.get_type_hints(ToolExecutor._call_llm_stream)
     assert ProviderUsage == UsageDict
+
+
+def test_settings_and_config_boundaries_use_explicit_aliases():
+    import typing
+    import mini_ai.config as config
+    from mini_ai.core import settings as settings_mod
+    from mini_ai.core import runtime_types
+    from mini_ai.core.display_protocol import DisplayProtocol
+    from mini_ai.core.runtime_factory import build_session_runtime
+    from mini_ai.core.runtime_types import (
+        ConfigDict,
+        DatabaseConfigDict,
+        DatabaseHistoryConfigDict,
+        DisplayConfigDict,
+        ModelConfigDict,
+        RawConfigDict,
+        RequestContextProtocol,
+        RunnerConfigDict,
+        TimeoutConfigDict,
+        ToolConfigDict,
+    )
+
+    config_hints = typing.get_type_hints(config)
+    assert config_hints["_raw"] == RawConfigDict
+    assert config_hints["MODEL_CONFIG"] == ModelConfigDict
+    assert config_hints["TIMEOUTS"] == TimeoutConfigDict
+    assert config_hints["RUNNER"] == RunnerConfigDict
+    assert config_hints["DISPLAY"] == DisplayConfigDict
+    assert config_hints["TOOL"] == ToolConfigDict
+    assert config_hints["DATABASE"] == DatabaseConfigDict
+
+    assert typing.get_type_hints(settings_mod.ModelSettings)["headers"] == ConfigDict
+    assert typing.get_type_hints(settings_mod.ModelSettings)["thinking"] == ConfigDict
+    assert typing.get_type_hints(settings_mod.ModelSettings)["extra"] == ConfigDict
+    assert typing.get_type_hints(settings_mod.ModelSettings.from_dict)["data"] == ModelConfigDict | None
+    assert typing.get_type_hints(settings_mod.ModelSettings.to_dict)["return"] == ModelConfigDict
+    assert typing.get_type_hints(settings_mod.TimeoutSettings.from_dict)["data"] == TimeoutConfigDict | None
+    assert typing.get_type_hints(settings_mod.TimeoutSettings.to_dict)["return"] == TimeoutConfigDict
+    assert typing.get_type_hints(settings_mod.RunnerSettings.from_dict)["data"] == RunnerConfigDict | None
+    assert typing.get_type_hints(settings_mod.RunnerSettings.to_dict)["return"] == RunnerConfigDict
+    assert typing.get_type_hints(settings_mod.DisplaySettings.from_dict)["data"] == DisplayConfigDict | None
+    assert typing.get_type_hints(settings_mod.DisplaySettings.to_dict)["return"] == DisplayConfigDict
+    assert typing.get_type_hints(settings_mod.ToolSettings.from_dict)["data"] == ToolConfigDict | None
+    assert typing.get_type_hints(settings_mod.ToolSettings.to_dict)["return"] == ToolConfigDict
+    assert typing.get_type_hints(settings_mod.DatabaseHistorySettings.from_dict)["data"] == DatabaseHistoryConfigDict | None
+    assert typing.get_type_hints(settings_mod.DatabaseHistorySettings.to_dict)["return"] == DatabaseHistoryConfigDict
+    assert typing.get_type_hints(settings_mod.DatabaseSettings.from_dict)["data"] == DatabaseConfigDict | None
+    assert typing.get_type_hints(settings_mod.DatabaseSettings.to_dict)["return"] == DatabaseConfigDict
+
+    snapshot_hints = typing.get_type_hints(settings_mod.SettingsSnapshot.from_config_dicts)
+    assert snapshot_hints["model_config"] == ModelConfigDict | None
+    assert snapshot_hints["timeouts"] == TimeoutConfigDict | None
+    assert snapshot_hints["runner"] == RunnerConfigDict | None
+    assert snapshot_hints["display"] == DisplayConfigDict | None
+    assert snapshot_hints["tool"] == ToolConfigDict | None
+    assert snapshot_hints["database"] == DatabaseConfigDict | None
+
+    assert typing.get_type_hints(config.get_model_config)["return"] == ModelConfigDict | None
+    assert typing.get_type_hints(config.RequestContext.__init__)["model_config"] == ModelConfigDict
+    assert typing.get_type_hints(config.AppConfig.model_config.fget)["return"] == ModelConfigDict
+    assert typing.get_type_hints(config.AppConfig.timeouts.fget)["return"] == TimeoutConfigDict
+    assert typing.get_type_hints(config.AppConfig.runner.fget)["return"] == RunnerConfigDict
+    assert typing.get_type_hints(config.AppConfig.display.fget)["return"] == DisplayConfigDict
+    assert typing.get_type_hints(config.AppConfig.tool.fget)["return"] == ToolConfigDict
+    assert typing.get_type_hints(config.AppConfig.database.fget)["return"] == DatabaseConfigDict
+    assert typing.get_type_hints(RequestContextProtocol, globalns={**vars(runtime_types), "DisplayProtocol": DisplayProtocol})["model_config"] == ModelConfigDict
+    assert typing.get_type_hints(build_session_runtime)["model_config"] == ModelConfigDict | None
+
+
+def test_settings_snapshot_preserves_config_extras_and_deep_copies():
+    from mini_ai.core.settings import SettingsSnapshot
+
+    raw_model = {
+        "api_url": "https://example.test",
+        "api_key": "k",
+        "model": "m",
+        "headers": {"X-Test": "1"},
+        "thinking": {"enabled": True},
+        "vendor_extra": {"nested": ["a"]},
+    }
+
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config=raw_model,
+        timeouts={"llm": 9, "custom_timeout": {"x": 1}},
+        database={"history": {"on_full": "drop", "custom_history": 2}},
+    )
+
+    raw_model["headers"]["X-Test"] = "mutated"
+
+    model_out = snapshot.model.to_dict()
+    assert model_out["headers"] == {"X-Test": "1"}
+    assert model_out["thinking"] == {"enabled": True}
+    assert model_out["vendor_extra"] == {"nested": ["a"]}
+
+    model_out["headers"]["X-Test"] = "mutated-again"
+    assert snapshot.model.headers == {"X-Test": "1"}
+    assert snapshot.timeouts.to_dict()["custom_timeout"] == {"x": 1}
+    assert snapshot.database.to_dict()["history"]["custom_history"] == 2
