@@ -22,6 +22,7 @@ UsageDict = dict[str, int | float | str | bool | None]
 MetadataDict = dict[str, Any]
 DisplayEventPayload = dict[str, Any]
 DisplayWireEvent = dict[str, Any]
+HistoryContent = str | list[Any]
 
 
 class SessionComponents(TypedDict, total=False):
@@ -66,8 +67,8 @@ class ToolRegistryProtocol(Protocol):
 
 
 class HistoryDBProtocol(Protocol):
-    def append(self, workspace: str, session_id: str, role: str, content, metadata: str = "") -> int | None: ...
-    def load_session(self, workspace: str, session_id: str, limit: int | None = None) -> list[MessageDict]: ...
+    def append(self, workspace: str, session_id: str, role: str, content: HistoryContent, metadata: str = "") -> int | None: ...
+    def load_session(self, workspace: str, session_id: str, limit: int = 0) -> list[MessageDict]: ...
 
 
 class MemoryStoreProtocol(Protocol):

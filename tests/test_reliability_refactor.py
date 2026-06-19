@@ -668,3 +668,58 @@ def test_tool_registry_execution_uses_explicit_aliases():
     assert module_handle["msg"] == MessageDict
     assert module_handle["messages"] == list[MessageDict]
     assert module_inject["messages"] == list[MessageDict]
+
+
+def test_history_persistence_uses_explicit_boundary_types():
+    import typing
+    from mini_ai.core.messages import ChatMessage
+    from mini_ai.core.runtime_types import HistoryContent, MessageDict
+    from mini_ai.memory import history_db
+    from mini_ai.memory.async_db_writer import AsyncDBWriter
+    from mini_ai.memory.history_db import HistoryDB, HistoryDBPool
+    from mini_ai.memory.history_types import (
+        HistoryAsyncStats,
+        HistoryMetadata,
+        HistoryPlanArtifact,
+        HistoryPoolStats,
+        HistoryReviewRow,
+        HistoryRuntimeMessage,
+        HistorySearchRow,
+        HistorySessionSummary,
+        HistoryStorageRow,
+    )
+
+    metadata_hints = typing.get_type_hints(history_db._metadata_to_dict)
+    row_hints = typing.get_type_hints(history_db._history_row_from_message)
+    message_hints = typing.get_type_hints(history_db._message_from_history_row)
+    append_hints = typing.get_type_hints(HistoryDB.append)
+    batch_hints = typing.get_type_hints(HistoryDB.append_batch)
+    load_hints = typing.get_type_hints(HistoryDB.load_session)
+    recent_hints = typing.get_type_hints(HistoryDB.load_recent)
+    search_hints = typing.get_type_hints(HistoryDB.search)
+    plan_hints = typing.get_type_hints(HistoryDB.save_plan)
+    list_plan_hints = typing.get_type_hints(HistoryDB.list_plans)
+    sessions_hints = typing.get_type_hints(HistoryDB.list_sessions)
+    review_hints = typing.get_type_hints(HistoryDB.list_for_review)
+    async_batch_hints = typing.get_type_hints(AsyncDBWriter.submit_batch)
+    async_cache_hints = typing.get_type_hints(AsyncDBWriter.load_session_with_cache)
+    pool_hints = typing.get_type_hints(HistoryDBPool.stats)
+
+    assert metadata_hints["return"] == HistoryMetadata
+    assert row_hints["message"] == ChatMessage | HistoryRuntimeMessage | HistoryStorageRow
+    assert row_hints["return"] == HistoryStorageRow
+    assert message_hints["return"] == HistoryRuntimeMessage
+    assert append_hints["content"] == HistoryContent
+    assert batch_hints["messages"] == list[ChatMessage | HistoryRuntimeMessage]
+    assert load_hints["return"] == list[HistoryRuntimeMessage]
+    assert recent_hints["return"] == list[HistoryRuntimeMessage]
+    assert search_hints["return"] == list[HistorySearchRow]
+    assert plan_hints["artifact"] == HistoryPlanArtifact
+    assert list_plan_hints["return"] == list[HistoryPlanArtifact]
+    assert sessions_hints["return"] == list[HistorySessionSummary]
+    assert review_hints["return"] == list[HistoryReviewRow]
+    assert async_batch_hints["messages"] == list[HistoryStorageRow]
+    assert async_cache_hints["return"] == list[HistoryRuntimeMessage]
+    assert typing.get_type_hints(AsyncDBWriter.get_stats)["return"] == HistoryAsyncStats
+    assert pool_hints["return"] == HistoryPoolStats
+    assert HistoryRuntimeMessage == MessageDict

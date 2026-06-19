@@ -5,15 +5,26 @@ import sqlite3
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from ..utils import _UTC8
 from ..logger import logger
 from ..core.messages import ChatMessage
 from .async_db_writer import AsyncDBWriter
+from .history_types import (
+    HistoryAsyncStats,
+    HistoryMetadata,
+    HistoryPlanArtifact,
+    HistoryPoolStats,
+    HistoryReviewRow,
+    HistoryRuntimeMessage,
+    HistorySearchRow,
+    HistorySessionSummary,
+    HistoryStorageRow,
+)
 
 
-def _process_multimodal_content(content: str | list, metadata: str = "") -> tuple[str, str]:
+def _process_multimodal_content(content: str | list[Any], metadata: str = "") -> tuple[str, str]:
     """处理多模态消息内容，提取文本并保存完整结构到 metadata。
 
     Args:
@@ -44,7 +55,7 @@ def _process_multimodal_content(content: str | list, metadata: str = "") -> tupl
     return text_content, metadata
 
 
-def _metadata_to_dict(metadata: str | dict | None) -> dict:
+def _metadata_to_dict(metadata: str | HistoryMetadata | None) -> HistoryMetadata:
     if isinstance(metadata, dict):
         return dict(metadata)
     if not metadata:
@@ -56,7 +67,7 @@ def _metadata_to_dict(metadata: str | dict | None) -> dict:
         return {}
 
 
-def _metadata_to_json(metadata: str | dict | None) -> str:
+def _metadata_to_json(metadata: str | HistoryMetadata | None) -> str:
     if isinstance(metadata, str):
         return metadata
     if isinstance(metadata, dict) and metadata:
@@ -64,7 +75,7 @@ def _metadata_to_json(metadata: str | dict | None) -> str:
     return ""
 
 
-def _history_row_from_message(message: ChatMessage | dict) -> dict:
+def _history_row_from_message(message: ChatMessage | HistoryRuntimeMessage | HistoryStorageRow) -> HistoryStorageRow:
     """Normalize a runtime/history message through ChatMessage before DB writes."""
     chat_msg = message if isinstance(message, ChatMessage) else ChatMessage.from_dict(message)
     raw = chat_msg.to_dict(include_internal=True, include_tool_results=True)
@@ -80,12 +91,12 @@ def _history_row_from_message(message: ChatMessage | dict) -> dict:
     }
 
 
-def _message_from_history_row(role: str, content, metadata: str = "", timestamp: str = "") -> dict:
+def _message_from_history_row(role: str, content: Any, metadata: str = "", timestamp: str = "") -> HistoryRuntimeMessage:
     """Rehydrate DB row metadata through ChatMessage for a stable runtime shape."""
     meta = _metadata_to_dict(metadata)
     if "_multimodal_content" in meta:
         content = meta.pop("_multimodal_content")
-    payload = {"role": role, "content": content}
+    payload: HistoryRuntimeMessage = {"role": role, "content": content}
     if timestamp:
         payload["timestamp"] = timestamp[:19]
     payload.update({k: v for k, v in meta.items() if k not in ("role", "content")})
@@ -242,8 +253,8 @@ class HistoryDB:
     
     # === 写入操作 ===
     
-    def append(self, workspace: str, session_id: str, role: str, 
-               content: str | list, metadata: str = "") -> int:
+    def append(self, workspace: str, session_id: str, role: str,
+               content: str | list[Any], metadata: str = "") -> int:
         """写入单条消息
         
         Args:
@@ -287,8 +298,8 @@ class HistoryDB:
         
         return msg_id
     
-    def append_batch(self, workspace: str, session_id: str, 
-                     messages: list[dict]) -> int:
+    def append_batch(self, workspace: str, session_id: str,
+                     messages: list[ChatMessage | HistoryRuntimeMessage]) -> int:
         """批量写入消息（事务保护）
         
         Args:
@@ -302,7 +313,7 @@ class HistoryDB:
         if not messages:
             return 0
 
-        normalized_messages = [_history_row_from_message(msg) for msg in messages]
+        normalized_messages: list[HistoryStorageRow] = [_history_row_from_message(msg) for msg in messages]
         ts = datetime.now(_UTC8).isoformat()
 
         # 异步写入模式
@@ -349,8 +360,8 @@ class HistoryDB:
     
     # === 读取操作 ===
     
-    def load_session(self, workspace: str, session_id: str, 
-                     limit: int = 0) -> list[dict]:
+    def load_session(self, workspace: str, session_id: str,
+                     limit: int = 0) -> list[HistoryRuntimeMessage]:
         """加载指定会话的所有消息
         
         Args:
@@ -374,8 +385,8 @@ class HistoryDB:
         # 同步模式：直接从数据库加载
         return self._load_session_from_db(workspace, session_id, limit)
     
-    def _load_session_from_db(self, workspace: str, session_id: str, 
-                               limit: int = 0) -> list[dict]:
+    def _load_session_from_db(self, workspace: str, session_id: str,
+                               limit: int = 0) -> list[HistoryRuntimeMessage]:
         """从数据库加载会话消息（内部方法）
         
         Args:
@@ -402,7 +413,7 @@ class HistoryDB:
         return self._parse_messages(rows)
     
     def load_session_for_display(self, workspace: str, session_id: str,
-                                  limit: int = 0) -> list[dict]:
+                                  limit: int = 0) -> list[HistoryRuntimeMessage]:
         """加载会话消息供前端显示 — 只返回 user/assistant 消息。"""
         messages = self.load_session(workspace, session_id, limit=0)
         display_messages = [m for m in messages if m.get("role") in ("user", "assistant")]
@@ -410,7 +421,7 @@ class HistoryDB:
             return display_messages[-limit:]
         return display_messages
     
-    def load_recent(self, workspace: str = "", limit: int = 100) -> list[dict]:
+    def load_recent(self, workspace: str = "", limit: int = 100) -> list[HistoryRuntimeMessage]:
         """加载最近消息（跨会话）
         
         Args:
@@ -445,7 +456,7 @@ class HistoryDB:
     # === 搜索操作 ===
     
     def search(self, keyword: str = "", workspace: str = "", session_id: str = "",
-               date_from: str = "", date_to: str = "", limit: int = 20) -> list[dict]:
+               date_from: str = "", date_to: str = "", limit: int = 20) -> list[HistorySearchRow]:
         """搜索历史消息
         
         Args:
@@ -502,8 +513,8 @@ class HistoryDB:
             for id, ws, sid, ts, role, content in rows
         ]
     
-    def search_fts(self, keyword: str, workspace: str = "", 
-                   limit: int = 20) -> list[dict]:
+    def search_fts(self, keyword: str, workspace: str = "",
+                   limit: int = 20) -> list[HistorySearchRow]:
         """全文搜索（FTS5）
         
         Args:
@@ -556,7 +567,7 @@ class HistoryDB:
     
     # === 计划产物操作 ===
 
-    def save_plan(self, workspace: str, session_id: str, artifact: dict) -> None:
+    def save_plan(self, workspace: str, session_id: str, artifact: HistoryPlanArtifact) -> None:
         """保存结构化计划产物。"""
         payload = json.dumps(artifact, ensure_ascii=False)
         created_at = artifact.get("created_at") or datetime.now(_UTC8).isoformat()
@@ -580,7 +591,7 @@ class HistoryDB:
                     ),
                 )
 
-    def get_current_plan(self, workspace: str, session_id: str) -> dict | None:
+    def get_current_plan(self, workspace: str, session_id: str) -> HistoryPlanArtifact | None:
         """返回当前会话最新的非终态计划。"""
         with self._lock:
             self._ensure_conn()
@@ -597,7 +608,7 @@ class HistoryDB:
         except Exception:
             return None
 
-    def list_plans(self, workspace: str, session_id: str) -> list[dict]:
+    def list_plans(self, workspace: str, session_id: str) -> list[HistoryPlanArtifact]:
         with self._lock:
             self._ensure_conn()
             rows = self._conn.execute(
@@ -606,7 +617,7 @@ class HistoryDB:
                    ORDER BY updated_at DESC, revision DESC""",
                 (workspace, session_id),
             ).fetchall()
-        plans: list[dict] = []
+        plans: list[HistoryPlanArtifact] = []
         for row in rows:
             try:
                 plans.append(json.loads(row[0]))
@@ -853,7 +864,7 @@ class HistoryDB:
         
         return row[0] if row else 0
     
-    def list_sessions(self, workspace: str = "") -> list[dict]:
+    def list_sessions(self, workspace: str = "") -> list[HistorySessionSummary]:
         """列出所有会话（含消息数、最后更新时间）
         
         Args:
@@ -963,11 +974,11 @@ class HistoryDB:
     
     # === 辅助方法 ===
     
-    def _parse_messages(self, rows: list) -> list[dict]:
+    def _parse_messages(self, rows: list[tuple[str, Any, str, str]]) -> list[HistoryRuntimeMessage]:
         """解析消息行"""
         return [_message_from_history_row(role, content, metadata, ts) for role, content, metadata, ts in rows]
     
-    def list_for_review(self, workspace: str, limit: int = 100) -> list[dict]:
+    def list_for_review(self, workspace: str, limit: int = 100) -> list[HistoryReviewRow]:
         """列出消息供审核（含 id），用于选择性删除
         
         Args:
@@ -1000,7 +1011,7 @@ class HistoryDB:
         if self._async_write and self._async_writer:
             self._async_writer.flush(timeout)
     
-    def get_async_stats(self) -> dict:
+    def get_async_stats(self) -> HistoryAsyncStats:
         """获取异步写入统计信息
         
         Returns:
@@ -1148,7 +1159,7 @@ class HistoryDBPool:
             logger.info("[HistoryDBPool] 已关闭所有连接")
     
     @classmethod
-    def stats(cls) -> dict:
+    def stats(cls) -> HistoryPoolStats:
         """获取连接池统计信息"""
         with cls._lock:
             return {

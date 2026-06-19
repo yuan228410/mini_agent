@@ -15,10 +15,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from queue import Empty, Full, Queue
-from typing import Any, Callable, Optional
+from typing import Callable, Optional
 
 from ..logger import logger
 from ..utils import _UTC8
+from .history_types import HistoryAsyncStats, HistoryRuntimeMessage, HistoryStorageRow
 
 
 @dataclass
@@ -124,7 +125,7 @@ class AsyncDBWriter:
         
         # 读取一致性：预读缓存
         # 结构：{(workspace, session_id): [messages]}
-        self._cache: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        self._cache: dict[tuple[str, str], list[HistoryRuntimeMessage]] = defaultdict(list)
         self._cache_lock = threading.Lock()
         self._cache_max_size = 10000  # 每个会话最多缓存消息数
         
@@ -335,8 +336,8 @@ class AsyncDBWriter:
 
         return task_id
     
-    def submit_batch(self, workspace: str, session_id: str, 
-                     messages: list[dict]) -> int:
+    def submit_batch(self, workspace: str, session_id: str,
+                     messages: list[HistoryStorageRow]) -> int:
         """批量提交写入任务
         
         Args:
@@ -585,7 +586,7 @@ class AsyncDBWriter:
     
     # === 缓存管理 ===
     
-    def _add_to_cache(self, workspace: str, session_id: str, msg: dict):
+    def _add_to_cache(self, workspace: str, session_id: str, msg: HistoryRuntimeMessage) -> None:
         """添加消息到缓存
         
         Args:
@@ -620,7 +621,7 @@ class AsyncDBWriter:
                     cache.pop(i)
                     break
     
-    def get_cached_messages(self, workspace: str, session_id: str) -> list[dict]:
+    def get_cached_messages(self, workspace: str, session_id: str) -> list[HistoryRuntimeMessage]:
         """获取缓存的消息
         
         Args:
@@ -656,8 +657,8 @@ class AsyncDBWriter:
     # === 读取操作（一致性保证）===
     
     def load_session_with_cache(self, workspace: str, session_id: str,
-                                 db_loader: Callable[[str, str], list[dict]],
-                                 limit: int = 0) -> list[dict]:
+                                 db_loader: Callable[..., list[HistoryRuntimeMessage]],
+                                 limit: int = 0) -> list[HistoryRuntimeMessage]:
         """加载会话消息（缓存 + 数据库）
         
         Args:
@@ -707,7 +708,7 @@ class AsyncDBWriter:
     
     # === 统计信息 ===
     
-    def get_stats(self) -> dict:
+    def get_stats(self) -> HistoryAsyncStats:
         """获取统计信息
         
         Returns:
