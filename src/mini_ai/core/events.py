@@ -5,9 +5,11 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Protocol
 
+from .runtime_types import DisplayEventPayload, DisplayWireEvent
+
 
 class WirePayload(Protocol):
-    def to_dict(self) -> dict[str, Any]: ...
+    def to_dict(self) -> DisplayEventPayload: ...
 
 
 class DisplayEventType(StrEnum):
@@ -53,9 +55,9 @@ TERMINAL_EVENT_TYPES = {
 @dataclass(slots=True)
 class DisplayEvent:
     event: DisplayEventType
-    data: dict[str, Any] = field(default_factory=dict)
+    data: DisplayEventPayload = field(default_factory=dict)
 
-    def to_wire(self) -> dict[str, Any]:
+    def to_wire(self) -> DisplayWireEvent:
         return {"event": self.event.value, "data": self.data}
 
 
@@ -100,7 +102,7 @@ def plan_event(kind: str, **data: Any) -> DisplayEvent:
 
 
 def agent_start(agent_type: str, *, task: str = "", role: str = "", max_turns: int | None = None) -> DisplayEvent:
-    payload: dict[str, Any] = {"agent_type": agent_type}
+    payload: DisplayEventPayload = {"agent_type": agent_type}
     if task:
         payload["task"] = task
     if role:
@@ -110,11 +112,11 @@ def agent_start(agent_type: str, *, task: str = "", role: str = "", max_turns: i
     return DisplayEvent(DisplayEventType.AGENT_START, payload)
 
 
-def _wire_dict(payload: WirePayload | dict[str, Any]) -> dict[str, Any]:
+def _wire_dict(payload: WirePayload | DisplayEventPayload) -> DisplayEventPayload:
     return payload.to_dict() if hasattr(payload, "to_dict") else payload
 
 
-def workflow_start(tasks: list[WirePayload | dict[str, Any]], total: int) -> DisplayEvent:
+def workflow_start(tasks: list[WirePayload | DisplayEventPayload], total: int) -> DisplayEvent:
     return event_payload(
         DisplayEventType.WORKFLOW_START,
         tasks=[_wire_dict(task) for task in tasks],
@@ -126,12 +128,12 @@ def workflow_task_start(task_id: str, agent: str, prompt: str) -> DisplayEvent:
     return event_payload(DisplayEventType.WORKFLOW_TASK_START, id=task_id, agent=agent, prompt=prompt)
 
 
-def workflow_task_start_event(task: WirePayload | dict[str, Any]) -> DisplayEvent:
+def workflow_task_start_event(task: WirePayload | DisplayEventPayload) -> DisplayEvent:
     return DisplayEvent(DisplayEventType.WORKFLOW_TASK_START, _wire_dict(task))
 
 
 def workflow_task_end(task_id: str, status: str, *, result_preview: str | None = None, error: str | None = None) -> DisplayEvent:
-    payload: dict[str, Any] = {"id": task_id, "status": status}
+    payload: DisplayEventPayload = {"id": task_id, "status": status}
     if result_preview is not None:
         payload["result_preview"] = result_preview
     if error is not None:
@@ -139,7 +141,7 @@ def workflow_task_end(task_id: str, status: str, *, result_preview: str | None =
     return DisplayEvent(DisplayEventType.WORKFLOW_TASK_END, payload)
 
 
-def workflow_task_end_event(task: WirePayload | dict[str, Any]) -> DisplayEvent:
+def workflow_task_end_event(task: WirePayload | DisplayEventPayload) -> DisplayEvent:
     return DisplayEvent(DisplayEventType.WORKFLOW_TASK_END, _wire_dict(task))
 
 

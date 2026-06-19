@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from .runtime_types import MessageDict
 from .tool_models import ToolCall
 
 
@@ -34,7 +35,7 @@ class ChatMessage:
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ChatMessage":
+    def from_dict(cls, data: MessageDict) -> "ChatMessage":
         known = {"role", "content", "tool_calls", "tool_call_id", "name", "timestamp"}
         role = MessageRole(data.get("role") or MessageRole.USER)
         return cls(
@@ -47,8 +48,8 @@ class ChatMessage:
             extra={k: v for k, v in data.items() if k not in known},
         )
 
-    def to_dict(self, *, include_internal: bool = True, include_tool_results: bool = True) -> dict[str, Any]:
-        msg: dict[str, Any] = {"role": self.role.value}
+    def to_dict(self, *, include_internal: bool = True, include_tool_results: bool = True) -> MessageDict:
+        msg: MessageDict = {"role": self.role.value}
         if self.content is not None or self.role is not MessageRole.ASSISTANT:
             msg["content"] = self.content
         if self.tool_calls:
@@ -65,11 +66,11 @@ class ChatMessage:
         return msg
 
 
-def normalize_messages(messages: list[dict[str, Any]]) -> list[ChatMessage]:
+def normalize_messages(messages: list[MessageDict]) -> list[ChatMessage]:
     return [ChatMessage.from_dict(m) for m in messages]
 
 
-def to_provider_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def to_provider_messages(messages: list[MessageDict]) -> list[MessageDict]:
     """Convert runtime messages to provider-safe wire dicts.
 
     This removes internal runtime metadata and strips cached tool results from

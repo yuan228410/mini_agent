@@ -8,14 +8,17 @@ outer LLM/persistence boundaries; code should use these aliases rather than bare
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict
 
-from .display_protocol import DisplayProtocol
+if TYPE_CHECKING:
+    from .display_protocol import DisplayProtocol
 
 MessageDict = dict[str, Any]
 ToolDefinition = dict[str, Any]
 UsageDict = dict[str, int | float | str | bool | None]
 MetadataDict = dict[str, Any]
+DisplayEventPayload = dict[str, Any]
+DisplayWireEvent = dict[str, Any]
 
 
 class SessionComponents(TypedDict, total=False):

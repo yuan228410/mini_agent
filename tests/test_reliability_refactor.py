@@ -571,3 +571,30 @@ def test_runner_error_handler_uses_structured_message_boundary():
     assert unknown_hints["return"] == MessageDict | None
     assert dto_hints["return"] == MessageDict
     assert [category.value for category in ErrorCategory]
+
+
+def test_core_message_and_event_boundaries_use_shared_aliases():
+    import typing
+    from mini_ai.core import events, messages
+    from mini_ai.core.display_protocol import DisplayProtocol
+    from mini_ai.core.runtime_types import DisplayEventPayload, DisplayWireEvent, MessageDict
+
+    chat_from_dict = typing.get_type_hints(messages.ChatMessage.from_dict)
+    chat_to_dict = typing.get_type_hints(messages.ChatMessage.to_dict)
+    normalize_hints = typing.get_type_hints(messages.normalize_messages)
+    provider_hints = typing.get_type_hints(messages.to_provider_messages)
+    event_hints = typing.get_type_hints(events.DisplayEvent)
+    wire_hints = typing.get_type_hints(events.DisplayEvent.to_wire)
+    workflow_hints = typing.get_type_hints(events.workflow_start)
+    display_emit = typing.get_type_hints(DisplayProtocol.emit)
+    display_workflow = typing.get_type_hints(DisplayProtocol.workflow_start)
+
+    assert chat_from_dict["data"] == MessageDict
+    assert chat_to_dict["return"] == MessageDict
+    assert normalize_hints["messages"] == list[MessageDict]
+    assert provider_hints == {"messages": list[MessageDict], "return": list[MessageDict]}
+    assert event_hints["data"] == DisplayEventPayload
+    assert wire_hints["return"] == DisplayWireEvent
+    assert workflow_hints["tasks"] == list[events.WirePayload | DisplayEventPayload]
+    assert display_emit["data"] == DisplayEventPayload | None
+    assert display_workflow["tasks"] == list[DisplayEventPayload]
