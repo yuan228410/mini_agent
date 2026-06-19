@@ -5,6 +5,7 @@ import requests
 
 from ..config import MODEL_CONFIG
 from ..core.messages import to_provider_messages
+from ..core.runtime_types import MessageDict
 
 
 def get_config(ctx=None):
@@ -46,14 +47,14 @@ def get_reasoning_effort(ctx=None):
 # 内部标记字段（prune 增量裁剪用 + thinking 仅供前端显示），不发给 LLM API
 _INTERNAL_FIELDS = frozenset(("_pruned", "_prune_level", "_is_summary", "thinking"))
 
-def _strip_internal_fields(messages: list[dict]) -> list[dict]:
+def _strip_internal_fields(messages: list[MessageDict]) -> list[MessageDict]:
     """剥离内部标记字段，返回 provider-safe 消息列表（不修改原列表）。"""
     return to_provider_messages(messages)
 
 
 
 
-def rebuild_tool_messages(messages: list[dict]) -> list[dict]:
+def rebuild_tool_messages(messages: list[MessageDict]) -> list[MessageDict]:
     """重建消息结构：去掉 tool_calls 和 tool 消息，只保留对话正文。
 
     历史上下文不需要完整的工具调用细节（tool_calls + tool 结果），
@@ -84,7 +85,7 @@ _ESTIMATE_CACHE: dict[tuple, int] = {}
 _ESTIMATE_CACHE_MAX = 256
 _ESTIMATE_CACHE_LOCK = threading.Lock()
 
-def _message_fingerprint(msg: dict) -> tuple:
+def _message_fingerprint(msg: MessageDict) -> tuple:
     content = msg.get("content") or ""
     if isinstance(content, str):
         content_sig = (len(content), hash(content[:256]), hash(content[-256:]))
@@ -109,7 +110,7 @@ def _message_fingerprint(msg: dict) -> tuple:
     return (id(msg), msg.get("role"), msg.get("tool_call_id"), msg.get("name"), content_sig, tool_sig)
 
 
-def estimate_messages_tokens(messages: list[dict]) -> int:
+def estimate_messages_tokens(messages: list[MessageDict]) -> int:
     # 所有消息都参与轻量指纹，避免原地修改未采样中间消息时复用过期估算
     cache_key = (id(messages), len(messages), tuple(_message_fingerprint(m) for m in messages))
     with _ESTIMATE_CACHE_LOCK:

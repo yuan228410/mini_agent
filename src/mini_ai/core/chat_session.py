@@ -15,7 +15,9 @@ from ..logger import logger
 from ..runner import run_tool_loop
 from ..tools import inject_todos as _inject_todos
 from ..utils import now_ts
+from .display_protocol import DisplayProtocol
 from .persister import HistoryPersister
+from .runtime_types import CompactorProtocol, HistoryDBProtocol, MessageBusProtocol, MessageDict, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol
 
 
 class ChatSession:
@@ -31,11 +33,11 @@ class ChatSession:
         # 但压缩和持久化逻辑已统一
     """
 
-    def __init__(self, messages: list[dict], compactor, history_db,
-                 bus=None, team_mgr=None, lead_event: threading.Event | None = None,
+    def __init__(self, messages: list[MessageDict], compactor: CompactorProtocol, history_db: HistoryDBProtocol,
+                 bus: MessageBusProtocol | None = None, team_mgr=None, lead_event: threading.Event | None = None,
                  context_length: int = 256000,
                  workspace: str = "", session_id: str = "",
-                 tool_registry=None):
+                 tool_registry: ToolRegistryProtocol | None = None):
         self.messages = messages
         self.compactor = compactor
         self.history_db = history_db
@@ -48,12 +50,12 @@ class ChatSession:
         self.tool_registry = tool_registry
         self._persister = HistoryPersister(history_db, workspace, session_id)
 
-    def run(self, user_input: str, tools: list[dict],
-            *, streaming: bool = False, display=None, inject_fn=None,
+    def run(self, user_input: str, tools: list[ToolDefinition],
+            *, streaming: bool = False, display: DisplayProtocol | None = None, inject_fn=None,
             abort_event: threading.Event | None = None,
-            max_turns: int = 0, ctx=None,
+            max_turns: int = 0, ctx: RequestContextProtocol | None = None,
             persist_fn=None,
-            tool_registry=None) -> dict | None:
+            tool_registry: ToolRegistryProtocol | None = None) -> MessageDict | None:
         """执行一轮对话
 
         Args:
@@ -114,8 +116,8 @@ class ChatSession:
             llm_chat, ctx, self.context_length
         )
 
-    def wait_teammates(self, tools, display=None, ctx=None,
-                        abort_event: threading.Event | None = None) -> dict | None:
+    def wait_teammates(self, tools: list[ToolDefinition], display: DisplayProtocol | None = None, ctx: RequestContextProtocol | None = None,
+                        abort_event: threading.Event | None = None) -> MessageDict | None:
         """等待队友回禀
 
         Returns:
@@ -137,11 +139,11 @@ class ChatSession:
         cleanup_inbox(self.bus)
         return teammate_msg
 
-    def _run_loop_fn(self, messages, tools, **kwargs):
+    def _run_loop_fn(self, messages: list[MessageDict], tools: list[ToolDefinition], **kwargs):
         """供 wait_for_teammates 调用的 run_tool_loop 封装"""
         return run_tool_loop(messages, tools, **kwargs)
 
-    def persist_assistant(self, msg: dict):
+    def persist_assistant(self, msg: MessageDict):
         """持久化 assistant 消息（含 thinking）"""
         if msg and msg.get("content"):
             ts = now_ts()

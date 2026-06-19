@@ -8,6 +8,7 @@ import json
 
 from ..plan.artifact_parser import strip_artifact_blocks
 from .messages import ChatMessage, MessageRole
+from .runtime_types import HistoryDBProtocol, MessageDict
 from .tool_models import ToolCall, ToolResult
 
 
@@ -22,7 +23,7 @@ class HistoryPersister:
         persister.flush_deferred(messages)
     """
 
-    def __init__(self, history_db, workspace: str, session_id: str, sanitize_plan_artifacts: bool = False):
+    def __init__(self, history_db: HistoryDBProtocol, workspace: str, session_id: str, sanitize_plan_artifacts: bool = False):
         self._db = history_db
         self._ws = workspace
         self._sid = session_id
@@ -48,7 +49,7 @@ class HistoryPersister:
             content = strip_artifact_blocks(content)
         return content, json.dumps(meta, ensure_ascii=False) if meta else ""
 
-    def __call__(self, msg: dict) -> None:
+    def __call__(self, msg: MessageDict) -> None:
         """persist_fn 回调：根据 role 写入 DB
 
         - tool 消息：立即写入
@@ -72,7 +73,7 @@ class HistoryPersister:
                 content, metadata = self._assistant_persistence_payload(chat_msg)
                 self._db.append(self._ws, self._sid, MessageRole.ASSISTANT.value, content, metadata=metadata)
 
-    def flush_deferred(self, messages: list[dict]) -> None:
+    def flush_deferred(self, messages: list[MessageDict]) -> None:
         """将 deferred assistant 消息的 _result 回填并持久化
 
         在 run_tool_loop 结束后调用。遍历 _deferred_assistant，

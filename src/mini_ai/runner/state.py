@@ -9,6 +9,8 @@
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..core.runtime_types import MessageDict
+
 
 @dataclass
 class LoopState:
@@ -27,7 +29,7 @@ class LoopState:
     consecutive_errors: int = 0
     spawned_teammate: bool = False
     overflow_retries: int = 0
-    messages: list[dict] = field(default_factory=list)
+    messages: list[MessageDict] = field(default_factory=list)
     
     def should_continue(self) -> bool:
         """是否应该继续循环

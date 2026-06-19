@@ -498,3 +498,31 @@ def test_web_session_manager_uses_structured_component_boundaries():
     sm = SessionManager()
     sm.set_team_component("u:w", {"bus": object(), "team_mgr": object(), "blackboard": object()})
     assert set(sm.get_team_component("u:w")) == {"bus", "team_mgr", "blackboard"}
+
+
+def test_message_runtime_boundaries_use_shared_aliases():
+    import typing
+    from mini_ai.core.chat_session import ChatSession
+    from mini_ai.core.persister import HistoryPersister
+    from mini_ai.core.runtime_types import HistoryDBProtocol, MessageDict, ToolDefinition
+    from mini_ai.llm import base as llm_base
+    from mini_ai.runner.state import LoopState
+
+    loop_hints = typing.get_type_hints(LoopState)
+    strip_hints = typing.get_type_hints(llm_base._strip_internal_fields)
+    rebuild_hints = typing.get_type_hints(llm_base.rebuild_tool_messages)
+    estimate_hints = typing.get_type_hints(llm_base.estimate_messages_tokens)
+    chat_init_hints = typing.get_type_hints(ChatSession.__init__)
+    chat_run_hints = typing.get_type_hints(ChatSession.run)
+    persister_init_hints = typing.get_type_hints(HistoryPersister.__init__)
+    persister_flush_hints = typing.get_type_hints(HistoryPersister.flush_deferred)
+
+    assert loop_hints["messages"] == list[MessageDict]
+    assert strip_hints == {"messages": list[MessageDict], "return": list[MessageDict]}
+    assert rebuild_hints == {"messages": list[MessageDict], "return": list[MessageDict]}
+    assert estimate_hints == {"messages": list[MessageDict], "return": int}
+    assert chat_init_hints["messages"] == list[MessageDict]
+    assert chat_run_hints["tools"] == list[ToolDefinition]
+    assert chat_run_hints["return"] == MessageDict | None
+    assert persister_init_hints["history_db"] is HistoryDBProtocol
+    assert persister_flush_hints["messages"] == list[MessageDict]
