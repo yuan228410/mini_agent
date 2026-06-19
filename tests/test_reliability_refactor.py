@@ -554,3 +554,20 @@ def test_provider_adapters_use_explicit_wire_aliases():
     assert anthropic_tools == {"tools": list[ProviderToolDefinition], "return": list[ProviderToolDefinition]}
     assert anthropic_msg == {"ant_content": list[AnthropicContentBlock], "stop_reason": str, "return": MessageDict}
     assert anthropic_chat["messages"] == list[MessageDict]
+
+
+def test_runner_error_handler_uses_structured_message_boundary():
+    import typing
+    from mini_ai.core.runtime_types import MessageDict
+    from mini_ai.runner.error_handler import ErrorCategory, ErrorHandler, ErrorMessage
+
+    handle_hints = typing.get_type_hints(ErrorHandler.handle)
+    mini_hints = typing.get_type_hints(ErrorHandler._handle_mini_ai_error)
+    unknown_hints = typing.get_type_hints(ErrorHandler._handle_unknown_error)
+    dto_hints = typing.get_type_hints(ErrorMessage.to_message)
+
+    assert handle_hints["return"] == MessageDict | None
+    assert mini_hints["return"] == MessageDict | None
+    assert unknown_hints["return"] == MessageDict | None
+    assert dto_hints["return"] == MessageDict
+    assert [category.value for category in ErrorCategory]

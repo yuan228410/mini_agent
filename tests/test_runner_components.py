@@ -1,7 +1,7 @@
 """测试 runner 模块核心组件"""
 import pytest
 from mini_ai.runner.state import LoopState
-from mini_ai.runner.error_handler import ErrorHandler
+from mini_ai.runner.error_handler import ErrorCategory, ErrorHandler, ErrorMessage
 from mini_ai.exceptions import (
     MiniAIError,
     ToolError,
@@ -98,6 +98,7 @@ class TestErrorHandler:
         
         assert result is not None
         assert result["role"] == "user"
+        assert result["error_category"] == ErrorCategory.CONFIG.value
         assert "配置错误" in result["content"]
     
     def test_handle_llm_rate_limit(self):
@@ -109,6 +110,7 @@ class TestErrorHandler:
         result = handler.handle(error, state)
         
         assert result is not None
+        assert result["error_category"] == ErrorCategory.LLM_RATE_LIMIT.value
         assert "频繁" in result["content"]
     
     def test_handle_llm_server_error(self):
@@ -120,6 +122,7 @@ class TestErrorHandler:
         result = handler.handle(error, state)
         
         assert result is not None
+        assert result["error_category"] == ErrorCategory.LLM.value
         assert "LLM 调用失败" in result["content"]
     
     def test_handle_tool_error_single(self):
@@ -131,6 +134,7 @@ class TestErrorHandler:
         result = handler.handle(error, state)
         
         assert result is not None
+        assert result["error_category"] == ErrorCategory.TOOL.value
         assert "工具执行失败" in result["content"]
         assert state.consecutive_errors == 1
     
@@ -145,6 +149,7 @@ class TestErrorHandler:
             result = handler.handle(error, state)
         
         assert state.consecutive_errors == 3
+        assert result["error_category"] == ErrorCategory.TOOL_CONSECUTIVE.value
         assert "连续执行失败" in result["content"]
     
     def test_handle_unknown_error(self):
@@ -156,6 +161,7 @@ class TestErrorHandler:
         result = handler.handle(error, state)
         
         assert result is not None
+        assert result["error_category"] == ErrorCategory.UNKNOWN.value
         assert "未知错误" in result["content"]
         assert "ValueError" in result["content"]
     
@@ -178,12 +184,23 @@ class TestErrorHandler:
         """错误消息包含时间戳"""
         handler = ErrorHandler()
         state = LoopState()
-        
+
         error = ToolError("read_file", "Failed")
         result = handler.handle(error, state)
-        
+
         assert "timestamp" in result
         assert len(result["timestamp"]) == 19  # YYYY-MM-DDTHH:MM:SS
+
+    def test_error_message_dto_to_runtime_message(self):
+        """错误消息 DTO 显式转换为 runtime MessageDict"""
+        msg = ErrorMessage(ErrorCategory.TOOL, "工具失败", "2026-01-01T00:00:00").to_message()
+
+        assert msg == {
+            "role": "user",
+            "content": "工具失败",
+            "timestamp": "2026-01-01T00:00:00",
+            "error_category": "tool",
+        }
 
 
 class TestErrorHandlerIntegration:

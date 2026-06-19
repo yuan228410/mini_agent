@@ -11,13 +11,15 @@
 
 from .state import LoopState
 from .executor import ToolExecutor
-from .error_handler import ErrorHandler
+from .error_handler import ErrorCategory, ErrorHandler, ErrorMessage
 from .loop import run_tool_loop, run_agent
 
 __all__ = [
     "LoopState",
     "ToolExecutor", 
+    "ErrorCategory",
     "ErrorHandler",
+    "ErrorMessage",
     "run_tool_loop",
     "run_agent",
 ]
