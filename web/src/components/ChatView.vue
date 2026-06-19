@@ -6,7 +6,7 @@ import {
   getConfig, createSession, getHistory, resetChat, renameSession,
   getSessions, exportSession,
   getSystemPrompt, getTodos, getTools,
-  type WsEvent, type HistoryMessage, type ImageData, type TodoItem, type ToolCallDisplay, type WorkflowState, type WorkflowTaskStatus,
+  type TeamWsEvent, type WsEvent, type HistoryMessage, type ImageData, type TodoItem, type ToolCallDisplay, type WorkflowState, type WorkflowTaskStatus, type WorkflowWsEvent,
 } from '../api'
 import MessageItem from './MessageItem.vue'
 import InputBar, { type ImageFile } from './InputBar.vue'
@@ -928,10 +928,10 @@ function _processEvent(s: SessionState, event: WsEvent) {
           s._teammateBuffers.delete(tmName)
         }
       }
-      window.dispatchEvent(new CustomEvent('ws-message', { detail: event }))
+      window.dispatchEvent(new CustomEvent<TeamWsEvent>('ws-message', { detail: event }))
       break
     case 'blackboard_update':
-      window.dispatchEvent(new CustomEvent('ws-message', { detail: event }))
+      window.dispatchEvent(new CustomEvent<TeamWsEvent>('ws-message', { detail: event }))
       break
     case 'inbox_message':
       // 处理队友间的消息通知
@@ -1021,7 +1021,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
         })
         _updateUI(s)
         // 通知 WorkflowPanel
-        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'workflow_start', data: event.data } }))
+        window.dispatchEvent(new CustomEvent<WorkflowWsEvent>('workflow-event', { detail: { event: 'workflow_start', data: event.data } }))
       }
       break
     case 'task_start':
@@ -1066,7 +1066,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           teammateColor: _tmColor(taskId)
         })
         _updateUI(s)
-        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'task_start', data: event.data } }))
+        window.dispatchEvent(new CustomEvent<WorkflowWsEvent>('workflow-event', { detail: { event: 'task_start', data: event.data } }))
       }
       break
     case 'task_end':
@@ -1112,7 +1112,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           teammateColor: _tmColor(taskId)
         })
         _updateUI(s)
-        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'task_end', data: event.data } }))
+        window.dispatchEvent(new CustomEvent<WorkflowWsEvent>('workflow-event', { detail: { event: 'task_end', data: event.data } }))
       }
       break
     case 'workflow_end':
@@ -1144,7 +1144,7 @@ function _processEvent(s: SessionState, event: WsEvent) {
           streaming: false
         })
         _updateUI(s)
-        window.dispatchEvent(new CustomEvent('workflow-event', { detail: { event: 'workflow_end', data: event.data } }))
+        window.dispatchEvent(new CustomEvent<WorkflowWsEvent>('workflow-event', { detail: { event: 'workflow_end', data: event.data } }))
       }
       break
     // ── 新增：Agent 启动事件 ──

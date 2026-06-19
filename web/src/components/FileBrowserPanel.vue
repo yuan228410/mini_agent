@@ -1,26 +1,20 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onUnmounted, computed } from 'vue'
 import hljs from '../highlight'
-
-interface FileItem {
-  name: string
-  type: 'dir' | 'file'
-  path: string
-  size?: number
-  language?: string
-  modified?: string
-}
-
-interface Breadcrumb {
-  name: string
-  path: string
-}
+import type {
+  BreadcrumbItem,
+  FileItem,
+  FileListResponse,
+  FileReadResponse,
+  FileSearchResponse,
+  WorkspaceMutationResponse,
+} from '../api'
 
 const props = defineProps<{ visible?: boolean, embedded?: boolean; workspace: string }>()
 const emit = defineEmits(['close', 'workspace-created'])
 
 const items = ref<FileItem[]>([])
-const breadcrumb = ref<Breadcrumb[]>([])
+const breadcrumb = ref<BreadcrumbItem[]>([])
 const currentPath = ref('')
 const rootPath = ref('')
 const panelWidth = ref(480)
@@ -61,7 +55,7 @@ async function setAsWorkspace(fullPath: string, name: string) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: fullPath, username: _username() }),
     })
-    const data = await resp.json()
+    const data = await resp.json() as WorkspaceMutationResponse
     if (data.error) {
       alert(data.error)
       return
@@ -114,7 +108,7 @@ async function loadDir(path: string) {
   showFileSearch.value = false
   try {
     const resp = await fetch(`/api/files/list?path=${encodeURIComponent(path)}&workspace=${encodeURIComponent(props.workspace)}&username=${encodeURIComponent(_username())}`)
-    const data = await resp.json()
+    const data = await resp.json() as FileListResponse
     if (data.error) {
       items.value = []
       breadcrumb.value = []
@@ -165,7 +159,7 @@ async function loadMoreContent() {
     const resp = await fetch(
       `/api/files/read?path=${encodeURIComponent(previewFile.value!)}&workspace=${encodeURIComponent(props.workspace)}&offset=${previewOffset.value}&limit=200&username=${encodeURIComponent(_username())}`
     )
-    const data = await resp.json()
+    const data = await resp.json() as FileReadResponse
     if (data.error) {
       previewContent.value += `\n// Error: ${data.error}`
       return
@@ -173,7 +167,7 @@ async function loadMoreContent() {
 
     if (data.is_binary) {
       previewIsBinary.value = true
-      previewIsImage.value = data.is_image
+      previewIsImage.value = data.is_image || false
       previewMimeType.value = data.mime_type || ''
       previewSize.value = data.size || 0
       previewModified.value = data.modified || ''
@@ -183,12 +177,12 @@ async function loadMoreContent() {
     previewSize.value = data.size || 0
     previewModified.value = data.modified || ''
 
-    const newContent = data.content
+    const newContent = data.content || ''
     const oldLen = previewContent.value.length
     previewContent.value += newContent
-    previewOffset.value = data.offset + data.limit
-    previewHasMore.value = data.has_more
-    previewTotalLines.value = data.total_lines
+    previewOffset.value = (data.offset || 0) + (data.limit || 0)
+    previewHasMore.value = data.has_more || false
+    previewTotalLines.value = data.total_lines || 0
     await nextTick()
     highlightIncremental(oldLen)
   } catch {} finally {
@@ -458,7 +452,7 @@ function onFileSearchInput() {
       const resp = await fetch(
         `/api/files/search?query=${encodeURIComponent(fileSearchQuery.value)}&path=${encodeURIComponent(currentPath.value)}&workspace=${encodeURIComponent(props.workspace)}&username=${encodeURIComponent(_username())}`
       )
-      const data = await resp.json()
+      const data = await resp.json() as FileSearchResponse
       fileSearchResults.value = data.results || []
     } catch {} finally {
       fileSearchLoading.value = false
@@ -531,7 +525,7 @@ function goRoot() {
   loadDir('')
 }
 
-function goToBreadcrumb(bc: Breadcrumb) {
+function goToBreadcrumb(bc: BreadcrumbItem) {
   loadDir(bc.path)
 }
 

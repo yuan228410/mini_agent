@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import type { WorkflowEndData, WorkflowStartData, WorkflowState, WorkflowTaskEndData, WorkflowTaskStartData, WorkflowTaskStatus } from '../api'
+import type { WorkflowState, WorkflowTaskStatus, WorkflowWsEvent } from '../api'
 
 type TaskInfo = WorkflowState['tasks'][string]
 
@@ -203,13 +203,7 @@ const progress = computed(() => {
   return Math.round((done / total) * 100)
 })
 
-type WorkflowPanelEvent =
-  | { event: 'workflow_start'; data: WorkflowStartData }
-  | { event: 'task_start'; data: WorkflowTaskStartData }
-  | { event: 'task_end'; data: WorkflowTaskEndData }
-  | { event: 'workflow_end'; data: WorkflowEndData }
-
-function handleWorkflowEvent(event: CustomEvent<WorkflowPanelEvent>) {
+function handleWorkflowEvent(event: CustomEvent<WorkflowWsEvent>) {
   const detail = event.detail
   if (!detail || !detail.event) return
 

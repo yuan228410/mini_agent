@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { getTeamStatus, getBlackboard, dismissTeammate, clearBlackboard } from '../api'
-import type { BlackboardEntry, TeammateInfo, TeammateStatus, WsEvent } from '../api'
-
-type TeamWsEvent = Extract<WsEvent, { event: 'teammate_status' | 'blackboard_update' }>
+import type { BlackboardEntry, TeamWsEvent, TeammateInfo, TeammateStatus } from '../api'
 
 const props = defineProps<{ visible?: boolean, username?: string, workspace?: string, embedded?: boolean }>()
 const emit = defineEmits(['close'])

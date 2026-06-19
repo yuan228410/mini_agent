@@ -1,10 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-
-interface WorkspaceInfo {
-  name: string
-  project_path: string
-}
+import type { WorkspaceInfo, WorkspaceMutationResponse, WorkspacesResponse } from '../api'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits(['close', 'switched'])
@@ -22,7 +18,7 @@ onMounted(async () => { await refresh() })
 async function refresh() {
   try {
     const resp = await fetch('/api/workspaces')
-    const data = await resp.json()
+    const data = await resp.json() as WorkspacesResponse
     workspaces.value = data.workspaces || []
     active.value = data.active || 'default'
   } catch {}
@@ -35,7 +31,7 @@ async function switchTo(name: string) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, username }),
   })
-  const data = await resp.json()
+  const data = await resp.json() as WorkspaceMutationResponse
   active.value = name
   emit('switched', name, data.session_id || 'default')
 }

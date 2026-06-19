@@ -58,6 +58,14 @@ async function _fetchJson<T>(url: string, init?: RequestInit & { timeout?: numbe
   }
 }
 
+function _json<T>(resp: Response): Promise<T> {
+  return resp.json() as Promise<T>
+}
+
+function _parseWsEvent(raw: string): DisplayWireEvent {
+  return JSON.parse(raw) as DisplayWireEvent
+}
+
 
 export function getUsername(): string {
   return localStorage.getItem(USERNAME_KEY) || ''
@@ -185,6 +193,10 @@ export interface WsBaseData {
   completion_tokens?: number
   event_id?: string
 }
+
+export type DisplayWireEvent = WsEvent
+export type TeamWsEvent = Extract<WsEvent, { event: 'teammate_status' | 'blackboard_update' }>
+export type WorkflowWsEvent = Extract<WsEvent, { event: 'workflow_start' | 'task_start' | 'task_end' | 'workflow_end' }>
 
 export type WsEvent =
   | { event: 'connected' | 'reconnected'; data: WsBaseData }
@@ -358,6 +370,79 @@ export interface RenameSessionResponse extends ApiMutationResponse {
 
 export interface WorkspaceMutationResponse extends ApiMutationResponse {
   project_path?: string
+  session_id?: string
+}
+
+export type WorkspaceActionResponse = WorkspaceMutationResponse
+export type TeamActionResponse = TeamMutationResponse
+
+export interface SystemPromptResponse {
+  system_prompt: string
+  chars: number
+  tokens: number
+}
+
+export interface SkillsListResponse {
+  skills: SkillInfo[]
+}
+
+export interface RemovedWorkspacesResponse {
+  removed: RemovedWorkspaceInfo[]
+}
+
+export interface BreadcrumbItem {
+  name: string
+  path: string
+}
+
+export interface FileItem {
+  name: string
+  type: 'dir' | 'file'
+  path: string
+  size?: number
+  language?: string
+  modified?: string
+}
+
+export interface FileListResponse extends ApiMutationResponse {
+  root?: string
+  current_path?: string
+  breadcrumb?: BreadcrumbItem[]
+  items?: FileItem[]
+  truncated?: boolean
+}
+
+export interface FileReadTextResponse extends ApiMutationResponse {
+  path?: string
+  language?: string
+  content?: string
+  offset?: number
+  limit?: number
+  total_lines?: number
+  has_more?: boolean
+  size?: number
+  modified?: string
+  is_binary: false
+  is_image?: false
+}
+
+export interface FileReadBinaryResponse extends ApiMutationResponse {
+  path?: string
+  is_binary: true
+  is_image?: boolean
+  mime_type?: string
+  size?: number
+  modified?: string
+  language?: string
+}
+
+export type FileReadResponse = FileReadTextResponse | FileReadBinaryResponse
+
+export interface FileSearchResponse extends ApiMutationResponse {
+  results?: FileItem[]
+  query?: string
+  scanned?: number
+  truncated?: boolean
 }
 
 interface SessionRequestBody extends UsernamePayload {
@@ -614,7 +699,7 @@ export async function ensureWs(): Promise<boolean> {
     ws.onmessage = (e) => {
       if (gen !== _wsGeneration) return
       try {
-        const evt = JSON.parse(e.data) as WsEvent
+        const evt = _parseWsEvent(e.data)
         
         // 处理 pong 响应
         if (evt.event === 'pong') {
@@ -841,7 +926,7 @@ export async function createSession(workspace?: string): Promise<{ session_id: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function getSessions(workspace?: string): Promise<SessionsResponse> {
@@ -849,7 +934,7 @@ export async function getSessions(workspace?: string): Promise<SessionsResponse>
   params.set('username', _username())
   if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/sessions?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export async function deleteSession(sessionId: string, workspace?: string): Promise<DeleteSessionResponse> {
@@ -860,7 +945,7 @@ export async function deleteSession(sessionId: string, workspace?: string): Prom
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function batchDeleteSessions(sessionIds: string[], workspace?: string): Promise<BatchDeleteSessionsResponse> {
@@ -871,7 +956,7 @@ export async function batchDeleteSessions(sessionIds: string[], workspace?: stri
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function renameSession(sessionId: string, name: string, workspace?: string): Promise<RenameSessionResponse> {
@@ -882,7 +967,7 @@ export async function renameSession(sessionId: string, name: string, workspace?:
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function getHistory(sessionId: string, workspace?: string): Promise<HistoryResponse> {
@@ -891,7 +976,7 @@ export async function getHistory(sessionId: string, workspace?: string): Promise
   params.set('username', _username())
   if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/chat/history?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
 // ── Workspace APIs ──
@@ -903,7 +988,7 @@ export interface RemovedWorkspaceInfo {
 
 export async function getWorkspaces(): Promise<WorkspacesResponse> {
   const resp = await _fetch(`/api/workspaces?username=${encodeURIComponent(_username())}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export async function createWorkspace(name: string, projectPath?: string): Promise<WorkspaceMutationResponse> {
@@ -914,7 +999,7 @@ export async function createWorkspace(name: string, projectPath?: string): Promi
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function addWorkspace(path: string): Promise<WorkspaceMutationResponse> {
@@ -923,7 +1008,7 @@ export async function addWorkspace(path: string): Promise<WorkspaceMutationRespo
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path, ..._usernameBody() }),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function switchWorkspace(name: string): Promise<WorkspaceMutationResponse> {
@@ -932,19 +1017,19 @@ export async function switchWorkspace(name: string): Promise<WorkspaceMutationRe
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, ..._usernameBody() }),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function removeWorkspace(name: string, deleteData: boolean = false): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch(`/api/workspaces/${encodeURIComponent(name)}?delete_data=${deleteData}&username=${encodeURIComponent(_username())}`, {
     method: 'DELETE',
   })
-  return resp.json()
+  return _json(resp)
 }
 
-export async function listRemovedWorkspaces(): Promise<{ removed: RemovedWorkspaceInfo[] }> {
+export async function listRemovedWorkspaces(): Promise<RemovedWorkspacesResponse> {
   const resp = await _fetch(`/api/workspaces/removed?username=${encodeURIComponent(_username())}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export async function restoreWorkspace(name: string): Promise<WorkspaceMutationResponse> {
@@ -953,14 +1038,14 @@ export async function restoreWorkspace(name: string): Promise<WorkspaceMutationR
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name, ..._usernameBody() }),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function deleteRemovedWorkspace(name: string): Promise<WorkspaceMutationResponse> {
   const resp = await _fetch(`/api/workspaces/removed/${encodeURIComponent(name)}?username=${encodeURIComponent(_username())}`, {
     method: 'DELETE',
   })
-  return resp.json()
+  return _json(resp)
 }
 
 // ── Other APIs ──
@@ -973,7 +1058,7 @@ export async function getModels(sessionId?: string, workspace?: string): Promise
   if (u) params.set('username', u)
   const query = params.toString()
   const resp = await _fetch(`/api/models${query ? '?' + query : ''}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export async function switchModel(name: string, sessionId?: string, workspace?: string): Promise<SwitchModelResponse> {
@@ -985,7 +1070,7 @@ export async function switchModel(name: string, sessionId?: string, workspace?: 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function getConfig(sessionId?: string, workspace?: string): Promise<ConfigResponse> {
@@ -995,16 +1080,16 @@ export async function getConfig(sessionId?: string, workspace?: string): Promise
   if (u) params.set('username', u)
   if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/config?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
-export async function getSystemPrompt(workspace?: string): Promise<{system_prompt: string, chars: number, tokens: number}> {
+export async function getSystemPrompt(workspace?: string): Promise<SystemPromptResponse> {
   const params = new URLSearchParams()
   const u = _username()
   if (u) params.set('username', u)
   if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/config/system-prompt?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export async function resetChat(sessionId?: string, workspace?: string): Promise<ResetChatResponse> {
@@ -1016,7 +1101,7 @@ export async function resetChat(sessionId?: string, workspace?: string): Promise
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export interface SkillInfo {
@@ -1026,13 +1111,13 @@ export interface SkillInfo {
   tier: string
 }
 
-export async function getSkills(username?: string, workspace?: string): Promise<{skills: SkillInfo[]}> {
+export async function getSkills(username?: string, workspace?: string): Promise<SkillsListResponse> {
   const params = new URLSearchParams()
   if (username) params.set('username', username)
   if (workspace) params.set('workspace', workspace)
   const qs = params.toString()
   const resp = await _fetch('/api/skills' + (qs ? '?' + qs : ''))
-  return resp.json()
+  return _json(resp)
 }
 
 export interface DeleteSkillResponse {
@@ -1048,12 +1133,12 @@ export async function deleteSkill(name: string, username?: string, workspace?: s
   if (level) params.set('level', level)
   const qs = params.toString()
   const resp = await _fetch('/api/skills/' + encodeURIComponent(name) + (qs ? '?' + qs : ''), { method: 'DELETE' })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function getCommands(): Promise<CommandsResponse> {
   const resp = await _fetch('/api/commands')
-  return resp.json()
+  return _json(resp)
 }
 
 export interface ToolDefinition {
@@ -1077,7 +1162,7 @@ export async function getTools(sessionId?: string, workspace?: string): Promise<
   if (sessionId) params.set('session_id', sessionId)
   if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/config/tools?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export interface BrowseDir {
@@ -1099,7 +1184,7 @@ export async function browseDirs(path?: string): Promise<BrowseResponse> {
   const u = _username()
   if (u) params.set('username', u)
   const resp = await _fetch(`/api/files/browse?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
 export interface SearchResult {
@@ -1118,7 +1203,7 @@ export async function searchHistory(keyword: string, sessionId?: string, workspa
   if (dateTo) params.set('date_to', dateTo)
   if (limit) params.set('limit', String(limit))
   const resp = await _fetch(`/api/chat/search?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
 
 
@@ -1265,7 +1350,7 @@ export interface RemoveModelResponse extends ApiMutationResponse {
 
 export async function getSettings(): Promise<SettingsResponse> {
   const resp = await _fetch('/api/settings')
-  return resp.json()
+  return _json(resp)
 }
 
 export async function updateSettings(updates: SettingsUpdatePayload): Promise<UpdateSettingsResponse> {
@@ -1274,7 +1359,7 @@ export async function updateSettings(updates: SettingsUpdatePayload): Promise<Up
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 
@@ -1284,7 +1369,7 @@ export async function addModel(model: AddModelRequest): Promise<AddModelResponse
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(model),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function removeModel(name: string): Promise<RemoveModelResponse> {
@@ -1293,7 +1378,7 @@ export async function removeModel(name: string): Promise<RemoveModelResponse> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ name }),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 
@@ -1347,7 +1432,7 @@ export interface McpStatusResponse {
 
 export async function getMcpStatus(): Promise<McpStatusResponse> {
   const resp = await _fetch('/api/mcp')
-  return resp.json()
+  return _json(resp)
 }
 
 export async function addMcpServer(server: AddMcpServerRequest): Promise<AddMcpServerResponse> {
@@ -1356,14 +1441,14 @@ export async function addMcpServer(server: AddMcpServerRequest): Promise<AddMcpS
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(server),
   })
-  return resp.json()
+  return _json(resp)
 }
 
 export async function removeMcpServer(name: string): Promise<RemoveMcpServerResponse> {
   const resp = await _fetch(`/api/settings/mcp/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   })
-  return resp.json()
+  return _json(resp)
 }
 
 
@@ -1406,7 +1491,7 @@ export async function getTeamStatus(username: string, workspace: string): Promis
   if (workspace) params.set('workspace', workspace)
   const resp = await _origFetch(`/api/team/status?${params.toString()}`)
   if (!resp.ok) throw new Error('获取 Team 状态失败')
-  return resp.json()
+  return _json(resp)
 }
 
 export async function getBlackboard(username: string, workspace: string): Promise<BlackboardResponse> {
@@ -1415,7 +1500,7 @@ export async function getBlackboard(username: string, workspace: string): Promis
   if (workspace) params.set('workspace', workspace)
   const resp = await _origFetch(`/api/team/blackboard?${params.toString()}`)
   if (!resp.ok) throw new Error('获取黑板失败')
-  return resp.json()
+  return _json(resp)
 }
 
 export async function dismissTeammate(username: string, workspace: string, name: string): Promise<TeamMutationResponse> {
@@ -1425,7 +1510,7 @@ export async function dismissTeammate(username: string, workspace: string, name:
     body: JSON.stringify({ username, workspace, name }),
   })
   if (!resp.ok) throw new Error('解散队友失败')
-  return resp.json()
+  return _json(resp)
 }
 
 export async function clearBlackboard(username: string, workspace: string): Promise<TeamMutationResponse> {
@@ -1435,7 +1520,7 @@ export async function clearBlackboard(username: string, workspace: string): Prom
     body: JSON.stringify({ username, workspace }),
   })
   if (!resp.ok) throw new Error('清空黑板失败')
-  return resp.json()
+  return _json(resp)
 }
 
 export async function getTodos(sessionId: string, workspace?: string): Promise<TodosResponse> {
@@ -1444,5 +1529,5 @@ export async function getTodos(sessionId: string, workspace?: string): Promise<T
   params.set('session_id', sessionId)
   if (workspace) params.set('workspace', workspace)
   const resp = await _fetch(`/api/todos?${params.toString()}`)
-  return resp.json()
+  return _json(resp)
 }
