@@ -2,10 +2,9 @@
 import asyncio
 import time
 import threading
-from typing import Any
-
 from ..core import events
 from ..core.events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
+from ..core.runtime_types import DisplayEventPayload, DisplayWireEvent
 from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
 
 # 全局事件序号计数器（每个会话独立）
@@ -40,7 +39,7 @@ class WebDisplay:
         self.thinking_mode = "collapsed"
         self.tool_detail = "summary"
         self._llm_round_start_time = 0.0
-        self._pending_events: list[dict] = []
+        self._pending_events: list[DisplayWireEvent] = []
         self._pending_lock = threading.Lock()
         self._flush_scheduled = False
 
@@ -64,13 +63,13 @@ class WebDisplay:
             child.set_teammate(teammate)
         return child
 
-    def emit(self, event: str | DisplayEvent, data: dict[str, Any] | None = None):
+    def emit(self, event: str | DisplayEvent, data: DisplayEventPayload | None = None) -> None:
         if isinstance(event, DisplayEvent):
             self._push(event.event.value, event.data)
         else:
             self._push(event, data)
 
-    def _push(self, event: str | DisplayEventType, data: dict | None = None):
+    def _push(self, event: str | DisplayEventType, data: DisplayEventPayload | None = None) -> None:
         if isinstance(event, DisplayEventType):
             event = event.value
         from mini_ai.llm import get_global_usage
@@ -98,7 +97,7 @@ class WebDisplay:
         
         self._enqueue({"event": event, "data": data})
 
-    def _enqueue(self, item: dict):
+    def _enqueue(self, item: DisplayWireEvent) -> None:
         with self._pending_lock:
             if len(self._pending_events) >= _MAX_PENDING_EVENTS:
                 if item.get("event") in _TERMINAL_EVENTS:
@@ -121,7 +120,7 @@ class WebDisplay:
             with self._pending_lock:
                 self._flush_scheduled = False
 
-    def _put_with_priority(self, item: dict):
+    def _put_with_priority(self, item: DisplayWireEvent) -> bool:
         try:
             self.queue.put_nowait(item)
             return True
@@ -190,7 +189,7 @@ class WebDisplay:
     def thinking_start(self):
         self._thinking_buf = ""
         self._thinking_start_time = time.monotonic()
-        data: dict = {}
+        data: DisplayEventPayload = {}
         if self._teammate:
             data["teammate"] = self._teammate
         self._push(DisplayEventType.THINKING_START, data)
@@ -284,8 +283,8 @@ class WebDisplay:
     def info(self, text: str):
         self._push(DisplayEventType.INFO, {"message": text})
 
-    def plan_event(self, kind: str, **data):
-        payload = {"kind": kind}
+    def plan_event(self, kind: str, **data) -> None:
+        payload: DisplayEventPayload = {"kind": kind}
         payload.update(data)
         self._push(DisplayEventType.PLAN_EVENT, payload)
 
@@ -304,7 +303,7 @@ class WebDisplay:
             payload["teammate"] = self._teammate
         self._push(DisplayEventType.AGENT_START, payload)
 
-    def workflow_start(self, tasks: list[WorkflowTaskInfo | dict[str, Any]], total: int):
+    def workflow_start(self, tasks: list[WorkflowTaskInfo | DisplayEventPayload], total: int) -> None:
         self.emit(events.workflow_start(tasks, total))
 
     def workflow_task_start(self, task_id: str, agent: str, prompt: str):

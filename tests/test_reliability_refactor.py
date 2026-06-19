@@ -762,3 +762,25 @@ def test_plan_artifacts_use_explicit_serialization_aliases():
     assert service_todos["artifact"] == PlanArtifact | PlanArtifactDict
     assert service_fallback["current"] == PlanArtifactDict | None
     assert history_protocol["artifact"] == PlanArtifactDict
+
+
+def test_web_display_uses_explicit_wire_aliases():
+    import typing
+    from mini_ai.core.runtime_types import DisplayEventPayload, DisplayWireEvent
+    from mini_ai.team.models import WorkflowTaskInfo
+    from mini_ai.web.display import WebDisplay
+
+    emit_hints = typing.get_type_hints(WebDisplay.emit)
+    push_hints = typing.get_type_hints(WebDisplay._push)
+    enqueue_hints = typing.get_type_hints(WebDisplay._enqueue)
+    priority_hints = typing.get_type_hints(WebDisplay._put_with_priority)
+    workflow_hints = typing.get_type_hints(WebDisplay.workflow_start)
+
+    assert emit_hints["data"] == DisplayEventPayload | None
+    assert emit_hints["return"] is type(None)
+    assert push_hints["data"] == DisplayEventPayload | None
+    assert push_hints["return"] is type(None)
+    assert enqueue_hints == {"item": DisplayWireEvent, "return": type(None)}
+    assert priority_hints == {"item": DisplayWireEvent, "return": bool}
+    assert workflow_hints["tasks"] == list[WorkflowTaskInfo | DisplayEventPayload]
+    assert workflow_hints["return"] is type(None)
