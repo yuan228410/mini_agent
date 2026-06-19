@@ -8,12 +8,28 @@ from ... import __version__
 from ...config import MODEL_CONFIG, get_model_config, _raw, _config_path, AVAILABLE_MODELS, switch_model as _switch_model
 from ...llm.base import estimate_tokens
 from ...logger import logger
+from ..route_types import (
+    AddModelRequest,
+    AddModelResponse,
+    ConfigResponse,
+    McpServerAddRequest,
+    McpServerAddResponse,
+    McpServerRemoveResponse,
+    RemoveModelRequest,
+    RemoveModelResponse,
+    RouteErrorResponse,
+    SettingsResponse,
+    SettingsUpdateRequest,
+    SettingsUpdateResponse,
+    SystemPromptResponse,
+    ToolsResponse,
+)
 from ..session_manager import SessionManager, cache_key, resolve_base, get_or_create_session, get_or_create_components, _load_session_model
 
 router = APIRouter()
 
 @router.get("/config")
-async def get_config(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")):
+async def get_config(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")) -> ConfigResponse | RouteErrorResponse:
     _t0 = time.time()
     if not username:
         return {"error": "缺少 username"}
@@ -47,7 +63,7 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
 
 
 @router.get("/config/system-prompt")
-async def get_system_prompt(username: str = Query(default=""), workspace: str = Query(default="")):
+async def get_system_prompt(username: str = Query(default=""), workspace: str = Query(default="")) -> SystemPromptResponse | RouteErrorResponse:
     """获取完整系统提示词（含字符数和 token 估算）"""
     if not username:
         return {"error": "缺少 username"}
@@ -87,7 +103,7 @@ async def get_system_prompt(username: str = Query(default=""), workspace: str = 
 
 
 @router.get("/config/tools")
-async def get_tools(username: str = Query(default=""), workspace: str = Query(default=""), session_id: str = Query(default="default")):
+async def get_tools(username: str = Query(default=""), workspace: str = Query(default=""), session_id: str = Query(default="default")) -> ToolsResponse:
     """获取当前会话工具定义（含字符数和 token 估算）。"""
     from ...core import build_session_runtime
     from ...core.runtime_context import SessionIdentity
@@ -131,7 +147,7 @@ async def get_tools(username: str = Query(default=""), workspace: str = Query(de
 
 
 @router.get("/settings")
-async def get_settings():
+async def get_settings() -> SettingsResponse:
     from ...config import (
         _raw, STREAMING, THINKING, DISPLAY, COMPACTOR, TIMEOUTS,
         RUNNER, PLAN, TOOL, WEB, LOGGING, AVAILABLE_MODELS, MODEL_CONFIG,
@@ -166,7 +182,7 @@ async def get_settings():
 
 
 @router.put("/settings")
-async def update_settings(body: dict):
+async def update_settings(body: SettingsUpdateRequest) -> SettingsUpdateResponse:
 
     updated_sections = []
 
@@ -282,7 +298,7 @@ async def update_settings(body: dict):
 
 
 @router.post("/settings/add_model")
-async def add_model(body: dict):
+async def add_model(body: AddModelRequest) -> AddModelResponse | RouteErrorResponse:
 
     name = body.get("name", "").strip()
     if not name:
@@ -313,7 +329,7 @@ async def add_model(body: dict):
 
 
 @router.delete("/settings/remove_model")
-async def remove_model(body: dict):
+async def remove_model(body: RemoveModelRequest) -> RemoveModelResponse | RouteErrorResponse:
 
     name = body.get("name", "").strip()
     if not name:
@@ -340,7 +356,7 @@ async def remove_model(body: dict):
 
 
 @router.post("/settings/mcp/add")
-async def add_mcp_server(body: dict):
+async def add_mcp_server(body: McpServerAddRequest) -> McpServerAddResponse | RouteErrorResponse:
 
     name = body.get("name", "").strip()
     server_type = body.get("type", "stdio")
@@ -385,7 +401,7 @@ async def add_mcp_server(body: dict):
 
 
 @router.delete("/settings/mcp/{name}")
-async def remove_mcp_server(name: str, username: str = ""):
+async def remove_mcp_server(name: str, username: str = "") -> McpServerRemoveResponse | RouteErrorResponse:
 
     mcp_cfg = _raw.get("mcp", {})
     servers = mcp_cfg.get("servers", {})

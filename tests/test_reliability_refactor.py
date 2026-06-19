@@ -1027,7 +1027,7 @@ def test_web_route_boundaries_use_explicit_dtos():
     import typing
     from mini_ai.core.runtime_types import DisplayWireEvent, PlanArtifactDict, TeamComponents
     from mini_ai.web import route_types, session_manager
-    from mini_ai.web.routes import chat, commands, files, models, sessions, team, workspaces
+    from mini_ai.web.routes import chat, commands, config as config_routes, files, models, sessions, skills, team, workspaces
 
     assert typing.get_type_hints(session_manager._build_meta)["return"] == route_types.SessionMeta
     assert typing.get_type_hints(session_manager.SessionManager.get_meta)["return"] == route_types.SessionMeta | None
@@ -1069,6 +1069,27 @@ def test_web_route_boundaries_use_explicit_dtos():
     assert typing.get_type_hints(commands)["_WEB_COMMANDS"] == list[route_types.WebCommand]
     assert typing.get_type_hints(commands.list_commands)["return"] == route_types.CommandsResponse
     assert typing.get_type_hints(commands.mcp_status)["return"] == route_types.McpStatusResponse
+
+    assert typing.get_type_hints(config_routes.get_config)["return"] == route_types.ConfigResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(config_routes.get_system_prompt)["return"] == route_types.SystemPromptResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(config_routes.get_tools)["return"] == route_types.ToolsResponse
+    assert typing.get_type_hints(config_routes.get_settings)["return"] == route_types.SettingsResponse
+    assert typing.get_type_hints(config_routes.update_settings)["body"] == route_types.SettingsUpdateRequest
+    assert typing.get_type_hints(config_routes.update_settings)["return"] == route_types.SettingsUpdateResponse
+    assert typing.get_type_hints(config_routes.add_model)["body"] == route_types.AddModelRequest
+    assert typing.get_type_hints(config_routes.add_model)["return"] == route_types.AddModelResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(config_routes.remove_model)["body"] == route_types.RemoveModelRequest
+    assert typing.get_type_hints(config_routes.remove_model)["return"] == route_types.RemoveModelResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(config_routes.add_mcp_server)["body"] == route_types.McpServerAddRequest
+    assert typing.get_type_hints(config_routes.add_mcp_server)["return"] == route_types.McpServerAddResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(config_routes.remove_mcp_server)["return"] == route_types.McpServerRemoveResponse | route_types.RouteErrorResponse
+
+    assert typing.get_type_hints(skills.list_skills)["return"] == route_types.SkillsListResponse
+    assert typing.get_type_hints(skills.get_skill_info)["return"] == route_types.SkillInfoResponse
+    assert typing.get_type_hints(skills.load_skill)["return"] == route_types.SkillLoadResponse
+    assert typing.get_type_hints(skills.install_skill)["return"] == route_types.SkillInstallResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(skills.create_skill)["return"] == route_types.SkillCreateResponse
+    assert typing.get_type_hints(skills.delete_skill)["return"] == route_types.SkillDeleteResponse | route_types.RouteErrorResponse
 
     assert typing.get_type_hints(team._get_team_comp)["return"] == TeamComponents | None
     assert typing.get_type_hints(team.blackboard_snapshot)["return"] == route_types.BlackboardSnapshotResponse

@@ -5,6 +5,15 @@ from pathlib import Path
 from ...config import DATA_DIR, SKILL_PATHS, user_data_dir
 from ...skills import SkillLoader
 from ...tools import install_skill as install_skill_tool
+from ..route_types import (
+    RouteErrorResponse,
+    SkillCreateResponse,
+    SkillDeleteResponse,
+    SkillInfoResponse,
+    SkillInstallResponse,
+    SkillLoadResponse,
+    SkillsListResponse,
+)
 
 router = APIRouter()
 
@@ -23,7 +32,7 @@ def _get_skill_loader(username: str, workspace: str) -> SkillLoader:
 
 
 @router.get("/skills")
-async def list_skills(username: str = Query(default=""), workspace: str = Query(default="")):
+async def list_skills(username: str = Query(default=""), workspace: str = Query(default="")) -> SkillsListResponse:
     """列出所有技能"""
     loader = _get_skill_loader(username, workspace)
     skills = []
@@ -38,7 +47,7 @@ async def list_skills(username: str = Query(default=""), workspace: str = Query(
 
 
 @router.get("/skills/{name}")
-async def get_skill_info(name: str, username: str = Query(default=""), workspace: str = Query(default="")):
+async def get_skill_info(name: str, username: str = Query(default=""), workspace: str = Query(default="")) -> SkillInfoResponse:
     """获取技能详情"""
     loader = _get_skill_loader(username, workspace)
     if name not in loader.skills:
@@ -58,7 +67,7 @@ async def get_skill_info(name: str, username: str = Query(default=""), workspace
 
 
 @router.post("/skills/{name}/load")
-async def load_skill(name: str, username: str = Query(default=""), workspace: str = Query(default="")):
+async def load_skill(name: str, username: str = Query(default=""), workspace: str = Query(default="")) -> SkillLoadResponse:
     """加载技能"""
     loader = _get_skill_loader(username, workspace)
     if name not in loader.skills:
@@ -79,7 +88,7 @@ async def install_skill(
     level: str = Query(default="global", description="安装层级: global/user/workspace"),
     username: str = Query(default=""),
     workspace: str = Query(default=""),
-):
+) -> SkillInstallResponse | RouteErrorResponse:
     """安装技能"""
     loader = _get_skill_loader(username, workspace)
     result = install_skill_tool._run_with_loader(loader, {"source": source, "level": level})
@@ -96,7 +105,7 @@ async def create_skill(
     level: str = Query(default="global", description="创建层级: global/user/workspace"),
     username: str = Query(default=""),
     workspace: str = Query(default=""),
-):
+) -> SkillCreateResponse:
     """创建技能模板"""
     loader = _get_skill_loader(username, workspace)
     
@@ -147,7 +156,7 @@ async def delete_skill(
     username: str = Query(default=""),
     workspace: str = Query(default=""),
     level: str = Query(default=""),
-):
+) -> SkillDeleteResponse | RouteErrorResponse:
     """卸载技能"""
     loader = _get_skill_loader(username, workspace)
     if level:

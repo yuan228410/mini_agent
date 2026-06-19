@@ -65,6 +65,27 @@ McpConnectedTool: TypeAlias = RoutePayload
 McpConnectedServer: TypeAlias = RoutePayload
 McpStatusResponse: TypeAlias = RoutePayload
 
+ConfigResponse: TypeAlias = RoutePayload
+SystemPromptResponse: TypeAlias = RoutePayload
+ToolsResponse: TypeAlias = RoutePayload
+SettingsResponse: TypeAlias = RoutePayload
+SettingsUpdateRequest: TypeAlias = RoutePayload
+SettingsUpdateResponse: TypeAlias = RoutePayload
+AddModelRequest: TypeAlias = RoutePayload
+AddModelResponse: TypeAlias = RoutePayload
+RemoveModelRequest: TypeAlias = RoutePayload
+RemoveModelResponse: TypeAlias = RoutePayload
+McpServerAddRequest: TypeAlias = RoutePayload
+McpServerAddResponse: TypeAlias = RoutePayload
+McpServerRemoveResponse: TypeAlias = RoutePayload
+
+SkillsListResponse: TypeAlias = RoutePayload
+SkillInfoResponse: TypeAlias = RoutePayload
+SkillLoadResponse: TypeAlias = RoutePayload
+SkillInstallResponse: TypeAlias = RoutePayload
+SkillCreateResponse: TypeAlias = RoutePayload
+SkillDeleteResponse: TypeAlias = RoutePayload
+
 BlackboardSnapshotResponse: TypeAlias = RoutePayload
 DismissTeammateRequest: TypeAlias = RoutePayload
 ClearBlackboardRequest: TypeAlias = RoutePayload
@@ -122,6 +143,25 @@ __all__ = [
     "McpConnectedTool",
     "McpConnectedServer",
     "McpStatusResponse",
+    "ConfigResponse",
+    "SystemPromptResponse",
+    "ToolsResponse",
+    "SettingsResponse",
+    "SettingsUpdateRequest",
+    "SettingsUpdateResponse",
+    "AddModelRequest",
+    "AddModelResponse",
+    "RemoveModelRequest",
+    "RemoveModelResponse",
+    "McpServerAddRequest",
+    "McpServerAddResponse",
+    "McpServerRemoveResponse",
+    "SkillsListResponse",
+    "SkillInfoResponse",
+    "SkillLoadResponse",
+    "SkillInstallResponse",
+    "SkillCreateResponse",
+    "SkillDeleteResponse",
     "BlackboardSnapshotResponse",
     "DismissTeammateRequest",
     "ClearBlackboardRequest",
