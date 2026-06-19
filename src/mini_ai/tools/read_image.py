@@ -1,4 +1,5 @@
 """图片读取工具 — 读取本地图片并转换为 base64（自动压缩大图）"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import base64
 import io
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 from ..config import IMAGE
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "read_image",
@@ -32,7 +33,7 @@ SUPPORTED_FORMATS = {
 }
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     """读取图片并转换为 data URL 格式
     
     Args:

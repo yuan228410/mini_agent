@@ -1,9 +1,10 @@
 """文件读取工具 — 优化版：大文件逐行读取，避免内存浪费"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 from pathlib import Path
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "read_file",
@@ -23,7 +24,7 @@ definition = {
 _MAX_FILE_SIZE = 500_000  # 500KB
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     path_str = args.get("path", "")
     if not path_str or not isinstance(path_str, str):
         return "Error: read_file 缺少 path 参数（字符串类型），请提供正确的文件路径后重试"

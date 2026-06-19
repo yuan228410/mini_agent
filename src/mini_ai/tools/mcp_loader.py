@@ -1,4 +1,5 @@
 """MCP (Model Context Protocol) 客户端加载器"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import asyncio
 import json
 import threading
@@ -100,7 +101,7 @@ class MCPConnection:
         self.tools = result.tools
         logger.info(f"[MCP] {self.name}: 发现 {len(self.tools)} 个工具")
 
-    async def call_tool(self, tool_name: str, args: dict) -> str:
+    async def call_tool(self, tool_name: str, args: ToolArgs) -> str:
         timeout = self.cfg.get("execute_timeout", _EXECUTE_TIMEOUT)
         async with asyncio.timeout(timeout):
             result = await self.session.call_tool(tool_name, arguments=args)
@@ -129,14 +130,14 @@ class MCPConnection:
 class _MCPToolModule:
     __slots__ = ("definition", "_loader", "_server_name", "_tool_name", "_orig_name")
 
-    def __init__(self, definition: dict, loader: "MCPLoader", server_name: str, tool_name: str, orig_name: str):
+    def __init__(self, definition: ToolDefinition, loader: "MCPLoader", server_name: str, tool_name: str, orig_name: str):
         self.definition = definition
         self._loader = loader
         self._server_name = server_name
         self._tool_name = tool_name
         self._orig_name = orig_name
 
-    def execute(self, args: dict) -> str:
+    def execute(self, args: ToolArgs) -> str:
         return self._loader.sync_call(self._server_name, self._orig_name, args)
 
 
@@ -180,7 +181,7 @@ class MCPLoader:
             pass
         self._loop.call_soon_threadsafe(self._loop.stop)
 
-    def sync_call(self, server_name: str, tool_name: str, args: dict) -> str:
+    def sync_call(self, server_name: str, tool_name: str, args: ToolArgs) -> str:
         conn = self._connections.get(server_name)
         if not conn or not conn.session:
             return f"[MCP 错误] 服务器 {server_name} 未连接"
@@ -221,7 +222,7 @@ class MCPLoader:
         orig_name = tool.name
         mapped_name = f"mcp_{server_name}_{orig_name}"
         schema = tool.inputSchema or {"type": "object", "properties": {}}
-        definition = {
+        definition: ToolDefinition = {
             "type": "function",
             "function": {
                 "name": mapped_name,

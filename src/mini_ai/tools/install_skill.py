@@ -1,4 +1,5 @@
 """技能安装工具：压缩包下载/本地路径 或 内联内容，支持三层级安装"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 import shutil
 import tarfile
@@ -25,7 +26,7 @@ def _get_loader():
     return _loader_var.get() or _loader
 
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "install_skill",
@@ -186,7 +187,7 @@ def _install_from_archive(name: str, source: str, dest_dir: Path) -> str:
             Path(archive_path).unlink(missing_ok=True)
 
 
-def _execute_with_loader(loader, args: dict) -> str:
+def _execute_with_loader(loader, args: ToolArgs) -> str:
     name = args.get("name", "")
     source = args.get("source")
     content = args.get("content")
@@ -213,7 +214,7 @@ def _execute_with_loader(loader, args: dict) -> str:
     return _install_from_archive(name, source, dest_dir)
 
 
-def _run_with_loader(loader, args: dict) -> str:
+def _run_with_loader(loader, args: ToolArgs) -> str:
     token = _loader_var.set(loader)
     try:
         return _execute_with_loader(loader, args)
@@ -221,5 +222,5 @@ def _run_with_loader(loader, args: dict) -> str:
         _loader_var.reset(token)
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     return _execute_with_loader(_get_loader(), args)

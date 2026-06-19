@@ -1,10 +1,11 @@
 """目录列表工具 — 优化版：递归提前终止，避免遍历过多"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import os
 from pathlib import Path
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "list_dir",
@@ -25,7 +26,7 @@ _IGNORE_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".tox", 
 _MAX_LINES = 500
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     path = Path(args.get("path", "."))
     recursive = args.get("recursive", False)
     max_depth = args.get("max_depth", 3)

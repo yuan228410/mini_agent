@@ -7,7 +7,7 @@
         parameters = {"type": "object", "properties": {...}, "required": [...]}
 
         @staticmethod
-        def execute(args: dict) -> str:
+        def execute(args: ToolArgs) -> str:
             ...
 
     # 向后兼容（供 _registry.add_tools 使用）
@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 from ..config import TOOL
+from ..core.runtime_types import ToolArgs, ToolDefinition, ToolParameterSchema
 from .metadata import metadata_for, normalize_tool_definition
 
 _MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
@@ -31,11 +32,11 @@ class ToolBase:
 
     name: str = ""
     description: str = ""
-    parameters: dict = {}
+    parameters: ToolParameterSchema = {}
     metadata = None
 
     @classmethod
-    def definition(cls) -> dict:
+    def definition(cls) -> ToolDefinition:
         """生成 OpenAI function calling 格式的工具定义"""
         return normalize_tool_definition({
             "type": "function",
@@ -47,7 +48,7 @@ class ToolBase:
         }, metadata_for(cls.name, cls.metadata))
 
     @staticmethod
-    def execute(args: dict) -> str:
+    def execute(args: ToolArgs) -> str:
         """执行工具逻辑，子类必须实现"""
         raise NotImplementedError
 

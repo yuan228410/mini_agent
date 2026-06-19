@@ -1,9 +1,10 @@
 """文件部分编辑工具 — search-and-replace 模式"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 from pathlib import Path
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "edit_file",
@@ -22,7 +23,7 @@ definition = {
 }
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     path_str = args.get("path", "")
     if not path_str:
         return "Error: 缺少 path 参数"

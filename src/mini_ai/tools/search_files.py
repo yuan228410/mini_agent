@@ -1,4 +1,5 @@
 """文件内容搜索工具 — grep（优先） + Python fallback"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import os
 import re
 import shutil
@@ -7,7 +8,7 @@ import fnmatch
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "search_files",
@@ -54,7 +55,7 @@ def _py_search(pattern: str, root: str, include: str, max_results: int):
     return results, ""
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     pattern = args.get("pattern", "")
     path = args.get("path", "")
     include = args.get("include", "")

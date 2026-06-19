@@ -1,4 +1,5 @@
 """待办列表工具 — 跨压缩存活的计划管理，per-session 隔离"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 import threading
 
@@ -9,7 +10,7 @@ _ICONS = {"pending": "[ ]", "in_progress": "[~]", "completed": "[x]"}
 
 _current_session = contextvars.ContextVar("todo_session", default="default")
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "update_todos",
@@ -134,7 +135,7 @@ def set_todos(session_id: str, todos: list[dict]) -> str:
     return store.update(todos)
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     todos = args.get("todos", [])
     if not todos:
         return "Error: 缺少 todos 参数"

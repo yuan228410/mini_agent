@@ -1,4 +1,5 @@
 """配置读取与修改工具"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 import json
 
@@ -7,7 +8,7 @@ from ..logger import logger
 
 _registry_ctx = contextvars.ContextVar("config_tool_registry", default=None)
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "config",
@@ -123,7 +124,7 @@ def _build_self_overview() -> str:
     lines.append("可用工具见上方当前会话工具列表；可用 config 工具读取/修改配置")
     return "\n".join(lines)
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     action = args.get("action", "read")
     path = args.get("path", "")
     value = args.get("value")

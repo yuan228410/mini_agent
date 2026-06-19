@@ -1,9 +1,10 @@
 """Shell 命令执行工具"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import subprocess
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "run_command",
@@ -21,7 +22,7 @@ definition = {
 }
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     command = args.get("command", "")
     if not command or not isinstance(command, str):
         return "Error: 缺少 command 参数"

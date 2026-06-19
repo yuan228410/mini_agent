@@ -2,6 +2,7 @@
 
 提供线程安全的 LRU 缓存，减少同一对话中重复工具调用的开销。
 """
+from ..core.runtime_types import ToolArgs
 import hashlib
 import json
 import threading
@@ -79,7 +80,7 @@ class ToolCache:
         self._hits = 0
         self._misses = 0
 
-    def _is_cacheable(self, tool_name: str, args: dict | None = None) -> bool:
+    def _is_cacheable(self, tool_name: str, args: ToolArgs | None = None) -> bool:
         if tool_name in self.BLACKLIST:
             return False
         if tool_name == "config" and args and args.get("action") == "write":
@@ -88,7 +89,7 @@ class ToolCache:
             return True
         return bool(self._cacheable_resolver(tool_name))
 
-    def _key(self, tool_name: str, args: dict) -> str:
+    def _key(self, tool_name: str, args: ToolArgs) -> str:
         """生成缓存 key（优化版：快速路径 + 降级方案）
         
         Args:
@@ -114,7 +115,7 @@ class ToolCache:
         args_hash = hashlib.md5(f"{self._scope}:{args_json}".encode()).hexdigest()[:12]
         return f"{self._scope}:{tool_name}:{args_hash}"
     
-    def get(self, tool_name: str, args: dict) -> tuple[Any, bool]:
+    def get(self, tool_name: str, args: ToolArgs) -> tuple[Any, bool]:
         """获取缓存
         
         Args:
@@ -147,7 +148,7 @@ class ToolCache:
         
         return None, False
     
-    def set(self, tool_name: str, args: dict, result: Any):
+    def set(self, tool_name: str, args: ToolArgs, result: Any):
         """设置缓存
         
         Args:
@@ -188,7 +189,7 @@ class ToolCache:
         if event:
             event.set()
     
-    def get_or_wait(self, tool_name: str, args: dict, timeout: float = 30.0) -> tuple[Any, bool]:
+    def get_or_wait(self, tool_name: str, args: ToolArgs, timeout: float = 30.0) -> tuple[Any, bool]:
         """获取缓存或等待其他线程计算完成
 
         首次请求返回 (None, False) 表示需要执行；
@@ -239,7 +240,7 @@ class ToolCache:
 
         return None, False
 
-    def mark_done(self, tool_name: str, args: dict, result: Any):
+    def mark_done(self, tool_name: str, args: ToolArgs, result: Any):
         """写入缓存并通知等待线程
 
         即使结果为 None 或执行失败，也应调用此方法清理 pending 状态
@@ -253,7 +254,7 @@ class ToolCache:
         if event:
             event.set()
     
-    def mark_failed(self, tool_name: str, args: dict):
+    def mark_failed(self, tool_name: str, args: ToolArgs):
         """标记执行失败，清理 pending 状态并通知等待线程"""
         key = self._key(tool_name, args)
         with self._lock:

@@ -1,9 +1,10 @@
 """文件重命名/移动工具 — 跨设备安全移动"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 from pathlib import Path
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "rename_file",
@@ -21,7 +22,7 @@ definition = {
 }
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     src_str = args.get("src", "")
     dst_str = args.get("dst", "")
     force = args.get("force", False)

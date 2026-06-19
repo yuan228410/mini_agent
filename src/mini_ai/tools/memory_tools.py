@@ -1,4 +1,5 @@
 """主动记忆工具 — Agent 实时写入/读取长期记忆"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 
 from ..logger import logger
@@ -17,7 +18,7 @@ def _get_store():
 
 # ── remember ──
 
-_remember_def = {
+_remember_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "remember",
@@ -35,7 +36,7 @@ _remember_def = {
 }
 
 
-def _remember_exec(args: dict) -> str:
+def _remember_exec(args: ToolArgs) -> str:
     store = _get_store()
     if not store:
         return "Error: 记忆系统未初始化"
@@ -64,7 +65,7 @@ def _remember_exec(args: dict) -> str:
 
 # ── recall ──
 
-_recall_def = {
+_recall_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "recall",
@@ -79,7 +80,7 @@ _recall_def = {
 }
 
 
-def _recall_exec(args: dict) -> str:
+def _recall_exec(args: ToolArgs) -> str:
     store = _get_store()
     if not store:
         return "Error: 记忆系统未初始化"
@@ -129,7 +130,7 @@ def _recall_exec(args: dict) -> str:
 
 # ── forget ──
 
-_forget_def = {
+_forget_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "forget",
@@ -146,7 +147,7 @@ _forget_def = {
 }
 
 
-def _forget_exec(args: dict) -> str:
+def _forget_exec(args: ToolArgs) -> str:
     store = _get_store()
     if not store:
         return "Error: 记忆系统未初始化"
@@ -179,7 +180,7 @@ def _forget_exec(args: dict) -> str:
 # ── 构建可注册的工具模块对象 ──
 
 class _ToolMod:
-    def __init__(self, definition, execute):
+    def __init__(self, definition: ToolDefinition, execute):
         self.definition = definition
         self.execute = execute
 

@@ -1,4 +1,5 @@
 """网页抓取工具"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import threading
 import re
 from html.parser import HTMLParser
@@ -12,7 +13,7 @@ _MAX_CONSECUTIVE_FAILURES = 5
 _consecutive_failures = 0
 _fail_lock = threading.Lock()
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "web_fetch",
@@ -81,7 +82,7 @@ def _detect_encoding(resp: requests.Response) -> str:
     return "utf-8"
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     global _consecutive_failures
     url = args.get("url")
     if not url:

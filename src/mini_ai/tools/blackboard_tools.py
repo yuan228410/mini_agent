@@ -1,4 +1,5 @@
 """黑板工具 — blackboard_write / blackboard_read / blackboard_list"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 from ..logger import logger
 
 _blackboard = None
@@ -12,7 +13,7 @@ def configure(blackboard=None):
 
 # ── blackboard_write ──
 
-_write_def = {
+_write_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "blackboard_write",
@@ -29,7 +30,7 @@ _write_def = {
 }
 
 
-def _write_exec(args: dict) -> str:
+def _write_exec(args: ToolArgs) -> str:
     from ..tools.team_tools import _sender
     author = _sender()
     return _blackboard.put(args.get("key", ""), args.get("value", ""), author=author)
@@ -37,7 +38,7 @@ def _write_exec(args: dict) -> str:
 
 # ── blackboard_read ──
 
-_read_def = {
+_read_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "blackboard_read",
@@ -53,7 +54,7 @@ _read_def = {
 }
 
 
-def _read_exec(args: dict) -> str:
+def _read_exec(args: ToolArgs) -> str:
     _MISS = object()
     value = _blackboard.get(args.get("key", ""), default=_MISS)
     if value is _MISS:
@@ -63,7 +64,7 @@ def _read_exec(args: dict) -> str:
 
 # ── blackboard_list ──
 
-_list_def = {
+_list_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "blackboard_list",
@@ -78,7 +79,7 @@ _list_def = {
 }
 
 
-def _list_exec(args: dict) -> str:
+def _list_exec(args: ToolArgs) -> str:
     keys = _blackboard.list_keys(args.get("prefix", ""))
     if not keys:
         return "黑板为空"
@@ -88,7 +89,7 @@ def _list_exec(args: dict) -> str:
 # ── 构建可注册的工具模块对象 ──
 
 class _ToolMod:
-    def __init__(self, definition, execute):
+    def __init__(self, definition: ToolDefinition, execute):
         self.definition = definition
         self.execute = execute
 

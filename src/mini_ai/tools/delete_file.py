@@ -1,9 +1,10 @@
 """文件删除工具 — 安全受限，仅删除文件（非目录），支持递归删除目录"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 from pathlib import Path
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "delete_file",
@@ -44,7 +45,7 @@ def _is_blocked(path: Path) -> bool:
     return False
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     path_str = args.get("path", "")
     if not path_str or not isinstance(path_str, str):
         return "Error: 缺少 path 参数"

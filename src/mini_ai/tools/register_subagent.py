@@ -1,4 +1,5 @@
 """动态注册子代理工具 — 对话中创建新的子代理类型"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import json
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def configure(loader=None, registry=None):
         _registry_ctx.set(registry)
 
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "register_subagent",
@@ -53,7 +54,7 @@ def _rebuild_dispatch_definition():
     logger.info(f"[注册子代理] 已刷新 dispatch_subagent 工具定义")
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     name = args.get("name", "").strip()
     description = args.get("description", "").strip()
     prompt = args.get("prompt", "").strip()

@@ -784,3 +784,63 @@ def test_web_display_uses_explicit_wire_aliases():
     assert priority_hints == {"item": DisplayWireEvent, "return": bool}
     assert workflow_hints["tasks"] == list[WorkflowTaskInfo | DisplayEventPayload]
     assert workflow_hints["return"] is type(None)
+
+
+def test_tool_modules_use_explicit_argument_and_definition_aliases():
+    import typing
+    from mini_ai.core.runtime_types import ToolArgs, ToolDefinition, ToolParameterSchema
+    from mini_ai.tools import ToolRegistry, _BoundTool, _run_with_context
+    from mini_ai.tools.base import ToolBase
+    from mini_ai.tools.cache import ToolCache
+    from mini_ai.tools.metadata import normalize_tool_definition
+    from mini_ai.tools import read_file, write_file, run_command, update_todos, dispatch_subagent
+    from mini_ai.tools import workflow_tools, memory_tools, history_tools, blackboard_tools, team_tools, mcp_loader
+
+    base_hints = typing.get_type_hints(ToolBase)
+    bound_hints = typing.get_type_hints(_BoundTool.__init__)
+    context_hints = typing.get_type_hints(_run_with_context)
+    registry_dispatch = typing.get_type_hints(ToolRegistry.dispatch)
+    normalize_hints = typing.get_type_hints(normalize_tool_definition)
+    cache_get = typing.get_type_hints(ToolCache.get)
+    mcp_tool_init = typing.get_type_hints(mcp_loader._MCPToolModule.__init__)
+    mcp_tool_execute = typing.get_type_hints(mcp_loader._MCPToolModule.execute)
+    mcp_call = typing.get_type_hints(mcp_loader.MCPConnection.call_tool)
+    mcp_sync = typing.get_type_hints(mcp_loader.MCPLoader.sync_call)
+
+    assert base_hints["parameters"] == ToolParameterSchema
+    assert typing.get_type_hints(ToolBase.definition)["return"] == ToolDefinition
+    assert typing.get_type_hints(ToolBase.execute)["args"] == ToolArgs
+    assert bound_hints["definition"] == ToolDefinition
+    assert context_hints["args"] == ToolArgs
+    assert registry_dispatch["args"] == ToolArgs
+    assert normalize_hints["definition"] == ToolDefinition
+    assert normalize_hints["return"] == ToolDefinition
+    assert cache_get["args"] == ToolArgs
+    assert mcp_tool_init["definition"] == ToolDefinition
+    assert mcp_tool_execute["args"] == ToolArgs
+    assert mcp_call["args"] == ToolArgs
+    assert mcp_sync["args"] == ToolArgs
+
+    for module in (read_file, write_file, run_command, update_todos, dispatch_subagent):
+        assert typing.get_type_hints(module.execute)["args"] == ToolArgs
+        assert isinstance(module.definition, dict)
+    for fn in (
+        workflow_tools._run_exec,
+        workflow_tools._status_exec,
+        workflow_tools._load_exec,
+        memory_tools._remember_exec,
+        memory_tools._recall_exec,
+        memory_tools._forget_exec,
+        history_tools._search_exec,
+        history_tools._manage_exec,
+        blackboard_tools._write_exec,
+        blackboard_tools._read_exec,
+        blackboard_tools._list_exec,
+        team_tools._spawn,
+        team_tools._list,
+        team_tools._send,
+        team_tools._read,
+        team_tools._broadcast,
+        team_tools._dismiss,
+    ):
+        assert typing.get_type_hints(fn)["args"] == ToolArgs

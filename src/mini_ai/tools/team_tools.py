@@ -1,3 +1,4 @@
+from ..core.runtime_types import ToolArgs, ToolDefinition
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Team 协作工具集：spawn_teammate, list_teammates, send_message, read_inbox, broadcast"""
@@ -24,7 +25,7 @@ def _sender() -> str: return _caller.get()
 
 # ── spawn_teammate ──
 
-_spawn_def = {
+_spawn_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "spawn_teammate",
@@ -42,13 +43,13 @@ _spawn_def = {
 }
 
 
-def _spawn(args: dict) -> str:
+def _spawn(args: ToolArgs) -> str:
     return _manager.spawn(args.get("name", ""), args.get("role", ""), args.get("prompt", ""))
 
 
 # ── list_teammates ──
 
-_list_def = {
+_list_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "list_teammates",
@@ -58,13 +59,13 @@ _list_def = {
 }
 
 
-def _list(args: dict) -> str:
+def _list(args: ToolArgs) -> str:
     return _manager.list_all()
 
 
 # ── send_message ──
 
-_send_def = {
+_send_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "send_message",
@@ -82,7 +83,7 @@ _send_def = {
 }
 
 
-def _send(args: dict) -> str:
+def _send(args: ToolArgs) -> str:
     caller = _sender()
     to = args.get("to", "")
     logger.debug(f"[send→] caller={caller} to={to}")
@@ -92,7 +93,7 @@ def _send(args: dict) -> str:
 
 # ── read_inbox ──
 
-_read_def = {
+_read_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "read_inbox",
@@ -102,7 +103,7 @@ _read_def = {
 }
 
 
-def _read(args: dict) -> str:
+def _read(args: ToolArgs) -> str:
     caller = _sender()
     logger.debug(f"[read_inbox] caller={caller}")
     messages = _bus.read_inbox(caller)
@@ -111,7 +112,7 @@ def _read(args: dict) -> str:
 
 # ── broadcast ──
 
-_broadcast_def = {
+_broadcast_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "broadcast",
@@ -127,14 +128,14 @@ _broadcast_def = {
 }
 
 
-def _broadcast(args: dict) -> str:
+def _broadcast(args: ToolArgs) -> str:
     return _bus.broadcast(_sender(), args.get("content", ""), _manager.member_names())
 
 
 # ── 构建可注册的工具模块对象 ──
 
 class _ToolMod:
-    def __init__(self, definition, execute):
+    def __init__(self, definition: ToolDefinition, execute):
         self.definition = definition
         self.execute = execute
 
@@ -147,7 +148,7 @@ _broadcast_mod = _ToolMod(_broadcast_def, _broadcast)
 
 # ── dismiss_team ──
 
-_dismiss_def = {
+_dismiss_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "dismiss_team",
@@ -157,7 +158,7 @@ _dismiss_def = {
 }
 
 
-def _dismiss(args: dict) -> str:
+def _dismiss(args: ToolArgs) -> str:
     targets = []
     with _manager.lock:
         for m in _manager.config.get("members", []):

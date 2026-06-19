@@ -1,4 +1,5 @@
 """技能加载工具"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 
 from ..logger import logger
@@ -18,7 +19,7 @@ def _get_loader():
     return _loader_var.get() or _loader
 
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "load_skill",
@@ -34,7 +35,7 @@ definition = {
 }
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     loader = _get_loader()
     if not loader:
         return "Error: 技能加载器未配置"

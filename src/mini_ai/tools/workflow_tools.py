@@ -1,4 +1,5 @@
 """工作流编排工具 — run_workflow / workflow_status / load_workflow"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import json
 import threading
 from pathlib import Path
@@ -33,7 +34,7 @@ def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None
 
 # ── run_workflow ──
 
-_run_def = {
+_run_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "run_workflow",
@@ -63,7 +64,7 @@ _run_def = {
 }
 
 
-def _run_exec(args: dict) -> str:
+def _run_exec(args: ToolArgs) -> str:
     from ..team.task_graph import TaskGraph, TaskNode
     from ..team.orchestrator import Orchestrator
     from ..config import MODEL_CONFIG
@@ -99,7 +100,7 @@ def _run_exec(args: dict) -> str:
 
 # ── workflow_status ──
 
-_status_def = {
+_status_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "workflow_status",
@@ -109,7 +110,7 @@ _status_def = {
 }
 
 
-def _status_exec(args: dict) -> str:
+def _status_exec(args: ToolArgs) -> str:
     graph = _last_graphs.get(threading.current_thread().ident)
     if graph is None:
         with _graphs_lock:
@@ -123,7 +124,7 @@ def _status_exec(args: dict) -> str:
 # ── 构建可注册的工具模块对象 ──
 
 class _ToolMod:
-    def __init__(self, definition, execute):
+    def __init__(self, definition: ToolDefinition, execute):
         self.definition = definition
         self.execute = execute
 
@@ -133,7 +134,7 @@ workflow_status_mod = _ToolMod(_status_def, _status_exec)
 
 # ── load_workflow ──
 
-_load_def = {
+_load_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "load_workflow",
@@ -149,7 +150,7 @@ _load_def = {
 }
 
 
-def _load_exec(args: dict) -> str:
+def _load_exec(args: ToolArgs) -> str:
     name = args.get("name", "").strip()
 
     if name == "list":

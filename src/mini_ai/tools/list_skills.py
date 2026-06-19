@@ -1,4 +1,5 @@
 """技能列表工具"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 
 _loader_var = contextvars.ContextVar("skill_loader", default=None)
@@ -16,7 +17,7 @@ def _get_loader():
     return _loader_var.get() or _loader
 
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "list_skills",
@@ -26,7 +27,7 @@ definition = {
 }
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     loader = _get_loader()
     if not loader:
         return "Error: 技能加载器未配置"

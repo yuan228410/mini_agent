@@ -1,6 +1,7 @@
 """工具注册与分发"""
 import json
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
@@ -25,13 +26,13 @@ def _truncate(output: str) -> str:
 class _BoundTool:
     """Small module-like wrapper binding a tool definition to a closure."""
 
-    def __init__(self, definition: dict, execute, metadata=None):
+    def __init__(self, definition: ToolDefinition, execute: Callable[[ToolArgs], str], metadata=None):
         self.definition = definition
         self.execute = execute
         self.metadata = metadata
 
 
-def _run_with_context(var_values, fn, args):
+def _run_with_context(var_values, fn: Callable[[ToolArgs], str], args: ToolArgs) -> str:
     """Run a legacy contextvar-based tool with session-local bindings."""
     tokens = []
     try:

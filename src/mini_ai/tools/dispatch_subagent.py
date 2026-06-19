@@ -1,4 +1,5 @@
 """子代理调度工具 — 支持 inputs 参数链式传递结果，支持图片路径自动处理"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import base64
 import copy
 import io
@@ -266,7 +267,7 @@ def _extract_image_paths(text: str) -> list[str]:
     
     return image_paths
 
-_BASE_DEFINITION = {
+_BASE_DEFINITION: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "dispatch_subagent",
@@ -301,7 +302,7 @@ def build_definition(subagent_list: str) -> dict:
     definition = d
     return d
 
-def execute(args: dict, abort_event: threading.Event | None = None) -> str:
+def execute(args: ToolArgs, abort_event: threading.Event | None = None) -> str:
     from ..runner import run_agent
     from ..config import MODEL_CONFIG, RequestContext, SUBAGENT_MODELS, get_model_config
     from datetime import datetime, timezone, timedelta

@@ -1,9 +1,10 @@
 """文件写入工具"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 from pathlib import Path
 
 from ..logger import logger
 
-definition = {
+definition: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "write_file",
@@ -27,7 +28,7 @@ definition = {
 _MAX_WRITE_BYTES = 10 * 1024 * 1024  # 10MB 安全阀
 
 
-def execute(args: dict) -> str:
+def execute(args: ToolArgs) -> str:
     path_str = args.get("path", "")
     if not path_str or not isinstance(path_str, str):
         return "Error: write_file 缺少 path 参数（字符串类型），请提供完整的文件路径后重试，不要重复空调用"

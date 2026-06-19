@@ -5,6 +5,8 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..core.runtime_types import ToolDefinition
+
 
 @dataclass(frozen=True)
 class ToolMetadata:
@@ -45,7 +47,7 @@ def metadata_for(name: str, explicit: ToolMetadata | dict[str, Any] | None = Non
     return base
 
 
-def normalize_tool_definition(definition: dict, metadata: ToolMetadata | dict[str, Any] | None = None) -> dict:
+def normalize_tool_definition(definition: ToolDefinition, metadata: ToolMetadata | dict[str, Any] | None = None) -> ToolDefinition:
     """Return a sanitized OpenAI-style tool definition with controlled metadata."""
     fn = definition.get("function") or {}
     name = fn.get("name") or definition.get("name") or ""

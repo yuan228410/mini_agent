@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 MessageDict = dict[str, Any]
 ToolDefinition = dict[str, Any]
 ToolArgs = dict[str, Any]
+ToolParameterSchema = dict[str, Any]
 ToolWirePayload = dict[str, Any]
 ToolFunctionPayload = dict[str, Any]
 UsageDict = dict[str, int | float | str | bool | None]
@@ -65,7 +66,7 @@ class ToolRegistryProtocol(Protocol):
         persist_fn=None,
     ) -> bool: ...
 
-    def dispatch(self, name: str, args: dict[str, Any]) -> str | None: ...
+    def dispatch(self, name: str, args: ToolArgs) -> str | None: ...
 
 
 class HistoryDBProtocol(Protocol):

@@ -1,4 +1,5 @@
 """历史搜索工具 — 跨会话全文检索"""
+from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 import json
 import re
@@ -107,7 +108,7 @@ def _compact_message(msg: dict) -> dict:
     return {"role": role, "content": content, "ts": ts}
 
 
-_search_def = {
+_search_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "search_history",
@@ -127,7 +128,7 @@ _search_def = {
 }
 
 
-def _search_exec(args: dict) -> str:
+def _search_exec(args: ToolArgs) -> str:
     db = _get_db()
     if not db:
         return "Error: 历史数据库未初始化"
@@ -178,14 +179,14 @@ def _search_exec(args: dict) -> str:
 
 
 class _ToolMod:
-    def __init__(self, definition, execute):
+    def __init__(self, definition: ToolDefinition, execute):
         self.definition = definition
         self.execute = execute
 
 
 search_history_mod = _ToolMod(_search_def, _search_exec)
 
-_manage_def = {
+_manage_def: ToolDefinition = {
     "type": "function",
     "function": {
         "name": "manage_history",
@@ -208,7 +209,7 @@ _manage_def = {
     },
 }
 
-def _manage_exec(args: dict) -> str:
+def _manage_exec(args: ToolArgs) -> str:
     db = _get_db()
     if not db:
         return "Error: 历史数据库未初始化"
