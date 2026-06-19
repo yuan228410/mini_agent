@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 MessageDict = dict[str, Any]
 ToolDefinition = dict[str, Any]
+ToolWirePayload = dict[str, Any]
+ToolFunctionPayload = dict[str, Any]
 UsageDict = dict[str, int | float | str | bool | None]
 MetadataDict = dict[str, Any]
 DisplayEventPayload = dict[str, Any]

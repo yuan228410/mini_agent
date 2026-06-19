@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from .runtime_types import MessageDict, ToolFunctionPayload, ToolWirePayload
+
 
 @dataclass(slots=True)
 class ToolFunctionCall:
@@ -11,10 +13,10 @@ class ToolFunctionCall:
     arguments: str = ""
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ToolFunctionCall":
+    def from_dict(cls, data: ToolFunctionPayload) -> "ToolFunctionCall":
         return cls(name=str(data.get("name") or ""), arguments=str(data.get("arguments") or ""))
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> ToolFunctionPayload:
         return {"name": self.name, "arguments": self.arguments}
 
 
@@ -27,7 +29,7 @@ class ToolCall:
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ToolCall":
+    def from_dict(cls, data: ToolWirePayload) -> "ToolCall":
         known = {"id", "type", "function", "_result"}
         return cls(
             id=str(data.get("id") or ""),
@@ -37,8 +39,8 @@ class ToolCall:
             extra={k: v for k, v in data.items() if k not in known},
         )
 
-    def to_dict(self, *, include_result: bool = True) -> dict[str, Any]:
-        data = {"id": self.id, "type": self.type, "function": self.function.to_dict()}
+    def to_dict(self, *, include_result: bool = True) -> ToolWirePayload:
+        data: ToolWirePayload = {"id": self.id, "type": self.type, "function": self.function.to_dict()}
         data.update(self.extra)
         if include_result and self.result_preview is not None:
             data["_result"] = self.result_preview
@@ -52,14 +54,14 @@ class ToolResult:
     content: str
 
     @classmethod
-    def from_message(cls, message: dict[str, Any]) -> "ToolResult":
+    def from_message(cls, message: MessageDict) -> "ToolResult":
         return cls(
             tool_call_id=str(message.get("tool_call_id") or ""),
             name=str(message.get("name") or ""),
             content=str(message.get("content") or ""),
         )
 
-    def to_message(self, **extra: Any) -> dict[str, Any]:
-        msg = {"role": "tool", "tool_call_id": self.tool_call_id, "name": self.name, "content": self.content}
+    def to_message(self, **extra: Any) -> MessageDict:
+        msg: MessageDict = {"role": "tool", "tool_call_id": self.tool_call_id, "name": self.name, "content": self.content}
         msg.update(extra)
         return msg

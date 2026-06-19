@@ -598,3 +598,37 @@ def test_core_message_and_event_boundaries_use_shared_aliases():
     assert workflow_hints["tasks"] == list[events.WirePayload | DisplayEventPayload]
     assert display_emit["data"] == DisplayEventPayload | None
     assert display_workflow["tasks"] == list[DisplayEventPayload]
+
+
+def test_tool_models_use_explicit_wire_aliases():
+    import typing
+    from mini_ai.core.runtime_types import MessageDict, ToolFunctionPayload, ToolWirePayload
+    from mini_ai.core.tool_models import ToolCall, ToolFunctionCall, ToolResult
+
+    function_from_dict = typing.get_type_hints(ToolFunctionCall.from_dict)
+    function_to_dict = typing.get_type_hints(ToolFunctionCall.to_dict)
+    call_from_dict = typing.get_type_hints(ToolCall.from_dict)
+    call_to_dict = typing.get_type_hints(ToolCall.to_dict)
+    result_from_message = typing.get_type_hints(ToolResult.from_message)
+    result_to_message = typing.get_type_hints(ToolResult.to_message)
+
+    assert function_from_dict["data"] == ToolFunctionPayload
+    assert function_to_dict["return"] == ToolFunctionPayload
+    assert call_from_dict["data"] == ToolWirePayload
+    assert call_to_dict["return"] == ToolWirePayload
+    assert result_from_message["message"] == MessageDict
+    assert result_to_message["return"] == MessageDict
+
+    tool_call = ToolCall.from_dict({"id": "c1", "function": {"name": "read_file", "arguments": "{}"}, "_result": "ok"})
+    assert tool_call.to_dict(include_result=False) == {
+        "id": "c1",
+        "type": "function",
+        "function": {"name": "read_file", "arguments": "{}"},
+    }
+    assert ToolResult("c1", "read_file", "ok").to_message(timestamp="t") == {
+        "role": "tool",
+        "tool_call_id": "c1",
+        "name": "read_file",
+        "content": "ok",
+        "timestamp": "t",
+    }
