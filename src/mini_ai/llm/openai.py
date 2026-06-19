@@ -14,12 +14,14 @@ from .base import (
 )
 from ..logger import logger
 from ..exceptions import LLMError
+from ..core.runtime_types import MessageDict, RequestContextProtocol
 from ..core.tool_models import ToolCall, ToolFunctionCall
+from .provider_types import ProviderPayload, ProviderStreamChunk, ProviderToolDefinition, ToolCallBuffer
 from .retry import RetryStrategy
 
 
 
-def _msg_summary(m: dict) -> str:
+def _msg_summary(m: MessageDict) -> str:
     role = m.get("role", "?")
     content = m.get("content") or ""
     tc = m.get("tool_calls")
@@ -35,7 +37,7 @@ def _msg_summary(m: dict) -> str:
     return f"[{role}] {content}"
 
 
-def _apply_model_params(payload: dict, ctx=None):
+def _apply_model_params(payload: ProviderPayload, ctx: RequestContextProtocol | None = None) -> None:
     temperature = get_temperature(ctx)
     if temperature is not None:
         payload["temperature"] = temperature
@@ -50,12 +52,12 @@ def _apply_model_params(payload: dict, ctx=None):
         payload["reasoning_effort"] = effort
 
 
-def _provider_tools(tools: list[dict]) -> list[dict]:
+def _provider_tools(tools: list[ProviderToolDefinition]) -> list[ProviderToolDefinition]:
     """Strip internal metadata before sending tool definitions to providers."""
     return [{"type": t.get("type", "function"), "function": t["function"]} for t in tools]
 
 
-def _attach_tools(payload: dict, tools) -> list[str] | None:
+def _attach_tools(payload: ProviderPayload, tools: list[ProviderToolDefinition] | bool | None) -> list[str] | None:
     tool_names = None
     if tools is True:
         raise ValueError("LLM provider requires explicit tool definitions; tools=True global lookup is not supported")
@@ -66,7 +68,7 @@ def _attach_tools(payload: dict, tools) -> list[str] | None:
     return tool_names
 
 
-def chat(messages, tools=None, ctx=None):
+def chat(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool | None = None, ctx: RequestContextProtocol | None = None) -> MessageDict:
     ensure_session_openai(ctx)
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs}
@@ -218,7 +220,7 @@ def chat(messages, tools=None, ctx=None):
             response.close()
 
 
-def chat_stream(messages, tools=None, ctx=None, abort_event=None):
+def chat_stream(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool | None = None, ctx: RequestContextProtocol | None = None, abort_event=None):
     ensure_session_openai(ctx)
     clean_msgs = _strip_internal_fields(messages)
     payload = {"model": get_model(ctx), "messages": clean_msgs, "stream": True, "stream_options": {"include_usage": True}}
@@ -318,7 +320,7 @@ def chat_stream(messages, tools=None, ctx=None, abort_event=None):
     collected_content = ""
     collected_thinking = ""
     in_thinking = False
-    tool_call_buf: dict[int, dict] = {}
+    tool_call_buf: dict[int, ToolCallBuffer] = {}
 
     try:
         response.encoding = "utf-8"

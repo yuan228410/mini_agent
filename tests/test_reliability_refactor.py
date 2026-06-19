@@ -526,3 +526,31 @@ def test_message_runtime_boundaries_use_shared_aliases():
     assert chat_run_hints["return"] == MessageDict | None
     assert persister_init_hints["history_db"] is HistoryDBProtocol
     assert persister_flush_hints["messages"] == list[MessageDict]
+
+
+def test_provider_adapters_use_explicit_wire_aliases():
+    import typing
+    from mini_ai.core.runtime_types import MessageDict, RequestContextProtocol
+    from mini_ai.llm import anthropic, openai
+    from mini_ai.llm.provider_types import AnthropicContentBlock, ProviderPayload, ProviderToolDefinition
+
+    openai_provider_tools = typing.get_type_hints(openai._provider_tools)
+    openai_attach_tools = typing.get_type_hints(openai._attach_tools)
+    openai_chat = typing.get_type_hints(openai.chat)
+    openai_stream = typing.get_type_hints(openai.chat_stream)
+    anthropic_messages = typing.get_type_hints(anthropic._openai_to_anthropic)
+    anthropic_tools = typing.get_type_hints(anthropic._tools_openai_to_anthropic)
+    anthropic_msg = typing.get_type_hints(anthropic._anthropic_to_openai_msg)
+    anthropic_chat = typing.get_type_hints(anthropic.chat)
+
+    assert openai_provider_tools == {"tools": list[ProviderToolDefinition], "return": list[ProviderToolDefinition]}
+    assert openai_attach_tools["payload"] == ProviderPayload
+    assert openai_attach_tools["tools"] == list[ProviderToolDefinition] | bool | None
+    assert openai_chat["messages"] == list[MessageDict]
+    assert openai_chat["ctx"] == RequestContextProtocol | None
+    assert openai_chat["return"] == MessageDict
+    assert openai_stream["messages"] == list[MessageDict]
+    assert anthropic_messages["messages"] == list[MessageDict]
+    assert anthropic_tools == {"tools": list[ProviderToolDefinition], "return": list[ProviderToolDefinition]}
+    assert anthropic_msg == {"ant_content": list[AnthropicContentBlock], "stop_reason": str, "return": MessageDict}
+    assert anthropic_chat["messages"] == list[MessageDict]

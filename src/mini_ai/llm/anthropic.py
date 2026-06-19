@@ -15,17 +15,19 @@ from .base import (
 )
 from ..logger import logger
 from ..exceptions import LLMError
+from ..core.runtime_types import MessageDict, RequestContextProtocol
 from ..core.tool_models import ToolCall, ToolFunctionCall
+from .provider_types import AnthropicContentBlock, ProviderMessage, ProviderPayload, ProviderToolDefinition
 from .retry import RetryStrategy
 
 
-def _get_thinking(ctx=None):
+def _get_thinking(ctx: RequestContextProtocol | None = None):
     if ctx and ctx.model_config and 'thinking' in ctx.model_config:
         return {**_GLOBAL_THINKING, **ctx.model_config['thinking']}
     return _GLOBAL_THINKING
 
 
-def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
+def _openai_to_anthropic(messages: list[MessageDict]) -> tuple[str, list[ProviderMessage]]:
     """返回 (system_text, anthropic_messages)"""
     system_text = ""
     result = []
@@ -112,7 +114,7 @@ def _openai_to_anthropic(messages: list[dict]) -> tuple[str, list[dict]]:
     return system_text, result
 
 
-def _tools_openai_to_anthropic(tools: list[dict]) -> list[dict]:
+def _tools_openai_to_anthropic(tools: list[ProviderToolDefinition]) -> list[ProviderToolDefinition]:
     from ..tools.metadata import normalize_tool_definition
 
     result = []
@@ -127,7 +129,7 @@ def _tools_openai_to_anthropic(tools: list[dict]) -> list[dict]:
     return result
 
 
-def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
+def _anthropic_to_openai_msg(ant_content: list[AnthropicContentBlock], stop_reason: str) -> MessageDict:
     """Anthropic 响应 content 数组 → OpenAI 格式 msg dict"""
     text_parts = []
     tool_calls = []
@@ -162,7 +164,7 @@ def _anthropic_to_openai_msg(ant_content: list[dict], stop_reason: str) -> dict:
     return msg
 
 
-def _apply_model_params(payload: dict, ctx=None):
+def _apply_model_params(payload: ProviderPayload, ctx: RequestContextProtocol | None = None) -> None:
     temperature = get_temperature(ctx)
     if temperature is not None:
         payload["temperature"] = temperature
@@ -178,7 +180,7 @@ def _apply_model_params(payload: dict, ctx=None):
         payload["output_config"] = {"effort": effort}
 
 
-def chat(messages, tools=None, ctx=None):
+def chat(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool | None = None, ctx: RequestContextProtocol | None = None) -> MessageDict:
     """非流式请求，返回 OpenAI 格式的 msg dict"""
 
     clean_msgs = _strip_internal_fields(messages)
@@ -312,7 +314,7 @@ def chat(messages, tools=None, ctx=None):
             response.close()
 
 
-def chat_stream(messages, tools=None, ctx=None, abort_event=None):
+def chat_stream(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool | None = None, ctx: RequestContextProtocol | None = None, abort_event=None):
     """流式请求，yield {"type": "text"|"done", ...} 对齐 llm.py"""
 
     clean_msgs = _strip_internal_fields(messages)
@@ -412,8 +414,8 @@ def chat_stream(messages, tools=None, ctx=None, abort_event=None):
                 return
 
     get_usage()["_prev_completion"] = get_usage()["completion_tokens"]
-    blocks = []
-    current_block = None
+    blocks: list[AnthropicContentBlock] = []
+    current_block: AnthropicContentBlock | None = None
     input_tokens = output_tokens = 0
 
     # 使用 iter_content 替代 iter_lines，支持读取超时
