@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
+from ..core.runtime_types import InboxMessageDict, TeamConfigDict, TeamListText, TeamMemberSummary, TeamStatusResponse
+
 
 class InboxMessageType(StrEnum):
     MESSAGE = "message"
@@ -29,7 +31,7 @@ class InboxMessage:
     extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "InboxMessage":
+    def from_dict(cls, data: InboxMessageDict) -> "InboxMessage":
         known = {"type", "from", "content", "timestamp"}
         msg_type = data.get("type") or InboxMessageType.MESSAGE.value
         try:
@@ -44,8 +46,8 @@ class InboxMessage:
             extra={k: v for k, v in data.items() if k not in known},
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        data = {
+    def to_dict(self) -> InboxMessageDict:
+        data: InboxMessageDict = {
             "type": self.msg_type.value,
             "from": self.sender,
             "content": self.content,

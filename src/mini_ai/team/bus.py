@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from ..logger import logger
-from .models import InboxMessage, InboxMessageType
+from .models import InboxMessage, InboxMessageDict, InboxMessageType
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 _VALID_TYPES = {msg_type.value for msg_type in InboxMessageType}
@@ -79,7 +79,7 @@ class MessageBus:
             ev.set()
         return f"已送达 {to} 的 inbox"
 
-    def read_inbox(self, name: str, peek: bool = False) -> list[dict]:
+    def read_inbox(self, name: str, peek: bool = False) -> list[InboxMessageDict]:
         """读取 inbox 消息。
 
         Args:

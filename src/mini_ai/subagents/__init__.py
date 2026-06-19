@@ -4,8 +4,12 @@ from pathlib import Path
 
 import yaml
 
+from ..core.runtime_types import MetadataDict, SubagentListText, SubagentSpec
+
 
 class SubagentLoader:
+    specs: dict[str, SubagentSpec]
+
     """从 subagents/*.md 加载子代理定义。
 
     每个文件包含 YAML frontmatter 和正文 system prompt：
@@ -20,7 +24,7 @@ class SubagentLoader:
 
     def __init__(self, subagents_dir: Path):
         self._dir = Path(subagents_dir)
-        self.specs: dict[str, dict] = {}
+        self.specs: dict[str, SubagentSpec] = {}
         self._load_all()
 
     @property
@@ -42,7 +46,7 @@ class SubagentLoader:
                 "max_turns": int(meta.get("max_turns", 10)),
             }
 
-    def _parse_frontmatter(self, text: str) -> tuple[dict, str]:
+    def _parse_frontmatter(self, text: str) -> tuple[MetadataDict, str]:
         match = re.match(r"^---\n(.*?)\n---\n(.*)", text, re.DOTALL)
         if not match:
             return {}, text
@@ -52,7 +56,7 @@ class SubagentLoader:
             meta = {}
         return meta, match.group(2).strip()
 
-    def list_specs(self) -> str:
+    def list_specs(self) -> SubagentListText:
         if not self.specs:
             return "(no subagents)"
         lines = []
@@ -61,5 +65,5 @@ class SubagentLoader:
             lines.append(f"  - {name}: {spec['description']} (tools: {tools})")
         return "\n".join(lines)
 
-    def get(self, name: str) -> dict | None:
+    def get(self, name: str) -> SubagentSpec | None:
         return self.specs.get(name)

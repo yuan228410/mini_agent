@@ -12,6 +12,7 @@ from ..config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
 from ..logger import logger
 from .prompts import build_team_prompt
 from ..utils import now_ts
+from .models import TeamConfigDict, TeamListText, TeamMemberSummary
 
 _BASE_TOOL_NAMES = tuple(TEAMMATE.get("base_tools", []))
 _MAX_TEAMMATES = TEAMMATE.get("max_teammates", 5)
@@ -37,7 +38,7 @@ class TeammateManager:
     def set_display(self, display):
         self._display = display
 
-    def _load_config(self) -> dict:
+    def _load_config(self) -> TeamConfigDict:
         if self.config_path.exists():
             try:
                 data = json.loads(self.config_path.read_text(encoding="utf-8"))
@@ -60,7 +61,7 @@ class TeammateManager:
             if changed:
                 self._save_config()
 
-    def _find(self, name: str) -> dict | None:
+    def _find(self, name: str) -> TeamMemberSummary | None:
         for m in self.config["members"]:
             if m["name"] == name:
                 return m
@@ -264,7 +265,7 @@ class TeammateManager:
                 self._wake_events.pop(name, None)
             logger.info(f"[队友 cleanup] {name} 线程资源已清理")
 
-    def list_all(self) -> str:
+    def list_all(self) -> TeamListText:
         with self.lock:
             if not self.config["members"]:
                 return "暂无队友。"

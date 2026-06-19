@@ -246,13 +246,15 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
 
     bus = MessageBus(tmp_path / "inbox")
     assert bus.send("lead", "worker", "hello") == "已送达 worker 的 inbox"
+    peeked = bus.read_inbox("worker", peek=True)
     inbox = bus.read_inbox("worker")
-    assert inbox == [{
+    assert peeked == inbox == [{
         "type": "message",
         "from": "lead",
         "content": "hello",
         "timestamp": inbox[0]["timestamp"],
     }]
+    assert bus.read_inbox("worker") == []
 
     graph = TaskGraph(bb)
     task = TaskNode(id="task", agent="subagent:tester", prompt="x" * 120, depends_on=["dep"])
@@ -784,6 +786,64 @@ def test_web_display_uses_explicit_wire_aliases():
     assert priority_hints == {"item": DisplayWireEvent, "return": bool}
     assert workflow_hints["tasks"] == list[WorkflowTaskInfo | DisplayEventPayload]
     assert workflow_hints["return"] is type(None)
+
+
+def test_runtime_protocols_use_structured_team_and_subagent_aliases():
+    import typing
+    from mini_ai.core.runtime_types import (
+        InboxMessageDict,
+        MessageBusProtocol,
+        MetadataDict,
+        SubagentListText,
+        SubagentLoaderProtocol,
+        SubagentSpec,
+        TeamConfigDict,
+        TeamListText,
+        TeamManagerProtocol,
+        TeamMemberSummary,
+        TeamStatusResponse,
+    )
+    from mini_ai.subagents import SubagentLoader
+    from mini_ai.team.bus import MessageBus
+    from mini_ai.team.manager import TeammateManager
+    from mini_ai.team.models import InboxMessage, TeamStatusResponse as TeamStatusResponseExport
+    from mini_ai.web.routes import team as team_routes
+
+    protocol_sub_list = typing.get_type_hints(SubagentLoaderProtocol.list_specs)
+    protocol_sub_get = typing.get_type_hints(SubagentLoaderProtocol.get)
+    protocol_inbox = typing.get_type_hints(MessageBusProtocol.read_inbox)
+    protocol_team = typing.get_type_hints(TeamManagerProtocol)
+    protocol_team_list = typing.get_type_hints(TeamManagerProtocol.list_all)
+    protocol_member_names = typing.get_type_hints(TeamManagerProtocol.member_names)
+    loader_hints = typing.get_type_hints(SubagentLoader)
+    loader_parse = typing.get_type_hints(SubagentLoader._parse_frontmatter)
+    loader_list = typing.get_type_hints(SubagentLoader.list_specs)
+    loader_get = typing.get_type_hints(SubagentLoader.get)
+    bus_read = typing.get_type_hints(MessageBus.read_inbox)
+    inbox_to_dict = typing.get_type_hints(InboxMessage.to_dict)
+    manager_load = typing.get_type_hints(TeammateManager._load_config)
+    manager_find = typing.get_type_hints(TeammateManager._find)
+    manager_list = typing.get_type_hints(TeammateManager.list_all)
+    route_status = typing.get_type_hints(team_routes.team_status)
+
+    assert protocol_sub_list["return"] is SubagentListText
+    assert protocol_sub_get["return"] == SubagentSpec | None
+    assert protocol_inbox["return"] == list[InboxMessageDict]
+    assert protocol_inbox["peek"] is bool
+    assert protocol_team["config"] is TeamConfigDict
+    assert protocol_team_list["return"] is TeamListText
+    assert protocol_member_names["return"] == list[str]
+    assert loader_hints["specs"] == dict[str, SubagentSpec]
+    assert loader_parse["return"] == tuple[MetadataDict, str]
+    assert loader_list["return"] is SubagentListText
+    assert loader_get["return"] == SubagentSpec | None
+    assert bus_read["return"] == list[InboxMessageDict]
+    assert inbox_to_dict["return"] is InboxMessageDict
+    assert manager_load["return"] is TeamConfigDict
+    assert manager_find["return"] == TeamMemberSummary | None
+    assert manager_list["return"] is TeamListText
+    assert route_status["return"] is TeamStatusResponse
+    assert TeamStatusResponseExport is TeamStatusResponse
 
 
 def test_tool_modules_use_explicit_argument_and_definition_aliases():

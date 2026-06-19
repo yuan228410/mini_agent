@@ -26,6 +26,39 @@ DisplayWireEvent = dict[str, Any]
 HistoryContent = str | list[Any]
 PlanArtifactDict = dict[str, Any]
 PlanStateValue = str
+SubagentListText = str
+TeamListText = str
+
+
+class SubagentSpec(TypedDict):
+    name: str
+    description: str
+    system_prompt: str
+    tool_names: list[str]
+    max_turns: int
+
+
+InboxMessageDict = TypedDict(
+    "InboxMessageDict",
+    {"type": str, "from": str, "content": str, "timestamp": float},
+    total=False,
+)
+
+
+class TeamMemberSummary(TypedDict):
+    name: str
+    role: str
+    status: str
+
+
+class TeamConfigDict(TypedDict):
+    team_name: str
+    members: list[TeamMemberSummary]
+
+
+class TeamStatusResponse(TypedDict):
+    teammates: list[TeamMemberSummary]
+    has_team: bool
 
 
 class SessionComponents(TypedDict, total=False):
@@ -87,7 +120,8 @@ class SkillLoaderProtocol(Protocol):
 
 
 class SubagentLoaderProtocol(Protocol):
-    def list_specs(self) -> list[dict[str, Any]]: ...
+    def list_specs(self) -> SubagentListText: ...
+    def get(self, name: str) -> SubagentSpec | None: ...
 
 
 class McpLoaderProtocol(Protocol):
@@ -95,13 +129,16 @@ class McpLoaderProtocol(Protocol):
 
 
 class MessageBusProtocol(Protocol):
-    def read_inbox(self, name: str) -> list[dict[str, Any]]: ...
-    def send(self, from_user: str, to: str, content: str, msg_type: str = "message") -> str: ...
+    def read_inbox(self, name: str, peek: bool = False) -> list[InboxMessageDict]: ...
+    def send(self, sender: str, to: str, content: str, msg_type: str = "message") -> str: ...
 
 
 class TeamManagerProtocol(Protocol):
+    config: TeamConfigDict
+
     def set_display(self, display: DisplayProtocol) -> None: ...
-    def list_teammates(self) -> list[dict[str, Any]]: ...
+    def list_all(self) -> TeamListText: ...
+    def member_names(self) -> list[str]: ...
 
 
 class BlackboardProtocol(Protocol):

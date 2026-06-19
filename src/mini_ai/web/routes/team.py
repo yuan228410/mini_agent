@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Query
 
 from ...logger import logger
+from ...team.models import TeamMemberSummary, TeamStatusResponse
 
 router = APIRouter()
 
@@ -13,14 +14,14 @@ def _get_team_comp(username: str, workspace: str):
 
 
 @router.get("/team/status")
-async def team_status(username: str = Query(...), workspace: str = Query("")):
+async def team_status(username: str = Query(...), workspace: str = Query("")) -> TeamStatusResponse:
     comp = _get_team_comp(username, workspace or None)
     if not comp:
         return {"teammates": [], "has_team": False}
     team_mgr = comp.get("team_mgr")
     if not team_mgr:
         return {"teammates": [], "has_team": False}
-    members = []
+    members: list[TeamMemberSummary] = []
     for m in team_mgr.config.get("members", []):
         members.append({
             "name": m.get("name", ""),
