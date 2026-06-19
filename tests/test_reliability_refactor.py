@@ -632,3 +632,39 @@ def test_tool_models_use_explicit_wire_aliases():
         "content": "ok",
         "timestamp": "t",
     }
+
+
+def test_tool_registry_execution_uses_explicit_aliases():
+    import typing
+    from mini_ai.core.runtime_types import MessageDict, ToolArgs, ToolDefinition, ToolWirePayload
+    from mini_ai.core.tool_models import ToolCall
+    from mini_ai.tools import ToolRegistry, dispatch, get_definitions, handle_tool_calls, inject_todos
+
+    registry_get_defs = typing.get_type_hints(ToolRegistry.get_definitions)
+    registry_dispatch = typing.get_type_hints(ToolRegistry.dispatch)
+    registry_handle = typing.get_type_hints(ToolRegistry.handle_tool_calls)
+    registry_as_call = typing.get_type_hints(ToolRegistry._as_tool_call)
+    registry_tool_message = typing.get_type_hints(ToolRegistry._tool_message)
+    registry_execute_one = typing.get_type_hints(ToolRegistry._execute_one)
+    registry_execute_parallel = typing.get_type_hints(ToolRegistry._execute_parallel)
+    module_get_defs = typing.get_type_hints(get_definitions)
+    module_dispatch = typing.get_type_hints(dispatch)
+    module_handle = typing.get_type_hints(handle_tool_calls)
+    module_inject = typing.get_type_hints(inject_todos)
+
+    assert registry_get_defs["return"] == list[ToolDefinition]
+    assert registry_dispatch["args"] == ToolArgs
+    assert registry_handle["msg"] == MessageDict
+    assert registry_handle["messages"] == list[MessageDict]
+    assert registry_as_call["tc"] == ToolCall | ToolWirePayload
+    assert registry_as_call["return"] is ToolCall
+    assert registry_tool_message["return"] == MessageDict
+    assert registry_execute_one["tc"] == ToolCall | ToolWirePayload
+    assert registry_execute_one["messages"] == list[MessageDict]
+    assert registry_execute_parallel["calls"] == list[ToolCall | ToolWirePayload]
+    assert registry_execute_parallel["messages"] == list[MessageDict]
+    assert module_get_defs["return"] == list[ToolDefinition]
+    assert module_dispatch["args"] == ToolArgs
+    assert module_handle["msg"] == MessageDict
+    assert module_handle["messages"] == list[MessageDict]
+    assert module_inject["messages"] == list[MessageDict]

@@ -10,6 +10,7 @@ from ..logger import logger
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 from .cache import ToolCache, get_tool_cache
 from .metadata import metadata_for, normalize_tool_definition
+from ..core.runtime_types import MessageDict, ToolArgs, ToolDefinition, ToolWirePayload
 from ..core.tool_models import ToolCall, ToolResult
 from ..utils import now_ts
 
@@ -54,7 +55,7 @@ class ToolRegistry:
         # 兼容测试/外部扩展；新代码优先通过 ToolMetadata.parallel_safe 声明。
         self._parallel_tools: set[str] = set()
 
-    def _normalize_module_definition(self, module) -> dict:
+    def _normalize_module_definition(self, module) -> ToolDefinition:
         raw = module.definition() if callable(getattr(module, "definition", None)) else module.definition
         meta = metadata_for(raw.get("function", {}).get("name", ""), getattr(module, "metadata", None))
         normalized = normalize_tool_definition(raw, meta)
@@ -161,7 +162,7 @@ class ToolRegistry:
         except Exception:
             pass
 
-    def get_definitions(self) -> list[dict]:
+    def get_definitions(self) -> list[ToolDefinition]:
         return [json.loads(json.dumps(m.definition, ensure_ascii=False)) for m in self._tools]
 
     def _is_parallel_safe(self, name: str) -> bool:
@@ -170,7 +171,7 @@ class ToolRegistry:
     def _is_cacheable(self, name: str) -> bool:
         return bool(metadata_for(name, self._tool_metadata.get(name)).cacheable)
 
-    def dispatch(self, name: str, args: dict) -> str | None:
+    def dispatch(self, name: str, args: ToolArgs) -> str | None:
         mod = self._by_name.get(name)
         if not mod:
             return None
@@ -178,7 +179,7 @@ class ToolRegistry:
             return _run_with_context([(config_tool._registry_ctx, self)], mod.execute, args)
         return mod.execute(args)
 
-    def handle_tool_calls(self, msg: dict, messages: list[dict], display=None, persist_fn=None) -> bool:
+    def handle_tool_calls(self, msg: MessageDict, messages: list[MessageDict], display=None, persist_fn=None) -> bool:
         calls = [ToolCall.from_dict(tc) for tc in msg["tool_calls"]]
         asst_msg = {"role": "assistant", "content": None, "tool_calls": [tc.to_dict() for tc in calls], "timestamp": now_ts()}
         messages.append(asst_msg)
@@ -214,17 +215,17 @@ class ToolRegistry:
 
         return spawned
 
-    def _as_tool_call(self, tc: ToolCall | dict) -> ToolCall:
+    def _as_tool_call(self, tc: ToolCall | ToolWirePayload) -> ToolCall:
         return tc if isinstance(tc, ToolCall) else ToolCall.from_dict(tc)
 
-    def _tool_message(self, tool_call_id: str, name: str, content: str) -> dict:
+    def _tool_message(self, tool_call_id: str, name: str, content: str) -> MessageDict:
         return ToolResult(tool_call_id=tool_call_id, name=name, content=content).to_message(timestamp=now_ts())
 
     def _persist_tool_message(self, persist_fn, tool_call_id: str, name: str, content: str) -> None:
         if persist_fn:
             persist_fn(self._tool_message(tool_call_id, name, content))
 
-    def _execute_one(self, tc: ToolCall | dict, messages: list[dict], display=None, persist_fn=None) -> None:
+    def _execute_one(self, tc: ToolCall | ToolWirePayload, messages: list[MessageDict], display=None, persist_fn=None) -> None:
         tc = self._as_tool_call(tc)
         name = tc.function.name
         raw_args = tc.function.arguments
@@ -307,7 +308,7 @@ class ToolRegistry:
         self._persist_tool_message(persist_fn, tc.id, name, full_output)
         messages.append(tool_msg)
 
-    def _execute_parallel(self, calls: list[ToolCall | dict], messages: list[dict], display=None, persist_fn=None) -> None:
+    def _execute_parallel(self, calls: list[ToolCall | ToolWirePayload], messages: list[MessageDict], display=None, persist_fn=None) -> None:
         calls = [self._as_tool_call(tc) for tc in calls]
         results = {}
         cache = self._cache
@@ -537,15 +538,15 @@ def register_history_tools(history_db, workspace: str = "default") -> None:
     _raise_global_registry_error()
 
 
-def get_definitions() -> list[dict]:
+def get_definitions() -> list[ToolDefinition]:
     _raise_global_registry_error()
 
 
-def dispatch(name: str, args: dict) -> str | None:
+def dispatch(name: str, args: ToolArgs) -> str | None:
     _raise_global_registry_error()
 
 
-def handle_tool_calls(msg: dict, messages: list[dict], display=None, persist_fn=None) -> bool:
+def handle_tool_calls(msg: MessageDict, messages: list[MessageDict], display=None, persist_fn=None) -> bool:
     _raise_global_registry_error()
 
 
@@ -554,7 +555,7 @@ def render_todos() -> str:
     return render_current_todos()
 
 
-def inject_todos(messages: list[dict]):
+def inject_todos(messages: list[MessageDict]) -> None:
     """将当前任务计划注入 system prompt 的尾部（供 main.py 和 chat.py 共用）"""
     from .update_todos import inject_todos as _impl
     _impl(messages)
