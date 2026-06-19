@@ -1021,3 +1021,59 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies():
     assert snapshot.model.headers == {"X-Test": "1"}
     assert snapshot.timeouts.to_dict()["custom_timeout"] == {"x": 1}
     assert snapshot.database.to_dict()["history"]["custom_history"] == 2
+
+
+def test_web_route_boundaries_use_explicit_dtos():
+    import typing
+    from mini_ai.core.runtime_types import DisplayWireEvent, PlanArtifactDict, TeamComponents
+    from mini_ai.web import route_types, session_manager
+    from mini_ai.web.routes import chat, commands, files, models, sessions, team, workspaces
+
+    assert typing.get_type_hints(session_manager._build_meta)["return"] == route_types.SessionMeta
+    assert typing.get_type_hints(session_manager.SessionManager.get_meta)["return"] == route_types.SessionMeta | None
+    assert typing.get_type_hints(session_manager.SessionManager.set_meta)["meta"] == route_types.SessionMeta
+
+    assert typing.get_type_hints(sessions.create_session)["body"] == route_types.SessionCreateRequest
+    assert typing.get_type_hints(sessions.create_session)["return"] == route_types.SessionCreateResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(sessions.list_sessions)["return"] == route_types.SessionListResponse
+    assert typing.get_type_hints(sessions.get_todos)["return"] == route_types.TodosResponse
+    assert typing.get_type_hints(sessions.delete_session)["body"] == route_types.SessionDeleteRequest
+    assert typing.get_type_hints(sessions.batch_delete_sessions)["return"] == route_types.SessionBatchDeleteResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(sessions.rename_session)["return"] == route_types.SessionRenameResponse | route_types.RouteErrorResponse
+
+    assert typing.get_type_hints(chat.chat_ws_endpoint)["ws"]
+    assert typing.get_type_hints(chat.chat_history)["return"] == route_types.ChatHistoryResponse
+    assert typing.get_type_hints(chat.chat_reset)["body"] == route_types.ChatResetRequest | None
+    assert typing.get_type_hints(chat.chat_reset)["return"] == route_types.ChatResetResponse | route_types.RouteErrorResponse
+
+    assert typing.get_type_hints(files._list_files_sync)["return"] == route_types.FileListResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(files._search_files_sync)["return"] == route_types.FileSearchResponse
+    assert typing.get_type_hints(files._browse_dirs_sync)["return"] == route_types.BrowseDirsResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(files.list_files)["return"] == route_types.FileListResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(files.read_file)["return"] == route_types.FileReadTextResponse | route_types.FileReadBinaryResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(files.search_files)["return"] == route_types.FileSearchResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(files.browse_dirs)["return"] == route_types.BrowseDirsResponse | route_types.RouteErrorResponse
+
+    assert typing.get_type_hints(models.list_models)["return"] == route_types.ModelsResponse
+    assert typing.get_type_hints(models.switch_model_endpoint)["body"] == route_types.SwitchModelRequest
+    assert typing.get_type_hints(models.switch_model_endpoint)["return"] == route_types.SwitchModelResponse | route_types.RouteErrorResponse
+
+    assert typing.get_type_hints(workspaces.list_workspaces)["return"] == route_types.WorkspaceListResponse
+    assert typing.get_type_hints(workspaces.create_workspace)["body"] == route_types.WorkspaceCreateRequest
+    assert typing.get_type_hints(workspaces.add_workspace)["body"] == route_types.WorkspaceAddRequest
+    assert typing.get_type_hints(workspaces.switch_workspace)["return"] == route_types.WorkspaceSwitchResponse | route_types.RouteErrorResponse
+    assert typing.get_type_hints(workspaces.list_removed_workspaces)["return"] == route_types.RemovedWorkspacesResponse
+    assert typing.get_type_hints(workspaces.restore_workspace)["body"] == route_types.WorkspaceRestoreRequest
+    assert typing.get_type_hints(workspaces.delete_removed_workspace)["return"] == route_types.WorkspaceActionResponse | route_types.RouteErrorResponse
+
+    assert typing.get_type_hints(commands)["_WEB_COMMANDS"] == list[route_types.WebCommand]
+    assert typing.get_type_hints(commands.list_commands)["return"] == route_types.CommandsResponse
+    assert typing.get_type_hints(commands.mcp_status)["return"] == route_types.McpStatusResponse
+
+    assert typing.get_type_hints(team._get_team_comp)["return"] == TeamComponents | None
+    assert typing.get_type_hints(team.blackboard_snapshot)["return"] == route_types.BlackboardSnapshotResponse
+    assert typing.get_type_hints(team.dismiss_teammate)["body"] == route_types.DismissTeammateRequest
+    assert typing.get_type_hints(team.clear_blackboard)["body"] == route_types.ClearBlackboardRequest
+    assert route_types.DisplayWireEvent == DisplayWireEvent
+    assert route_types.PlanArtifactDict == PlanArtifactDict
+    assert route_types.TeamComponents == TeamComponents

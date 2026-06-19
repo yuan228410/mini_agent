@@ -1,9 +1,11 @@
 """斜杠命令列表接口"""
 from fastapi import APIRouter
 
+from ..route_types import CommandsResponse, McpStatusResponse, WebCommand
+
 router = APIRouter()
 
-_WEB_COMMANDS = [
+_WEB_COMMANDS: list[WebCommand] = [
     {"name": "/plan", "desc": "进入计划模式：讨论方案、生成选项、确认后执行", "has_arg": False},
     {"name": "/act", "desc": "批准当前计划并执行", "has_arg": False},
     {"name": "/clear", "desc": "清空当前会话消息（归档）", "has_arg": False},
@@ -19,12 +21,12 @@ _WEB_COMMANDS = [
 
 
 @router.get("/commands")
-async def list_commands():
+async def list_commands() -> CommandsResponse:
     return {"commands": _WEB_COMMANDS}
 
 
 @router.get("/mcp")
-async def mcp_status():
+async def mcp_status() -> McpStatusResponse:
     from ...config import MCP
     if not MCP.get("enabled"):
         return {"enabled": False, "servers": []}

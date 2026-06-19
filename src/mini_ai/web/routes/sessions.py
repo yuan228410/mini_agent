@@ -12,6 +12,19 @@ from ...llm import chat as llm_chat
 from ...logger import logger
 from ...tools import inject_todos as _inject_todos
 from ...utils import now_ts
+from ..route_types import (
+    RouteErrorResponse,
+    RouteOkResponse,
+    SessionBatchDeleteRequest,
+    SessionBatchDeleteResponse,
+    SessionCreateRequest,
+    SessionCreateResponse,
+    SessionDeleteRequest,
+    SessionListResponse,
+    SessionRenameRequest,
+    SessionRenameResponse,
+    TodosResponse,
+)
 from ..session_manager import (
     SessionManager, cache_key, ws_key,
     resolve_base, get_or_create_session, get_or_create_components,
@@ -24,7 +37,7 @@ router = APIRouter()
 
 
 @router.post("/session")
-async def create_session(body: dict):
+async def create_session(body: SessionCreateRequest) -> SessionCreateResponse | RouteErrorResponse:
     username = body.get("username", "")
     workspace = body.get("workspace") or "default"
     if not username:
@@ -52,7 +65,7 @@ async def create_session(body: dict):
 
 
 @router.get("/sessions")
-async def list_sessions(username: str = Query(...), workspace: str | None = Query(default=None)):
+async def list_sessions(username: str = Query(...), workspace: str | None = Query(default=None)) -> SessionListResponse:
     _t0 = time.time()
     try:
         base = resolve_base(username, workspace)
@@ -96,7 +109,7 @@ async def list_sessions(username: str = Query(...), workspace: str | None = Quer
 
 
 @router.get("/todos")
-async def get_todos(username: str = Query(...), workspace: str | None = Query(default=None), session_id: str = Query(...)):
+async def get_todos(username: str = Query(...), workspace: str | None = Query(default=None), session_id: str = Query(...)) -> TodosResponse:
     from ...tools.update_todos import get_todos as _get_todos
     key = cache_key(username, workspace, session_id)
     todos = _get_todos(key)
@@ -104,7 +117,7 @@ async def get_todos(username: str = Query(...), workspace: str | None = Query(de
 
 
 @router.delete("/session")
-async def delete_session(body: dict):
+async def delete_session(body: SessionDeleteRequest) -> RouteOkResponse | RouteErrorResponse:
     username = body.get("username", "")
     session_id = body.get("session_id", "")
     workspace = body.get("workspace", "")
@@ -146,7 +159,7 @@ async def delete_session(body: dict):
 
 
 @router.post("/sessions/batch_delete")
-async def batch_delete_sessions(body: dict):
+async def batch_delete_sessions(body: SessionBatchDeleteRequest) -> SessionBatchDeleteResponse | RouteErrorResponse:
     username = body.get("username", "")
     session_ids = body.get("session_ids", [])
     workspace = body.get("workspace", "") or "default"
@@ -176,7 +189,7 @@ async def batch_delete_sessions(body: dict):
 
 
 @router.patch("/session/rename")
-async def rename_session(body: dict):
+async def rename_session(body: SessionRenameRequest) -> SessionRenameResponse | RouteErrorResponse:
     username = body.get("username", "")
     session_id = body.get("session_id", "")
     name = body.get("name", "").strip()

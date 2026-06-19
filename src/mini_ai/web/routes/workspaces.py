@@ -6,6 +6,17 @@ import time
 from ...config import DATA_DIR, user_data_dir
 from ...logger import logger
 from ...workspace import WorkspaceManager
+from ..route_types import (
+    RemovedWorkspacesResponse,
+    RouteErrorResponse,
+    WorkspaceActionResponse,
+    WorkspaceAddRequest,
+    WorkspaceCreateRequest,
+    WorkspaceListResponse,
+    WorkspaceRestoreRequest,
+    WorkspaceSwitchRequest,
+    WorkspaceSwitchResponse,
+)
 
 router = APIRouter()
 
@@ -19,7 +30,7 @@ def _get_mgr(username: str) -> WorkspaceManager:
 
 
 @router.get("/workspaces")
-async def list_workspaces(username: str = Query(...)):
+async def list_workspaces(username: str = Query(...)) -> WorkspaceListResponse:
     _t0 = time.time()
     import os
     mgr = _get_mgr(username)
@@ -36,7 +47,7 @@ async def list_workspaces(username: str = Query(...)):
 
 
 @router.post("/workspaces")
-async def create_workspace(body: dict):
+async def create_workspace(body: WorkspaceCreateRequest) -> WorkspaceActionResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     project_path = body.get("project_path", "").strip()
     username = body.get("username", "")
@@ -52,7 +63,7 @@ async def create_workspace(body: dict):
 
 
 @router.post("/workspaces/add")
-async def add_workspace(body: dict):
+async def add_workspace(body: WorkspaceAddRequest) -> WorkspaceActionResponse | RouteErrorResponse:
     path = body.get("path", "").strip()
     username = body.get("username", "")
     if not path:
@@ -67,7 +78,7 @@ async def add_workspace(body: dict):
 
 
 @router.post("/workspaces/switch")
-async def switch_workspace(body: dict):
+async def switch_workspace(body: WorkspaceSwitchRequest) -> WorkspaceSwitchResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     username = body.get("username", "")
     if not name:
@@ -102,7 +113,7 @@ async def switch_workspace(body: dict):
 
 
 @router.delete("/workspaces/{name}")
-async def remove_workspace(name: str, delete_data: bool = False, username: str = Query(...)):
+async def remove_workspace(name: str, delete_data: bool = False, username: str = Query(...)) -> WorkspaceActionResponse | RouteErrorResponse:
     mgr = _get_mgr(username)
     if delete_data:
         result = mgr.delete(name)
@@ -114,14 +125,14 @@ async def remove_workspace(name: str, delete_data: bool = False, username: str =
 
 
 @router.get("/workspaces/removed")
-async def list_removed_workspaces(username: str = Query(...)):
+async def list_removed_workspaces(username: str = Query(...)) -> RemovedWorkspacesResponse:
     mgr = _get_mgr(username)
     removed = mgr.list_removed()
     return {"removed": removed}
 
 
 @router.post("/workspaces/restore")
-async def restore_workspace(body: dict):
+async def restore_workspace(body: WorkspaceRestoreRequest) -> WorkspaceActionResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     username = body.get("username", "")
     if not name:
@@ -136,7 +147,7 @@ async def restore_workspace(body: dict):
 
 
 @router.delete("/workspaces/removed/{name}")
-async def delete_removed_workspace(name: str, username: str = Query(...)):
+async def delete_removed_workspace(name: str, username: str = Query(...)) -> WorkspaceActionResponse | RouteErrorResponse:
     mgr = _get_mgr(username)
     result = mgr.delete_removed(name)
     if result.startswith("Error"):

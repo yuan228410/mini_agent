@@ -15,6 +15,7 @@ from pathlib import Path
 from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
 from ..core.events import TERMINAL_EVENT_TYPES
 from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
+from .route_types import SessionMeta
 from ..logger import logger
 from ..plan.schema import PlanSessionState
 from ..utils import now_ts
@@ -205,12 +206,12 @@ class SessionManager:
             s = self._sessions.get(key)
             return s.refs if s else 0
 
-    def get_meta(self, key: str) -> dict | None:
+    def get_meta(self, key: str) -> SessionMeta | None:
         with self._lock:
             s = self._sessions.get(key)
             return s.meta if s else None
 
-    def set_meta(self, key: str, meta: dict):
+    def set_meta(self, key: str, meta: SessionMeta):
         with self._lock:
             s = self._sessions.get(key)
             if s:
@@ -638,7 +639,7 @@ def _restore_session_model(base: Path | None, sid: str, cache_key: str):
     if model:
         SessionManager.instance().set_model(cache_key, model)
 
-def _build_meta(sid: str, messages: list[MessageDict], username: str, workspace: str | None = None) -> dict:
+def _build_meta(sid: str, messages: list[MessageDict], username: str, workspace: str | None = None) -> SessionMeta:
     sm = SessionManager.instance()
     key = sm.cache_key(username, workspace, sid)
     non_system = [m for m in messages if m["role"] != "system"]

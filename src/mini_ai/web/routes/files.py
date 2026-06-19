@@ -11,6 +11,14 @@ from fastapi.responses import FileResponse
 
 from ...config import DATA_DIR, user_data_dir
 from ...workspace import WorkspaceManager
+from ..route_types import (
+    BrowseDirsResponse,
+    FileListResponse,
+    FileReadBinaryResponse,
+    FileReadTextResponse,
+    FileSearchResponse,
+    RouteErrorResponse,
+)
 
 router = APIRouter()
 
@@ -108,7 +116,7 @@ def _format_time(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=_UTC8).isoformat()
 
 
-def _list_files_sync(root: Path, target: Path, path: str, max_items: int = 2000) -> dict:
+def _list_files_sync(root: Path, target: Path, path: str, max_items: int = 2000) -> FileListResponse | RouteErrorResponse:
     items = []
     try:
         entries = sorted(target.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
@@ -166,7 +174,7 @@ def _read_text_window(target: Path, offset: int, limit: int) -> tuple[str, int, 
     return "".join(content_parts), total_lines, end < total_lines
 
 
-def _search_files_sync(root: Path, target: Path, query: str, max_results: int = 100, max_scanned: int = 20000, deadline_ms: int = 1500) -> dict:
+def _search_files_sync(root: Path, target: Path, query: str, max_results: int = 100, max_scanned: int = 20000, deadline_ms: int = 1500) -> FileSearchResponse:
     results = []
     query_lower = query.lower()
     scanned = 0
@@ -217,7 +225,7 @@ def _search_files_sync(root: Path, target: Path, query: str, max_results: int = 
     return {"results": results, "query": query, "scanned": scanned, "truncated": truncated}
 
 
-def _browse_dirs_sync(root: Path) -> dict:
+def _browse_dirs_sync(root: Path) -> BrowseDirsResponse | RouteErrorResponse:
     parent = str(root.parent) if root != root.parent else ""
     dirs = []
     try:
@@ -237,7 +245,7 @@ async def list_files(
     path: str = Query(default=""),
     workspace: str = Query(default=""),
     username: str = Query(...),
-):
+) -> FileListResponse | RouteErrorResponse:
     root = _get_project_root(workspace, username)
     if not root:
         return {"error": "工作空间无关联项目路径"}
@@ -260,7 +268,7 @@ async def read_file(
     username: str = Query(...),
     offset: int = Query(default=0),
     limit: int = Query(default=200),
-):
+) -> FileReadTextResponse | FileReadBinaryResponse | RouteErrorResponse:
     root = _get_project_root(workspace, username)
     if not root:
         return {"error": "工作空间无关联项目路径"}
@@ -341,7 +349,7 @@ async def search_files(
     path: str = Query(default=""),
     workspace: str = Query(default=""),
     username: str = Query(...),
-):
+) -> FileSearchResponse | RouteErrorResponse:
     """递归搜索文件名。"""
     root = _get_project_root(workspace, username)
     if not root:
@@ -355,7 +363,7 @@ async def search_files(
     return await asyncio.to_thread(_search_files_sync, root, target, query)
 
 @router.get("/files/browse")
-async def browse_dirs(path: str = Query(default=""), username: str = Query(...)):
+async def browse_dirs(path: str = Query(default=""), username: str = Query(...)) -> BrowseDirsResponse | RouteErrorResponse:
     if not path:
         path = str(Path.home())
     root = Path(path).resolve()

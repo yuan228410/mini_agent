@@ -2,11 +2,12 @@
 from fastapi import APIRouter
 
 from ...config import AVAILABLE_MODELS, MODEL_CONFIG, get_model_config
+from ..route_types import ModelsResponse, RouteErrorResponse, SwitchModelRequest, SwitchModelResponse
 
 router = APIRouter()
 
 @router.get("/models")
-async def list_models(session_id: str = "", workspace: str = "", username: str = ""):
+async def list_models(session_id: str = "", workspace: str = "", username: str = "") -> ModelsResponse:
     result = {
         "active": MODEL_CONFIG.get("model", "?"),
         "active_name": _get_active_name(),
@@ -27,7 +28,7 @@ async def list_models(session_id: str = "", workspace: str = "", username: str =
     return result
 
 @router.post("/models/switch")
-async def switch_model_endpoint(body: dict):
+async def switch_model_endpoint(body: SwitchModelRequest) -> SwitchModelResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     username = body.get("username", "")
     session_id = body.get("session_id", "")

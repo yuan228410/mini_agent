@@ -1,13 +1,21 @@
 """Team 协作 API — 队友状态、黑板、解散"""
 from fastapi import APIRouter, Query
 
+from ...core.runtime_types import TeamComponents
 from ...logger import logger
 from ...team.models import TeamMemberSummary, TeamStatusResponse
+from ..route_types import (
+    BlackboardSnapshotResponse,
+    ClearBlackboardRequest,
+    DismissTeammateRequest,
+    RouteErrorResponse,
+    TeamActionResponse,
+)
 
 router = APIRouter()
 
 
-def _get_team_comp(username: str, workspace: str):
+def _get_team_comp(username: str, workspace: str | None) -> TeamComponents | None:
     from ..session_manager import SessionManager, ws_key
     wk = ws_key(username, workspace)
     return SessionManager.instance().get_team_component(wk)
@@ -32,7 +40,7 @@ async def team_status(username: str = Query(...), workspace: str = Query("")) ->
 
 
 @router.get("/team/blackboard")
-async def blackboard_snapshot(username: str = Query(...), workspace: str = Query("")):
+async def blackboard_snapshot(username: str = Query(...), workspace: str = Query("")) -> BlackboardSnapshotResponse:
     comp = _get_team_comp(username, workspace or None)
     if not comp:
         return {"entries": {}, "has_blackboard": False}
@@ -44,7 +52,7 @@ async def blackboard_snapshot(username: str = Query(...), workspace: str = Query
 
 
 @router.post("/team/dismiss")
-async def dismiss_teammate(body: dict):
+async def dismiss_teammate(body: DismissTeammateRequest) -> TeamActionResponse | RouteErrorResponse:
     username = body.get("username", "")
     workspace = body.get("workspace", "")
     name = body.get("name", "")
@@ -61,7 +69,7 @@ async def dismiss_teammate(body: dict):
 
 
 @router.post("/team/blackboard/clear")
-async def clear_blackboard(body: dict):
+async def clear_blackboard(body: ClearBlackboardRequest) -> TeamActionResponse | RouteErrorResponse:
     username = body.get("username", "")
     workspace = body.get("workspace", "")
     if not username:

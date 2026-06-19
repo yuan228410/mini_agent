@@ -16,9 +16,19 @@ from fastapi import APIRouter, Query, WebSocket
 
 from ...config import MODEL_CONFIG, RequestContext, get_model_config
 from ...core.events import DisplayEvent, DisplayEventType
+from ...core.runtime_types import DisplayWireEvent, MessageDict, PlanArtifactDict
 from ...logger import logger
 from ...tools import inject_todos as _inject_todos
 from ...utils import now_ts
+from ..route_types import (
+    ChatHistoryEntry,
+    ChatHistoryImage,
+    ChatHistoryResponse,
+    ChatResetRequest,
+    ChatResetResponse,
+    ImageUpload,
+    RouteErrorResponse,
+)
 from ..session_manager import (
     SessionManager, cache_key, ws_key, safe_queue_put,
     resolve_base, get_or_create_session, get_or_create_components,
@@ -43,24 +53,24 @@ async def chat_ws_endpoint(ws: WebSocket):
     _write_lock = asyncio.Lock()
     _ws_username: str | None = None
 
-    def _ws_event(event: DisplayEventType | str, **data) -> dict:
+    def _ws_event(event: DisplayEventType | str, **data) -> DisplayWireEvent:
         event_type = event if isinstance(event, DisplayEventType) else DisplayEventType(event)
         return DisplayEvent(event_type, data).to_wire()
 
-    def _error_event(error: str, session_id: str | None = None) -> dict:
+    def _error_event(error: str, session_id: str | None = None) -> DisplayWireEvent:
         payload = {"error": error}
         if session_id:
             payload["session_id"] = session_id
         return DisplayEvent(DisplayEventType.ERROR, payload).to_wire()
 
-    def _plan_event(kind: str, session_id: str | None = None, **data) -> dict:
+    def _plan_event(kind: str, session_id: str | None = None, **data) -> DisplayWireEvent:
         payload = {"kind": kind}
         payload.update(data)
         if session_id:
             payload["session_id"] = session_id
         return DisplayEvent(DisplayEventType.PLAN_EVENT, payload).to_wire()
 
-    async def _send(data: dict | DisplayEvent):
+    async def _send(data: DisplayWireEvent | DisplayEvent) -> None:
         wire = data.to_wire() if isinstance(data, DisplayEvent) else data
         async with _write_lock:
             try:
@@ -68,7 +78,7 @@ async def chat_ws_endpoint(ws: WebSocket):
             except Exception as e:
                 logger.warning(f'[Web] _send failed: {e}, event={wire.get("event")}')
 
-    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list | None = None, plan_turn: bool = False, approved_plan: dict | None = None):
+    async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list[ImageUpload] | None = None, plan_turn: bool = False, approved_plan: PlanArtifactDict | None = None) -> None:
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")
         session_key = cache_key(username, ws_name, sid)
         base = resolve_base(username, ws_name)
@@ -77,7 +87,7 @@ async def chat_ws_endpoint(ws: WebSocket):
 
         # 构造用户消息（可能包含图片）。审批后的执行由 approved_plan 注入内部指令，不追加可见用户消息。
         if user_message or images:
-            user_msg: dict = {"role": "user", "content": user_message, "timestamp": ts}
+            user_msg: MessageDict = {"role": "user", "content": user_message, "timestamp": ts}
             if images and len(images) > 0:
                 content_blocks = [{"type": "text", "text": user_message}]
                 for img in images:
@@ -434,7 +444,7 @@ async def chat_ws_endpoint(ws: WebSocket):
 _MAX_HISTORY_LOAD = 2000
 
 @router.get("/chat/history")
-async def chat_history(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")):
+async def chat_history(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")) -> ChatHistoryResponse:
     _t0 = time.time()
     if not username:
         return {"session_id": session_id, "history": []}
@@ -459,14 +469,14 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
         messages = comp["history_db"].load_session_for_display(workspace or "default", session_id) or []
         current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
 
-    history = []
+    history: list[ChatHistoryEntry] = []
     for m in messages:
-        entry: dict = {"role": m["role"]}
+        entry: ChatHistoryEntry = {"role": m["role"]}
         content = m.get("content")
 
         if isinstance(content, list):
             text_parts = []
-            images = []
+            images: list[ChatHistoryImage] = []
             for part in content:
                 if isinstance(part, dict):
                     if part.get("type") == "text":
@@ -501,7 +511,7 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
 # ── REST: 重置会话 ──
 
 @router.post("/chat/reset")
-async def chat_reset(body: dict | None = None):
+async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse | RouteErrorResponse:
     body = body or {}
     username = body.get("username", "")
     session_id = body.get("session_id", "")
