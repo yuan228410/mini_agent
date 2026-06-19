@@ -478,3 +478,23 @@ def test_session_runtime_context_close_uses_owned_request_context_protocol():
     runtime.close()
 
     assert request_context.closed is True
+
+
+def test_web_session_manager_uses_structured_component_boundaries():
+    import typing
+    from mini_ai.core.runtime_types import SessionComponents, TeamComponents
+    from mini_ai.web.session_manager import SessionManager, SessionState, get_or_create_components
+
+    state_hints = typing.get_type_hints(SessionState)
+    manager_hints = typing.get_type_hints(SessionManager.get_components)
+    team_hints = typing.get_type_hints(SessionManager.get_team_component)
+    factory_hints = typing.get_type_hints(get_or_create_components)
+
+    assert state_hints["components"] is SessionComponents
+    assert manager_hints["return"] == SessionComponents | None
+    assert team_hints["return"] == TeamComponents | None
+    assert factory_hints["return"] is SessionComponents
+
+    sm = SessionManager()
+    sm.set_team_component("u:w", {"bus": object(), "team_mgr": object(), "blackboard": object()})
+    assert set(sm.get_team_component("u:w")) == {"bus", "team_mgr", "blackboard"}

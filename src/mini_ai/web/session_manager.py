@@ -14,7 +14,7 @@ from pathlib import Path
 
 from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
 from ..core.events import TERMINAL_EVENT_TYPES
-from ..core.runtime_types import MessageDict, MetadataDict, ToolDefinition, UsageDict
+from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
 from ..logger import logger
 from ..plan.schema import PlanSessionState
 from ..utils import now_ts
@@ -39,7 +39,7 @@ class SessionState:
     abort_event: threading.Event = field(default_factory=threading.Event)
     meta: MetadataDict = field(default_factory=dict)
     refs: int = 0
-    components: MetadataDict = field(default_factory=dict)
+    components: SessionComponents = field(default_factory=SessionComponents)
 
 
 # ═══════════════════════════════════════════
@@ -68,7 +68,7 @@ class SessionManager:
         # 核心状态：cache_key → SessionState
         self._sessions: dict[str, SessionState] = {}
         # 团队组件：ws_key → {bus, team_mgr, blackboard}
-        self._team_components: dict[str, MetadataDict] = {}
+        self._team_components: dict[str, TeamComponents] = {}
         # 工具定义缓存
         self._lead_tools_cache: list[ToolDefinition] | None = None
         # 活跃生成任务：cache_key → task，用于跨 WebSocket 连接隔离同一会话生成
@@ -173,7 +173,7 @@ class SessionManager:
             self._sessions[key] = s
             return s.lock
 
-    def get_components(self, key: str) -> dict | None:
+    def get_components(self, key: str) -> SessionComponents | None:
         with self._lock:
             s = self._sessions.get(key)
             return s.components if s else None
@@ -194,7 +194,7 @@ class SessionManager:
                 return
             self._active_tasks.pop(key, None)
 
-    def set_components(self, key: str, components: dict):
+    def set_components(self, key: str, components: SessionComponents):
         with self._lock:
             s = self._sessions.get(key)
             if s:
@@ -294,7 +294,7 @@ class SessionManager:
     # ── 组件清理 ──
 
     @staticmethod
-    def _cleanup_components(comp: dict):
+    def _cleanup_components(comp: SessionComponents):
         if not comp:
             return
         for name in ("compactor", "store"):
@@ -324,11 +324,11 @@ class SessionManager:
 
         # ── 团队组件 ──
 
-    def get_team_component(self, ws_key: str) -> dict | None:
+    def get_team_component(self, ws_key: str) -> TeamComponents | None:
         with self._lock:
             return self._team_components.get(ws_key)
 
-    def set_team_component(self, ws_key: str, comp: dict):
+    def set_team_component(self, ws_key: str, comp: TeamComponents):
         with self._lock:
             self._team_components[ws_key] = comp
 
@@ -455,7 +455,7 @@ def _get_workspace_base(username: str, workspace: str | None) -> Path | None:
 # 组件创建 + system prompt 构建
 # ═══════════════════════════════════════════
 
-def get_or_create_components(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> dict:
+def get_or_create_components(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> SessionComponents:
     sm = SessionManager.instance()
     key = sm.cache_key(username, workspace, sid)
 
@@ -464,7 +464,7 @@ def get_or_create_components(username: str, sid: str, base: Path | None = None, 
         if s and s.components:
             comp = s.components
             wk = sm.ws_key(username, workspace)
-            team_comp = sm._team_components.get(wk, {})
+            team_comp = sm._team_components.get(wk)
             if team_comp and not comp.get("bus"):
                 comp["bus"] = team_comp.get("bus")
                 comp["team_mgr"] = team_comp.get("team_mgr")
@@ -478,7 +478,7 @@ def get_or_create_components(username: str, sid: str, base: Path | None = None, 
             sm._sessions[key] = SessionState(components=components, access_time=time.monotonic())
         return components
 
-def _create_components_locked(username: str, sid: str, base: Path | None, workspace: str | None, cache_key: str) -> dict:
+def _create_components_locked(username: str, sid: str, base: Path | None, workspace: str | None, cache_key: str) -> SessionComponents:
     from ..memory import MemoryStore, Compactor, HistoryDBPool
     from ..context import ContextBuilder
     from ..skills import SkillLoader
@@ -533,7 +533,7 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
         summary_dir=session_dir,
     )
 
-    components = {
+    components: SessionComponents = {
         "store": user_store,
         "history_db": history_db,
         "compactor": compactor,

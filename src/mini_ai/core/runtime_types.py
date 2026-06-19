@@ -8,7 +8,7 @@ outer LLM/persistence boundaries; code should use these aliases rather than bare
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Protocol, TypedDict
 
 from .display_protocol import DisplayProtocol
 
@@ -16,6 +16,24 @@ MessageDict = dict[str, Any]
 ToolDefinition = dict[str, Any]
 UsageDict = dict[str, int | float | str | bool | None]
 MetadataDict = dict[str, Any]
+
+
+class SessionComponents(TypedDict, total=False):
+    store: MemoryStoreProtocol
+    history_db: HistoryDBProtocol
+    compactor: CompactorProtocol
+    ctx_builder: ContextBuilderProtocol
+    project_path: str
+    skill_loader: SkillLoaderProtocol
+    bus: MessageBusProtocol | None
+    team_mgr: TeamManagerProtocol | None
+    blackboard: BlackboardProtocol | None
+
+
+class TeamComponents(TypedDict, total=False):
+    bus: MessageBusProtocol
+    team_mgr: TeamManagerProtocol
+    blackboard: BlackboardProtocol
 
 
 class Closable(Protocol):
@@ -43,6 +61,7 @@ class ToolRegistryProtocol(Protocol):
 
 class HistoryDBProtocol(Protocol):
     def append(self, workspace: str, session_id: str, role: str, content, metadata: str = "") -> int | None: ...
+    def load_session(self, workspace: str, session_id: str, limit: int | None = None) -> list[MessageDict]: ...
 
 
 class MemoryStoreProtocol(Protocol):
@@ -63,10 +82,12 @@ class McpLoaderProtocol(Protocol):
 
 class MessageBusProtocol(Protocol):
     def read_inbox(self, name: str) -> list[dict[str, Any]]: ...
+    def send(self, from_user: str, to: str, content: str, msg_type: str = "message") -> str: ...
 
 
 class TeamManagerProtocol(Protocol):
     def set_display(self, display: DisplayProtocol) -> None: ...
+    def list_teammates(self) -> list[dict[str, Any]]: ...
 
 
 class BlackboardProtocol(Protocol):
@@ -80,7 +101,7 @@ class CompactorProtocol(Protocol):
 
 
 class ContextBuilderProtocol(Protocol):
-    pass
+    def build(self, **kwargs) -> str: ...
 
 
 class PlanStateStoreProtocol(Protocol):
