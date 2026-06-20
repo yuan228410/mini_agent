@@ -383,6 +383,8 @@ def test_module_level_tool_registry_apis_fail_fast():
 
 
 def test_update_todos_display_event_does_not_depend_on_sentinel():
+    import typing
+    from mini_ai.core.runtime_types import MessageDict
     from mini_ai.tools import update_todos
 
     class FakeDisplay:
@@ -414,6 +416,10 @@ def test_update_todos_display_event_does_not_depend_on_sentinel():
     assert display.todos == ["[~] **1. 实现架构边界** ← 当前"]
     assert display.tool_results == [("update_todos", "[~] **1. 实现架构边界** ← 当前")]
     assert "📋TODO" not in messages[-1]["content"]
+    assert update_todos.TodoStatus
+    assert typing.get_type_hints(update_todos.get_todos)["return"] == list[update_todos.TodoItem]
+    assert typing.get_type_hints(update_todos.set_todos)["todos"] == list[update_todos.TodoInput]
+    assert typing.get_type_hints(update_todos.inject_todos)["messages"] == list[MessageDict]
 
 
 def test_workflow_display_events_use_structured_payload_helpers():
