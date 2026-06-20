@@ -3,7 +3,7 @@ from fastapi import APIRouter, Query
 
 from ...core.runtime_types import TeamComponents
 from ...logger import logger
-from ...team.models import TeamMemberSummary, TeamStatusResponse, team_member_summary
+from ...team.models import TeamStatusResponse
 from ..route_types import (
     BlackboardSnapshotResponse,
     ClearBlackboardRequest,
@@ -29,10 +29,7 @@ async def team_status(username: str = Query(...), workspace: str = Query("")) ->
     team_mgr = comp.get("team_mgr")
     if not team_mgr:
         return {"teammates": [], "has_team": False}
-    members: list[TeamMemberSummary] = []
-    for m in team_mgr.config.get("members", []):
-        members.append(team_member_summary(m.get("name", ""), m.get("role", ""), m.get("status", "offline")))
-    return {"teammates": members, "has_team": True}
+    return {"teammates": team_mgr.member_summaries(), "has_team": True}
 
 
 @router.get("/team/blackboard")

@@ -302,6 +302,10 @@ class TeammateManager:
                 lines.append(f"  - {m['name']}（{m['role']}）：{m['status']}{note}")
             return "\n".join(lines)
 
+    def member_summaries(self) -> list[TeamMemberSummary]:
+        with self.lock:
+            return [team_member_summary(m["name"], m["role"], m["status"]) for m in self.config["members"]]
+
     def member_names(self) -> list[str]:
         with self.lock:
             return [m["name"] for m in self.config["members"]]

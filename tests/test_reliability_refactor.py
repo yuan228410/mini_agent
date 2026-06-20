@@ -864,6 +864,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     protocol_inbox = typing.get_type_hints(MessageBusProtocol.read_inbox)
     protocol_team = typing.get_type_hints(TeamManagerProtocol)
     protocol_team_list = typing.get_type_hints(TeamManagerProtocol.list_all)
+    protocol_member_summaries = typing.get_type_hints(TeamManagerProtocol.member_summaries)
     protocol_member_names = typing.get_type_hints(TeamManagerProtocol.member_names)
     protocol_active_member_names = typing.get_type_hints(TeamManagerProtocol.active_member_names)
     protocol_has_working_members = typing.get_type_hints(TeamManagerProtocol.has_working_members)
@@ -876,6 +877,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     manager_load = typing.get_type_hints(TeammateManager._load_config)
     manager_find = typing.get_type_hints(TeammateManager._find)
     manager_list = typing.get_type_hints(TeammateManager.list_all)
+    manager_member_summaries = typing.get_type_hints(TeammateManager.member_summaries)
     route_status = typing.get_type_hints(team_routes.team_status)
 
     assert protocol_sub_list["return"] is SubagentListText
@@ -884,6 +886,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert protocol_inbox["peek"] is bool
     assert protocol_team["config"] is TeamConfigDict
     assert protocol_team_list["return"] is TeamListText
+    assert protocol_member_summaries["return"] == list[TeamMemberSummary]
     assert protocol_member_names["return"] == list[str]
     assert protocol_active_member_names["return"] == list[str]
     assert protocol_has_working_members["return"] is bool
@@ -896,6 +899,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert manager_load["return"] is TeamConfigDict
     assert manager_find["return"] == TeamMemberSummary | None
     assert manager_list["return"] is TeamListText
+    assert manager_member_summaries["return"] == list[TeamMemberSummary]
     assert route_status["return"] is TeamStatusResponse
     assert TeamStatusResponseExport is TeamStatusResponse
 
