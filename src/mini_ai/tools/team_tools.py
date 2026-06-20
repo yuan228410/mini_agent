@@ -10,7 +10,7 @@ from ..logger import logger
 _bus: MessageBusProtocol | None = None
 _manager: TeamManagerProtocol | None = None
 
-_caller = contextvars.ContextVar("team_caller", default="assistant")
+_caller = contextvars.ContextVar("team_caller", default="lead")
 
 
 def configure(bus: MessageBusProtocol | None = None, manager: TeamManagerProtocol | None = None) -> None:
@@ -43,6 +43,10 @@ def _arg_text(args: ToolArgs, key: str, default: str = "") -> str:
 
 def _arg_msg_type(args: ToolArgs, key: str = "msg_type") -> InboxMessageTypeValue:
     return normalize_inbox_message_type(args.get(key, "message"))
+
+
+def spawn_from_args(manager: TeamManagerProtocol, args: ToolArgs) -> str:
+    return manager.spawn(_arg_text(args, "name"), _arg_text(args, "role"), _arg_text(args, "prompt"))
 
 
 def send_from_args(bus: MessageBusProtocol, sender: str, args: ToolArgs) -> str:
@@ -83,7 +87,7 @@ _spawn_def: ToolDefinition = {
 
 
 def _spawn(args: ToolArgs) -> str:
-    return _require_manager().spawn(_arg_text(args, "name"), _arg_text(args, "role"), _arg_text(args, "prompt"))
+    return spawn_from_args(_require_manager(), args)
 
 
 # ── list_teammates ──

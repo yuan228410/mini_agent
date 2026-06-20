@@ -1180,6 +1180,20 @@ def test_frontend_rest_boundaries_stay_in_api_module():
     assert offenders == []
 
 
+def test_tool_registry_uses_session_local_tool_bindings():
+    repo = Path(__file__).resolve().parents[1]
+    registry_text = (repo / "src/mini_ai/tools/__init__.py").read_text()
+
+    assert "team_tools.configure" not in registry_text
+    assert "team_tools.set_caller" not in registry_text
+    assert "blackboard_tools.configure" not in registry_text
+    assert "workflow_tools.configure" not in registry_text
+    assert "from ..team.task_graph import TaskGraph" not in registry_text
+    assert "workflow_tools.run_workflow_with_context" in registry_text
+    assert "blackboard_tools.write_to_blackboard" in registry_text
+    assert "team_tools.spawn_from_args" in registry_text
+
+
 def test_team_orchestrator_uses_display_protocol_methods_directly():
     repo = Path(__file__).resolve().parents[1]
     orchestrator_text = (repo / "src/mini_ai/team/orchestrator.py").read_text()

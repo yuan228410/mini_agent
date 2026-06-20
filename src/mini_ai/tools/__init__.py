@@ -121,14 +121,12 @@ class ToolRegistry:
 
     def register_team(self, bus, manager):
         from . import team_tools
-        team_tools.configure(bus=bus, manager=manager)  # legacy callers still rely on module functions
-        team_tools.set_caller("lead")
 
         def sender():
             return team_tools._sender()
 
         bound = [
-            _BoundTool(team_tools._spawn_def, lambda args, _m=manager: _m.spawn(team_tools._arg_text(args, "name"), team_tools._arg_text(args, "role"), team_tools._arg_text(args, "prompt"))),
+            _BoundTool(team_tools._spawn_def, lambda args, _m=manager: team_tools.spawn_from_args(_m, args)),
             _BoundTool(team_tools._list_def, lambda args, _m=manager: _m.list_all()),
             _BoundTool(team_tools._send_def, lambda args, _b=bus: team_tools.send_from_args(_b, sender(), args)),
             _BoundTool(team_tools._read_def, lambda args, _b=bus: json.dumps(_b.read_inbox(sender()), ensure_ascii=False, indent=2)),
