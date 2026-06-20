@@ -83,6 +83,10 @@ class TeammateManager:
                 if member["status"] in ACTIVE_TEAM_MEMBER_STATUSES
             ]
 
+    def has_working_members(self) -> bool:
+        with self.lock:
+            return any(member["status"] == "working" for member in self.config.get("members", []))
+
     def is_member_active(self, name: str) -> bool:
         thread = self.threads.get(name)
         return bool(self._find(name) and thread and thread.is_alive())

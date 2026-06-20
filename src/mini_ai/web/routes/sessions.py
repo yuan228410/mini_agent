@@ -8,7 +8,6 @@ from pathlib import Path
 from fastapi import APIRouter, Query
 
 from ...config import MODEL_CONFIG, RequestContext, get_model_config
-from ...core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
 from ...llm import chat as llm_chat
 from ...logger import logger
 from ...tools import inject_todos as _inject_todos
@@ -146,9 +145,8 @@ async def delete_session(body: SessionDeleteRequest) -> RouteOkResponse | RouteE
         if team_comp:
             team_mgr = team_comp.get("team_mgr")
             if team_mgr:
-                for m in team_mgr.config.get("members", []):
-                    if m.get("status") in ACTIVE_TEAM_MEMBER_STATUSES:
-                        team_comp["bus"].send("lead", m["name"], "会话结束，请退出。", "shutdown_request")
+                for name in team_mgr.active_member_names():
+                    team_comp["bus"].send("lead", name, "会话结束，请退出。", "shutdown_request")
 
     from ...tools.update_todos import cleanup_session
     cleanup_session(key)

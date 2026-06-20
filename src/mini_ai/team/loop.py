@@ -2,7 +2,7 @@
 import time
 
 from ..config import TIMEOUTS
-from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES, InboxMessageDict
+from ..core.runtime_types import InboxMessageDict
 from ..logger import logger
 from ..utils import now_ts
 
@@ -29,8 +29,7 @@ def poll_inbox(bus, name="lead"):
     return result
 
 def has_active_teammates(team_mgr):
-    with team_mgr.lock:
-        return any(m["status"] == "working" for m in team_mgr.config.get("members", []))
+    return team_mgr.has_working_members()
 
 def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, history_db=None, ctx=None, workspace="default", session_id=""):
     from datetime import datetime, timezone, timedelta
@@ -83,11 +82,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
     return last_msg
 
 def shutdown_teammates(bus, team_mgr):
-    targets = []
-    with team_mgr.lock:
-        for m in team_mgr.config.get("members", []):
-            if m["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
-                targets.append(m["name"])
+    targets = team_mgr.active_member_names()
     if targets:
         logger.info(f"[自动shutdown] {len(targets)} 位队友: {', '.join(targets)}")
         for name in targets:
