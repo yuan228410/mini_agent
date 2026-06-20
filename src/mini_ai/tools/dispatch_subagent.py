@@ -11,12 +11,6 @@ from ..config import IMAGE
 from ..logger import logger
 from ..utils import now_ts
 
-_loader = None
-_definition = None
-_contextvars = __import__("contextvars")
-_project_path_ctx = _contextvars.ContextVar("dispatch_project_path", default=None)
-_display_ctx = _contextvars.ContextVar("dispatch_display", default=None)
-_registry_ctx = _contextvars.ContextVar("dispatch_registry", default=None)
 
 # 支持的图片格式
 IMAGE_FORMATS = {
@@ -28,22 +22,8 @@ IMAGE_FORMATS = {
     ".bmp": "image/bmp",
 }
 
-def configure(loader=None, definition=None, project_path=None, display=None, registry=None):
-    global _loader, _definition
-    if loader is not None:
-        _loader = loader
-    if definition is not None:
-        _definition = definition
-    if project_path is not None:
-        _project_path_ctx.set(project_path)
-    if display is not None:
-        _display_ctx.set(display)
-    if registry is not None:
-        _registry_ctx.set(registry)
-
-def get_project_path():
-    val = _project_path_ctx.get()
-    return val or ""
+def get_project_path(project_path: str | None = None) -> str:
+    return project_path or ""
 
 def _is_image_path(path_str: str) -> bool:
     """检查是否是图片文件路径"""
@@ -214,7 +194,7 @@ def _build_image_message(image_paths: list[str], task: str) -> dict:
         "content": content
     }
 
-def _extract_image_paths(text: str) -> list[str]:
+def _extract_image_paths(text: str, project_path: str = "") -> list[str]:
     """从文本中提取有效的图片文件路径和 URL
     
     Args:
@@ -257,7 +237,6 @@ def _extract_image_paths(text: str) -> list[str]:
         
         # 处理相对路径
         if not path.is_absolute():
-            project_path = _project_path_ctx.get()
             if project_path:
                 path = Path(project_path) / match
         
@@ -293,24 +272,29 @@ _BASE_DEFINITION: ToolDefinition = {
 
 definition = copy.deepcopy(_BASE_DEFINITION)
 
-def build_definition(subagent_list: str) -> dict:
-    global definition
+def build_definition(subagent_list: str) -> ToolDefinition:
     d = copy.deepcopy(_BASE_DEFINITION)
     d["function"]["description"] = d["function"]["description"].format(
         subagent_list=subagent_list
     )
-    definition = d
     return d
 
-def execute(args: ToolArgs, abort_event: threading.Event | None = None) -> str:
+def execute_with_context(
+    loader,
+    args: ToolArgs,
+    *,
+    project_path: str = "",
+    display=None,
+    registry=None,
+    abort_event: threading.Event | None = None,
+) -> str:
     from ..runner import run_agent
     from ..config import MODEL_CONFIG, RequestContext, SUBAGENT_MODELS, get_model_config
-    from datetime import datetime, timezone, timedelta
 
     subagent_type = args.get("type", "")
-    spec = _loader.get(subagent_type)
+    spec = loader.get(subagent_type) if loader else None
     if not spec:
-        names = ", ".join(_loader.specs.keys())
+        names = ", ".join(getattr(loader, "specs", {}).keys())
         return f"未知子代理类型 '{args['type']}'，可用：{names}"
 
     task = args.get("task", "")
@@ -327,12 +311,11 @@ def execute(args: ToolArgs, abort_event: threading.Event | None = None) -> str:
         logger.info(f"[派遣→] inputs: {list(inputs.keys())}")
 
     system_prompt = spec["system_prompt"]
-    _project_path = _project_path_ctx.get()
-    if _project_path:
-        system_prompt += f"\n\n## 当前工作空间\n\n项目路径: {_project_path}\n\n重要：执行命令时必须传 cwd=\"{_project_path}\" 参数；搜索文件时使用绝对路径基于此目录。读写文件使用绝对路径。"
+    if project_path:
+        system_prompt += f"\n\n## 当前工作空间\n\n项目路径: {project_path}\n\n重要：执行命令时必须传 cwd=\"{project_path}\" 参数；搜索文件时使用绝对路径基于此目录。读写文件使用绝对路径。"
 
     # 检测并处理图片路径
-    image_paths = _extract_image_paths(task)
+    image_paths = _extract_image_paths(task, project_path=project_path)
     if image_paths:
         logger.info(f"[派遣→] 检测到图片: {[Path(p).name for p in image_paths]}")
 
@@ -348,7 +331,7 @@ def execute(args: ToolArgs, abort_event: threading.Event | None = None) -> str:
         messages.append({"role": "user", "content": task, "timestamp": _ts})
 
     sub_display = None
-    lead_display = _display_ctx.get()
+    lead_display = display
     if lead_display:
         try:
             sub_display = lead_display.child(teammate=f"sub:{spec['name']}")
@@ -379,9 +362,13 @@ def execute(args: ToolArgs, abort_event: threading.Event | None = None) -> str:
         ctx = RequestContext(model_config=model_config)
 
     try:
-        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event, context_length=MODEL_CONFIG.get("context_length", 256000), tool_registry=_registry_ctx.get())
+        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event, context_length=MODEL_CONFIG.get("context_length", 256000), tool_registry=registry)
         logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
         return result or f"[{spec['name']}] 超出轮次限制或执行失败"
     except Exception as e:
         logger.error(f"[派遣✗] {spec['name']} 异常: {e}", exc_info=True)
         return f"⚠ 子代理 [{spec['name']}] 执行失败: {type(e).__name__}: {e}"
+
+
+def execute(args: ToolArgs, abort_event: threading.Event | None = None) -> str:
+    return "Error: dispatch_subagent 需要 session-local SubagentLoader"

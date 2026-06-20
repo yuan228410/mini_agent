@@ -1,24 +1,8 @@
 """动态注册子代理工具 — 对话中创建新的子代理类型"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-import json
 from pathlib import Path
 
-from ..config import PACKAGE_DIR
 from ..logger import logger
-
-_contextvars = __import__("contextvars")
-_loader = None
-_subagents_dir = None
-_registry_ctx = _contextvars.ContextVar("register_subagent_registry", default=None)
-
-
-def configure(loader=None, registry=None):
-    global _loader, _subagents_dir
-    if loader is not None:
-        _loader = loader
-        _subagents_dir = loader.subagents_dir
-    if registry is not None:
-        _registry_ctx.set(registry)
 
 
 definition: ToolDefinition = {
@@ -41,20 +25,7 @@ definition: ToolDefinition = {
 }
 
 
-def _rebuild_dispatch_definition():
-    """通知 dispatch_subagent 重建带新列表的工具定义，并同步 ToolRegistry 缓存"""
-    from ..tools import dispatch_subagent as dsa
-    subagent_list = _loader.list_specs()
-    new_def = dsa.build_definition(subagent_list)
-    dsa._definition = new_def
-    dsa.definition = new_def
-    registry = _registry_ctx.get()
-    if registry is not None and "dispatch_subagent" in getattr(registry, "_by_name", {}):
-        registry._by_name["dispatch_subagent"] = dsa
-    logger.info(f"[注册子代理] 已刷新 dispatch_subagent 工具定义")
-
-
-def execute(args: ToolArgs) -> str:
+def execute_with_context(loader, args: ToolArgs, *, refresh_dispatch=None) -> str:
     name = args.get("name", "").strip()
     description = args.get("description", "").strip()
     prompt = args.get("prompt", "").strip()
@@ -68,7 +39,10 @@ def execute(args: ToolArgs) -> str:
     if not prompt:
         return "Error: prompt 不能为空"
 
-    if _loader and name in _loader.specs:
+    if not loader:
+        return "Error: 子代理加载器未配置"
+
+    if name in loader.specs:
         return f"Error: 子代理 '{name}' 已存在，如需覆盖请先删除"
 
     try:
@@ -89,15 +63,17 @@ def execute(args: ToolArgs) -> str:
 
     md_content = "---\n" + "\n".join(frontmatter) + "\n---\n\n" + prompt + "\n"
 
-    if _subagents_dir:
-        dest = Path(_subagents_dir) / f"{name}.md"
+    subagents_dir = getattr(loader, "subagents_dir", None)
+    if subagents_dir:
+        dest = Path(subagents_dir) / f"{name}.md"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(md_content, encoding="utf-8")
         logger.info(f"[注册子代理] 已写入 {dest}")
 
-    if _loader:
-        _loader._load_all()
-        _rebuild_dispatch_definition()
+    loader._load_all()
+    if refresh_dispatch:
+        refresh_dispatch()
+        logger.info("[注册子代理] 已刷新 dispatch_subagent 工具定义")
 
     lines = [
         f"子代理 '{name}' 已创建并注册",
@@ -109,3 +85,7 @@ def execute(args: ToolArgs) -> str:
     lines.append("")
     lines.append("现在可以通过 dispatch_subagent 派遣使用。")
     return "\n".join(lines)
+
+
+def execute(args: ToolArgs) -> str:
+    return "Error: 子代理加载器未配置"

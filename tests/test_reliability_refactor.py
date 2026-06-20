@@ -1195,6 +1195,10 @@ def test_tool_registry_uses_session_local_tool_bindings():
         "delete_skill.configure",
         "memory_tools.configure",
         "history_tools.configure",
+        "dispatch_subagent.configure",
+        "register_subagent.configure",
+        "dispatch_subagent._loader",
+        "registry._by_name",
         "from ..team.task_graph import TaskGraph",
     )
     for pattern in forbidden_registry_bindings:
@@ -1208,6 +1212,8 @@ def test_tool_registry_uses_session_local_tool_bindings():
     assert "delete_skill.delete_skill_with_loader" in registry_text
     assert "memory_tools.remember_with_store" in registry_text
     assert "history_tools.search_history_with_db" in registry_text
+    assert "dispatch_subagent.execute_with_context" in registry_text
+    assert "register_subagent.execute_with_context" in registry_text
 
 
 def test_skill_tools_do_not_keep_module_level_loader_state():
@@ -1234,6 +1240,39 @@ def test_memory_history_tools_do_not_keep_module_level_runtime_state():
     modules = {
         "memory_tools.py": ("import contextvars", "def configure", "_get_store", "_memory_store"),
         "history_tools.py": ("import contextvars", "def configure", "_get_db", "_get_workspace", "_history_db", "_current_workspace"),
+    }
+
+    offenders = []
+    for filename, forbidden in modules.items():
+        path = repo / "src/mini_ai/tools" / filename
+        text = path.read_text()
+        hits = [pattern for pattern in forbidden if pattern in text]
+        if hits:
+            offenders.append({"path": filename, "hits": hits})
+    assert offenders == []
+
+
+def test_subagent_tools_do_not_keep_module_level_runtime_state():
+    repo = Path(__file__).resolve().parents[1]
+    modules = {
+        "dispatch_subagent.py": (
+            "import contextvars",
+            "def configure",
+            "_loader =",
+            "_definition =",
+            "_project_path_ctx",
+            "_display_ctx",
+            "_registry_ctx",
+        ),
+        "register_subagent.py": (
+            "import contextvars",
+            "def configure",
+            "_loader =",
+            "_subagents_dir",
+            "_registry_ctx",
+            "registry._by_name",
+            "dispatch_subagent._loader",
+        ),
     }
 
     offenders = []

@@ -92,27 +92,27 @@ class ToolRegistry:
             _BoundTool(delete_skill.definition, lambda args, _loader=skill_loader: delete_skill.delete_skill_with_loader(_loader, args)),
         )
 
-    def register_subagents(self, subagent_loader):
-        subagent_list = subagent_loader.list_specs()
-        dispatch_subagent.configure(
-            loader=subagent_loader,
-            definition=dispatch_subagent.build_definition(subagent_list),
-            project_path=self._project_path,
-            display=self._display,
-            registry=self,
-        )
+    def _refresh_dispatch_subagent(self, subagent_loader):
         self.add_tools(_BoundTool(
-            dispatch_subagent.definition,
-            lambda args, _m=dispatch_subagent: _run_with_context([
-                (_m._project_path_ctx, self._project_path),
-                (_m._display_ctx, self._display),
-                (_m._registry_ctx, self),
-            ], _m.execute, args),
+            dispatch_subagent.build_definition(subagent_loader.list_specs()),
+            lambda args, _loader=subagent_loader: dispatch_subagent.execute_with_context(
+                _loader,
+                args,
+                project_path=self._project_path,
+                display=self._display,
+                registry=self,
+            ),
         ))
-        register_subagent.configure(loader=subagent_loader, registry=self)
+
+    def register_subagents(self, subagent_loader):
+        self._refresh_dispatch_subagent(subagent_loader)
         self.add_tools(_BoundTool(
             register_subagent.definition,
-            lambda args, _m=register_subagent: _run_with_context([(_m._registry_ctx, self)], _m.execute, args),
+            lambda args, _loader=subagent_loader: register_subagent.execute_with_context(
+                _loader,
+                args,
+                refresh_dispatch=lambda: self._refresh_dispatch_subagent(_loader),
+            ),
         ))
 
     def register_team(self, bus, manager):
@@ -137,13 +137,7 @@ class ToolRegistry:
 
     def register_display(self, display):
         self._display = display
-        try:
-            dispatch_subagent.configure(display=display, registry=self)
-            if "dispatch_subagent" in self._by_name:
-                self.register_subagents(dispatch_subagent._loader)
-            # workflow 工具通过 session-local bound closure 动态读取 self._display。
-        except Exception:
-            pass
+        # workflow/subagent 工具通过 session-local bound closure 动态读取 self._display。
 
     def get_definitions(self) -> list[ToolDefinition]:
         return [json.loads(json.dumps(m.definition, ensure_ascii=False)) for m in self._tools]
