@@ -865,6 +865,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     protocol_team = typing.get_type_hints(TeamManagerProtocol)
     protocol_team_list = typing.get_type_hints(TeamManagerProtocol.list_all)
     protocol_member_names = typing.get_type_hints(TeamManagerProtocol.member_names)
+    protocol_active_member_names = typing.get_type_hints(TeamManagerProtocol.active_member_names)
     loader_hints = typing.get_type_hints(SubagentLoader)
     loader_parse = typing.get_type_hints(SubagentLoader._parse_frontmatter)
     loader_list = typing.get_type_hints(SubagentLoader.list_specs)
@@ -883,6 +884,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert protocol_team["config"] is TeamConfigDict
     assert protocol_team_list["return"] is TeamListText
     assert protocol_member_names["return"] == list[str]
+    assert protocol_active_member_names["return"] == list[str]
     assert loader_hints["specs"] == dict[str, SubagentSpec]
     assert loader_parse["return"] == tuple[MetadataDict, str]
     assert loader_list["return"] is SubagentListText

@@ -3,7 +3,7 @@
 """Team 协作工具集：spawn_teammate, list_teammates, send_message, read_inbox, broadcast"""
 import contextvars
 import json
-from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES, InboxMessageTypeValue, MessageBusProtocol, TeamManagerProtocol, ToolArgs, ToolDefinition
+from ..core.runtime_types import InboxMessageTypeValue, MessageBusProtocol, TeamManagerProtocol, ToolArgs, ToolDefinition
 from ..team.models import normalize_inbox_message_type
 from ..logger import logger
 
@@ -54,11 +54,7 @@ def broadcast_from_args(bus: MessageBusProtocol, manager: TeamManagerProtocol, s
 
 
 def dismiss_team(bus: MessageBusProtocol, manager: TeamManagerProtocol) -> str:
-    targets = []
-    with manager.lock:
-        for member in manager.config.get("members", []):
-            if member["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
-                targets.append(member["name"])
+    targets = manager.active_member_names()
     if not targets:
         return "当前没有活跃的队友"
     for name in targets:
