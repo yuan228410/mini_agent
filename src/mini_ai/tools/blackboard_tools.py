@@ -1,21 +1,6 @@
 """黑板工具 — blackboard_write / blackboard_read / blackboard_list"""
 from ..core.runtime_types import BlackboardProtocol, ToolArgs, ToolDefinition
 
-_blackboard: BlackboardProtocol | None = None
-
-
-def configure(blackboard: BlackboardProtocol | None = None) -> None:
-    global _blackboard
-    if blackboard is not None:
-        _blackboard = blackboard
-
-
-def _require_blackboard() -> BlackboardProtocol:
-    if _blackboard is None:
-        raise RuntimeError("blackboard tools are not configured")
-    return _blackboard
-
-
 def _arg_text(args: ToolArgs, key: str, default: str = "") -> str:
     value = args.get(key, default)
     return value if isinstance(value, str) else str(value)
@@ -45,8 +30,7 @@ def write_to_blackboard(blackboard: BlackboardProtocol, args: ToolArgs, author: 
 
 
 def _write_exec(args: ToolArgs) -> str:
-    from ..tools.team_tools import _sender
-    return write_to_blackboard(_require_blackboard(), args, author=_sender())
+    return "Error: 黑板未配置"
 
 
 # ── blackboard_read ──
@@ -77,7 +61,7 @@ def read_from_blackboard(blackboard: BlackboardProtocol, args: ToolArgs) -> str:
 
 
 def _read_exec(args: ToolArgs) -> str:
-    return read_from_blackboard(_require_blackboard(), args)
+    return "Error: 黑板未配置"
 
 
 # ── blackboard_list ──
@@ -105,7 +89,7 @@ def list_blackboard_keys(blackboard: BlackboardProtocol, args: ToolArgs) -> str:
 
 
 def _list_exec(args: ToolArgs) -> str:
-    return list_blackboard_keys(_require_blackboard(), args)
+    return "Error: 黑板未配置"
 
 
 # ── 构建可注册的工具模块对象 ──

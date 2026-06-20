@@ -1279,6 +1279,33 @@ def test_memory_history_tools_do_not_keep_module_level_runtime_state():
     assert offenders == []
 
 
+def test_blackboard_workflow_tools_do_not_keep_module_level_runtime_state():
+    repo = Path(__file__).resolve().parents[1]
+    modules = {
+        "blackboard_tools.py": ("def configure", "_blackboard:", "_blackboard =", "_require_blackboard"),
+        "workflow_tools.py": (
+            "def configure",
+            "_blackboard:",
+            "_blackboard =",
+            "_workflow_dirs",
+            "_last_graphs",
+            "_graphs_lock",
+            "_bus:",
+            "_manager:",
+            "_display =",
+        ),
+    }
+
+    offenders = []
+    for filename, forbidden in modules.items():
+        path = repo / "src/mini_ai/tools" / filename
+        text = path.read_text()
+        hits = [pattern for pattern in forbidden if pattern in text]
+        if hits:
+            offenders.append({"path": filename, "hits": hits})
+    assert offenders == []
+
+
 def test_subagent_loader_create_serializes_yaml_and_reloads_cleanly(tmp_path):
     from mini_ai.subagents import SubagentLoader
 

@@ -10,42 +10,7 @@ from ..core.display_protocol import DisplayProtocol
 from ..core.runtime_types import BlackboardProtocol, MessageBusProtocol, TeamManagerProtocol, ToolArgs, ToolDefinition, WorkflowTaskInput
 from ..logger import logger
 
-_blackboard: BlackboardProtocol | None = None
-_workflow_dirs: list[Path] = []
-_graphs_lock = threading.Lock()
-_last_graphs: dict[int, object] = {}  # thread_id → last TaskGraph
 WorkflowGraphStore = dict[int, object]
-
-
-_bus: MessageBusProtocol | None = None
-_manager: TeamManagerProtocol | None = None
-_display = None
-
-
-def configure(
-    blackboard: BlackboardProtocol | None = None,
-    workflow_dirs: list[Path] | None = None,
-    bus: MessageBusProtocol | None = None,
-    manager: TeamManagerProtocol | None = None,
-    display=None,
-) -> None:
-    global _blackboard, _workflow_dirs, _bus, _manager, _display
-    if blackboard is not None:
-        _blackboard = blackboard
-    if workflow_dirs is not None:
-        _workflow_dirs = workflow_dirs
-    if bus is not None:
-        _bus = bus
-    if manager is not None:
-        _manager = manager
-    if display is not None:
-        _display = display
-
-
-def _require_blackboard() -> BlackboardProtocol:
-    if _blackboard is None:
-        raise RuntimeError("workflow tools are not configured with a blackboard")
-    return _blackboard
 
 
 def _arg_text(args: ToolArgs | Mapping[str, object], key: str, default: str = "") -> str:
@@ -175,14 +140,7 @@ def run_workflow_with_context(
 
 
 def _run_exec(args: ToolArgs) -> str:
-    return run_workflow_with_context(
-        args,
-        blackboard=_require_blackboard(),
-        graphs=_last_graphs,
-        bus=_bus,
-        manager=_manager,
-        display=_display,
-    )
+    return "Error: workflow tools are not configured with a blackboard"
 
 
 # ── workflow_status ──
@@ -209,7 +167,7 @@ def workflow_status_from_graphs(graphs: WorkflowGraphStore, graphs_lock: threadi
 
 
 def _status_exec(args: ToolArgs) -> str:
-    return workflow_status_from_graphs(_last_graphs, _graphs_lock)
+    return "暂无工作流记录"
 
 
 # ── 构建可注册的工具模块对象 ──
@@ -269,7 +227,7 @@ def load_workflow_from_dirs(args: ToolArgs, workflow_dirs: list[Path]) -> str:
 
 
 def _load_exec(args: ToolArgs) -> str:
-    return load_workflow_from_dirs(args, _workflow_dirs)
+    return load_workflow_from_dirs(args, [])
 
 
 load_workflow_mod = _ToolMod(_load_def, _load_exec)
