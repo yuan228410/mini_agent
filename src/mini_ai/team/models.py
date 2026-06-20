@@ -8,6 +8,7 @@ from typing import Any
 from ..core.runtime_types import (
     BlackboardEntryDict,
     InboxMessageDict,
+    InboxMessageTypeValue,
     TeamConfigDict,
     TeamListText,
     TeamMemberStatus,
@@ -25,6 +26,18 @@ class InboxMessageType(StrEnum):
     SHUTDOWN_REQUEST = "shutdown_request"
     SHUTDOWN_RESPONSE = "shutdown_response"
     TASK_HANDOFF = "task_handoff"
+
+
+def normalize_inbox_message_type(msg_type: object) -> InboxMessageTypeValue:
+    if msg_type == "broadcast":
+        return "broadcast"
+    if msg_type == "shutdown_request":
+        return "shutdown_request"
+    if msg_type == "shutdown_response":
+        return "shutdown_response"
+    if msg_type == "task_handoff":
+        return "task_handoff"
+    return "message"
 
 
 def normalize_team_status(status: object) -> TeamMemberStatus:
@@ -58,11 +71,7 @@ class InboxMessage:
     @classmethod
     def from_dict(cls, data: InboxMessageDict) -> "InboxMessage":
         known = {"type", "from", "content", "timestamp"}
-        msg_type = data.get("type") or InboxMessageType.MESSAGE.value
-        try:
-            msg_type = InboxMessageType(msg_type)
-        except ValueError:
-            msg_type = InboxMessageType.MESSAGE
+        msg_type = InboxMessageType(normalize_inbox_message_type(data.get("type") or InboxMessageType.MESSAGE.value))
         return cls(
             msg_type=msg_type,
             sender=str(data.get("from", "")),

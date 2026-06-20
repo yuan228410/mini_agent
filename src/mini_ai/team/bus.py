@@ -8,11 +8,12 @@ import threading
 import time
 from pathlib import Path
 
+from ..core.runtime_types import InboxMessageTypeValue
 from ..logger import logger
-from .models import InboxMessage, InboxMessageDict, InboxMessageType
+from .models import InboxMessage, InboxMessageDict, InboxMessageType, normalize_inbox_message_type
 
 _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
-_VALID_TYPES = {msg_type.value for msg_type in InboxMessageType}
+_VALID_TYPES: set[InboxMessageTypeValue] = {msg_type.value for msg_type in InboxMessageType}
 _MAX_INBOX_CHARS = 100000
 
 
@@ -44,7 +45,7 @@ class MessageBus:
     def _valid(name: str) -> bool:
         return bool(_NAME_RE.fullmatch(name))
 
-    def send(self, sender: str, to: str, content: str, msg_type: str = "message") -> str:
+    def send(self, sender: str, to: str, content: str, msg_type: InboxMessageTypeValue = "message") -> str:
         sender, to = sender.strip(), to.strip()
         if not self._valid(sender):
             return f"Error: invalid sender '{sender}'"
@@ -52,6 +53,7 @@ class MessageBus:
             return f"Error: invalid receiver '{to}'"
         if msg_type not in _VALID_TYPES:
             return f"Error: invalid msg_type '{msg_type}'"
+        msg_type = normalize_inbox_message_type(msg_type)
 
         logger.info(f"[MSG→] {sender} -> {to} ({msg_type})")
         logger.debug(f"[MSG详情] {sender} -> {to}: {content}")

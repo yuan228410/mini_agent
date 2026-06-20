@@ -47,9 +47,10 @@ class SubagentSpec(TypedDict):
     max_turns: int
 
 
+InboxMessageTypeValue = Literal["message", "broadcast", "shutdown_request", "shutdown_response", "task_handoff"]
 InboxMessageDict = TypedDict(
     "InboxMessageDict",
-    {"type": str, "from": str, "content": str, "timestamp": float},
+    {"type": InboxMessageTypeValue, "from": str, "content": str, "timestamp": float},
     total=False,
 )
 
@@ -169,7 +170,7 @@ class McpLoaderProtocol(Protocol):
 
 class MessageBusProtocol(Protocol):
     def read_inbox(self, name: str, peek: bool = False) -> list[InboxMessageDict]: ...
-    def send(self, sender: str, to: str, content: str, msg_type: str = "message") -> str: ...
+    def send(self, sender: str, to: str, content: str, msg_type: InboxMessageTypeValue = "message") -> str: ...
 
 
 class TeamManagerProtocol(Protocol):
