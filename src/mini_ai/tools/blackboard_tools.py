@@ -40,10 +40,13 @@ _write_def: ToolDefinition = {
 }
 
 
+def write_to_blackboard(blackboard: BlackboardProtocol, args: ToolArgs, author: str = "") -> str:
+    return blackboard.put(_arg_text(args, "key"), _arg_text(args, "value"), author=author)
+
+
 def _write_exec(args: ToolArgs) -> str:
     from ..tools.team_tools import _sender
-    author = _sender()
-    return _require_blackboard().put(_arg_text(args, "key"), _arg_text(args, "value"), author=author)
+    return write_to_blackboard(_require_blackboard(), args, author=_sender())
 
 
 # ── blackboard_read ──
@@ -64,13 +67,17 @@ _read_def: ToolDefinition = {
 }
 
 
-def _read_exec(args: ToolArgs) -> str:
+def read_from_blackboard(blackboard: BlackboardProtocol, args: ToolArgs) -> str:
     key = _arg_text(args, "key")
     missing = object()
-    value = _require_blackboard().get(key, default=missing)
+    value = blackboard.get(key, default=missing)
     if value is missing:
         return f"blackboard[{key}] 不存在"
     return value if isinstance(value, str) and value else "(空)"
+
+
+def _read_exec(args: ToolArgs) -> str:
+    return read_from_blackboard(_require_blackboard(), args)
 
 
 # ── blackboard_list ──
@@ -90,11 +97,15 @@ _list_def: ToolDefinition = {
 }
 
 
-def _list_exec(args: ToolArgs) -> str:
-    keys = _require_blackboard().list_keys(_arg_text(args, "prefix"))
+def list_blackboard_keys(blackboard: BlackboardProtocol, args: ToolArgs) -> str:
+    keys = blackboard.list_keys(_arg_text(args, "prefix"))
     if not keys:
         return "黑板为空"
     return "\n".join(keys)
+
+
+def _list_exec(args: ToolArgs) -> str:
+    return list_blackboard_keys(_require_blackboard(), args)
 
 
 # ── 构建可注册的工具模块对象 ──

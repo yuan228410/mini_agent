@@ -884,7 +884,8 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert protocol_sub_get["return"] == SubagentSpec | None
     assert protocol_inbox["return"] == list[InboxMessageDict]
     assert protocol_inbox["peek"] is bool
-    assert protocol_team["config"] is TeamConfigDict
+    assert "config" not in protocol_team
+    assert "lock" not in protocol_team
     assert protocol_team_list["return"] is TeamListText
     assert protocol_member_summaries["return"] == list[TeamMemberSummary]
     assert protocol_member_names["return"] == list[str]

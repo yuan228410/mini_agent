@@ -6,6 +6,7 @@ from pathlib import Path
 
 import yaml
 
+from ..core.display_protocol import DisplayProtocol
 from ..core.runtime_types import BlackboardProtocol, MessageBusProtocol, TeamManagerProtocol, ToolArgs, ToolDefinition, WorkflowTaskInput
 from ..logger import logger
 
@@ -13,6 +14,7 @@ _blackboard: BlackboardProtocol | None = None
 _workflow_dirs: list[Path] = []
 _graphs_lock = threading.Lock()
 _last_graphs: dict[int, object] = {}  # thread_id → last TaskGraph
+WorkflowGraphStore = dict[int, object]
 
 
 _bus: MessageBusProtocol | None = None
@@ -130,7 +132,15 @@ _run_def: ToolDefinition = {
 }
 
 
-def _run_exec(args: ToolArgs) -> str:
+def run_workflow_with_context(
+    args: ToolArgs,
+    *,
+    blackboard: BlackboardProtocol,
+    graphs: WorkflowGraphStore,
+    bus: MessageBusProtocol | None = None,
+    manager: TeamManagerProtocol | None = None,
+    display: DisplayProtocol | None = None,
+) -> str:
     from ..team.task_graph import TaskGraph, TaskNode
     from ..team.orchestrator import Orchestrator
     from ..config import MODEL_CONFIG
@@ -139,7 +149,6 @@ def _run_exec(args: ToolArgs) -> str:
     if not tasks:
         return "Error: tasks 列表为空"
 
-    blackboard = _require_blackboard()
     graph = TaskGraph(blackboard)
     for t in tasks:
         node = TaskNode(
@@ -153,16 +162,27 @@ def _run_exec(args: ToolArgs) -> str:
         )
         graph.add_task(node)
 
-    _last_graphs[threading.current_thread().ident] = graph
+    graphs[threading.current_thread().ident] = graph
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
     orch = Orchestrator(
         graph, blackboard,
         context_length=MODEL_CONFIG.get("context_length", 256000),
-        bus=_bus, manager=_manager, display=_display,
+        bus=bus, manager=manager, display=display,
     )
     result = orch.run()
     return result
+
+
+def _run_exec(args: ToolArgs) -> str:
+    return run_workflow_with_context(
+        args,
+        blackboard=_require_blackboard(),
+        graphs=_last_graphs,
+        bus=_bus,
+        manager=_manager,
+        display=_display,
+    )
 
 
 # ── workflow_status ──
@@ -177,15 +197,19 @@ _status_def: ToolDefinition = {
 }
 
 
-def _status_exec(args: ToolArgs) -> str:
-    graph = _last_graphs.get(threading.current_thread().ident)
+def workflow_status_from_graphs(graphs: WorkflowGraphStore, graphs_lock: threading.Lock) -> str:
+    graph = graphs.get(threading.current_thread().ident)
     if graph is None:
-        with _graphs_lock:
-            if _last_graphs:
-                graph = next(iter(_last_graphs.values()))
+        with graphs_lock:
+            if graphs:
+                graph = next(iter(graphs.values()))
     if graph is None:
         return "暂无工作流记录"
     return graph.render_status()
+
+
+def _status_exec(args: ToolArgs) -> str:
+    return workflow_status_from_graphs(_last_graphs, _graphs_lock)
 
 
 # ── 构建可注册的工具模块对象 ──
@@ -217,12 +241,12 @@ _load_def: ToolDefinition = {
 }
 
 
-def _load_exec(args: ToolArgs) -> str:
+def load_workflow_from_dirs(args: ToolArgs, workflow_dirs: list[Path]) -> str:
     name = _arg_text(args, "name").strip()
 
     if name == "list":
         templates = []
-        for d in _workflow_dirs:
+        for d in workflow_dirs:
             if d.exists():
                 for f in sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml")):
                     templates.append(f.stem)
@@ -230,7 +254,7 @@ def _load_exec(args: ToolArgs) -> str:
             return "暂无预定义工作流模板"
         return "可用模板:\n" + "\n".join(f"  - {t}" for t in templates)
 
-    for d in _workflow_dirs:
+    for d in workflow_dirs:
         for ext in (".yaml", ".yml"):
             path = d / f"{name}{ext}"
             if path.exists():
@@ -242,6 +266,10 @@ def _load_exec(args: ToolArgs) -> str:
                     return f"Error: 解析 {path} 失败: {e}"
 
     return f"Error: 工作流模板 '{name}' 不存在"
+
+
+def _load_exec(args: ToolArgs) -> str:
+    return load_workflow_from_dirs(args, _workflow_dirs)
 
 
 load_workflow_mod = _ToolMod(_load_def, _load_exec)

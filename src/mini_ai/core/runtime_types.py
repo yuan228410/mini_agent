@@ -194,9 +194,6 @@ class MessageBusProtocol(Protocol):
 
 
 class TeamManagerProtocol(Protocol):
-    config: TeamConfigDict
-    lock: Any
-
     def set_display(self, display: DisplayProtocol) -> None: ...
     def spawn(self, name: str, role: str, prompt: str = "") -> str: ...
     def list_all(self) -> TeamListText: ...

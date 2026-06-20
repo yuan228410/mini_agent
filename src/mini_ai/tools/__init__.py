@@ -147,10 +147,7 @@ class ToolRegistry:
             dispatch_subagent.configure(display=display, registry=self)
             if "dispatch_subagent" in self._by_name:
                 self.register_subagents(dispatch_subagent._loader)
-            # 重新绑定 workflow 工具，让事件通过当前 session display 推送。
-            if "run_workflow" in self._by_name:
-                from . import workflow_tools
-                workflow_tools.configure(display=display)
+            # workflow 工具通过 session-local bound closure 动态读取 self._display。
         except Exception:
             pass
 
@@ -400,69 +397,33 @@ class ToolRegistry:
     def register_blackboard(self, blackboard, workflow_dirs=None, bus=None, manager=None):
         from . import blackboard_tools, workflow_tools
         from .team_tools import _sender
-        blackboard_tools.configure(blackboard=blackboard)
-        workflow_tools.configure(blackboard=blackboard, workflow_dirs=workflow_dirs, bus=bus, manager=manager, display=self._display)
+        import threading as _threading
 
         self.add_tools(
-            _BoundTool(blackboard_tools._write_def, lambda args, _bb=blackboard: _bb.put(args.get("key", ""), args.get("value", ""), author=_sender())),
-            _BoundTool(blackboard_tools._read_def, lambda args, _bb=blackboard: (_bb.get(args.get("key", ""), default=None) or f"blackboard[{args.get('key', '')}] 不存在")),
-            _BoundTool(blackboard_tools._list_def, lambda args, _bb=blackboard: "\n".join(_bb.list_keys(args.get("prefix", ""))) or "黑板为空"),
+            _BoundTool(blackboard_tools._write_def, lambda args, _bb=blackboard: blackboard_tools.write_to_blackboard(_bb, args, author=_sender())),
+            _BoundTool(blackboard_tools._read_def, lambda args, _bb=blackboard: blackboard_tools.read_from_blackboard(_bb, args)),
+            _BoundTool(blackboard_tools._list_def, lambda args, _bb=blackboard: blackboard_tools.list_blackboard_keys(_bb, args)),
         )
 
-        graphs: dict[int, object] = {}
-        graphs_lock = __import__("threading").Lock()
+        graphs: workflow_tools.WorkflowGraphStore = {}
+        graphs_lock = _threading.Lock()
         workflow_dirs = workflow_dirs or []
 
         def run_workflow(args, _bb=blackboard, _bus=bus, _manager=manager, _graphs=graphs):
-            from ..team.task_graph import TaskGraph, TaskNode
-            from ..team.orchestrator import Orchestrator
-            from ..config import MODEL_CONFIG
-            tasks = args.get("tasks", [])
-            if not tasks:
-                return "Error: tasks 列表为空"
-            graph = TaskGraph(_bb)
-            for t in tasks:
-                graph.add_task(TaskNode(
-                    id=t["id"], agent=t["agent"], prompt=t["prompt"],
-                    depends_on=t.get("depends_on", []), condition=t.get("condition"),
-                    max_retry=t.get("max_retry", 1), timeout=t.get("timeout", 0),
-                ))
-            import threading as _threading
-            _graphs[_threading.current_thread().ident] = graph
-            display = self._display
-            orch = Orchestrator(graph, _bb, context_length=MODEL_CONFIG.get("context_length", 256000), bus=_bus, manager=_manager, display=display)
-            return orch.run()
+            return workflow_tools.run_workflow_with_context(
+                args,
+                blackboard=_bb,
+                graphs=_graphs,
+                bus=_bus,
+                manager=_manager,
+                display=self._display,
+            )
 
         def workflow_status(args, _graphs=graphs):
-            import threading as _threading
-            graph = _graphs.get(_threading.current_thread().ident)
-            if graph is None:
-                with graphs_lock:
-                    if _graphs:
-                        graph = next(iter(_graphs.values()))
-            return graph.render_status() if graph else "暂无工作流记录"
+            return workflow_tools.workflow_status_from_graphs(_graphs, graphs_lock)
 
         def load_workflow(args, _dirs=workflow_dirs):
-            import json as _json
-            import yaml as _yaml
-            name = args.get("name", "").strip()
-            if name == "list":
-                templates = []
-                for d in _dirs:
-                    if d.exists():
-                        for f in sorted(d.glob("*.yaml")) + sorted(d.glob("*.yml")):
-                            templates.append(f.stem)
-                return "可用模板:\n" + "\n".join(f"  - {t}" for t in templates) if templates else "暂无预定义工作流模板"
-            for d in _dirs:
-                for ext in (".yaml", ".yml"):
-                    path = d / f"{name}{ext}"
-                    if path.exists():
-                        try:
-                            data = _yaml.safe_load(path.read_text(encoding="utf-8"))
-                            return _json.dumps(data.get("tasks", []), ensure_ascii=False, indent=2)
-                        except Exception as e:
-                            return f"Error: 解析 {path} 失败: {e}"
-            return f"Error: 工作流模板 '{name}' 不存在"
+            return workflow_tools.load_workflow_from_dirs(args, _dirs)
 
         self.add_tools(
             _BoundTool(workflow_tools._run_def, run_workflow),
