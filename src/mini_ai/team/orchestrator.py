@@ -3,8 +3,9 @@ import contextvars
 import threading
 import time
 
-from .blackboard import Blackboard
 from ..config import TEAMMATE
+from ..core.display_protocol import DisplayProtocol
+from ..core.runtime_types import BlackboardProtocol, MessageBusProtocol, TeamManagerProtocol
 from ..logger import logger
 from .prompts import build_team_prompt
 from .task_graph import TaskGraph, TaskNode, TaskStatus
@@ -12,7 +13,16 @@ from ..utils import now_ts
 
 class Orchestrator:
 
-    def __init__(self, graph: TaskGraph, blackboard: Blackboard, *, context_length: int = 256000, bus=None, manager=None, display=None):
+    def __init__(
+        self,
+        graph: TaskGraph,
+        blackboard: BlackboardProtocol,
+        *,
+        context_length: int = 256000,
+        bus: MessageBusProtocol | None = None,
+        manager: TeamManagerProtocol | None = None,
+        display: DisplayProtocol | None = None,
+    ):
         self.graph = graph
         self.blackboard = blackboard
         self.context_length = context_length
@@ -111,7 +121,7 @@ class Orchestrator:
 
         return self._summarize()
 
-    def _wait_pending(self):
+    def _wait_pending(self) -> None:
         with self._condition:
             self._condition.wait_for(
                 lambda: bool(self._pending_results) or not any(
@@ -120,9 +130,8 @@ class Orchestrator:
                 timeout=30,
             )
 
-    def _execute_task(self, task: TaskNode, prompt: str):
+    def _execute_task(self, task: TaskNode, prompt: str) -> None:
         from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-        import threading
 
         logger.info(f"[Orchestrator] 派遣 [{task.id}] → {task.agent}: {prompt[:80]}...")
 
@@ -174,25 +183,22 @@ class Orchestrator:
         else:
             return self._run_teammate(task.agent, prompt, abort_event)
 
-    def _run_subagent(self, agent_type: str, prompt: str, abort_event: threading.Event = None) -> str | None:
+    def _run_subagent(self, agent_type: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
         from ..tools.dispatch_subagent import execute as dispatch_exec
         result = dispatch_exec({"type": agent_type, "task": prompt}, abort_event=abort_event)
         return result
 
-    def _run_teammate(self, agent_name: str, prompt: str, abort_event: threading.Event = None) -> str | None:
-        if self.bus and self.manager:
-            member = self.manager._find(agent_name)
-            thread = self.manager.threads.get(agent_name)
-            if member and thread and thread.is_alive():
-                logger.info(f"[Orchestrator] 派发给真实队友 {agent_name}")
-                task_msg = (
-                    prompt
-                    + '\n\n完成后用 blackboard_write 写入 key="' + agent_name + '_result"，或用 send_message 回禀 workflow。'
-                )
-                self.bus.send("workflow", agent_name, task_msg)
-                return self._wait_teammate_result(agent_name, timeout=300)
+    def _run_teammate(self, agent_name: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
+        if self.bus and self.manager and self.manager.is_member_active(agent_name):
+            logger.info(f"[Orchestrator] 派发给真实队友 {agent_name}")
+            task_msg = (
+                prompt
+                + '\n\n完成后用 blackboard_write 写入 key="' + agent_name + '_result"，或用 send_message 回禀 workflow。'
+            )
+            self.bus.send("workflow", agent_name, task_msg)
+            return self._wait_teammate_result(agent_name, timeout=300)
 
-        return self._run_oneoff_agent(agent_name, prompt)
+        return self._run_oneoff_agent(agent_name, prompt, abort_event)
 
     def _wait_teammate_result(self, agent_name: str, timeout: int = 300) -> str | None:
         start = time.monotonic()
@@ -220,9 +226,8 @@ class Orchestrator:
         if self.bus:
             self.bus.send("workflow", agent_name, "任务超时，请停止当前工作。", "shutdown_request")
         return None
-        return self._run_oneoff_agent(agent_name, prompt, abort_event)
 
-    def _run_oneoff_agent(self, agent_name: str, prompt: str, abort_event: threading.Event = None) -> str | None:
+    def _run_oneoff_agent(self, agent_name: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
         from ..runner import run_agent
         from ..config import TEAMMATE, DATA_DIR, SKILL_PATHS as _SP
         from ..context import ContextBuilder
@@ -245,9 +250,7 @@ class Orchestrator:
 
         ctx_builder = ContextBuilder(DATA_DIR)
         # 加载 workspace 级技能（通过 manager 获取 workspace 技能目录）
-        ws_skills = None
-        if self.manager and hasattr(self.manager, 'project_dir'):
-            ws_skills = self.manager.project_dir / "skills"
+        ws_skills = self.manager.workspace_skills_dir() if self.manager else None
         _sl = SkillLoader(DATA_DIR / "skills", _SP, workspace_skills_dir=ws_skills)
         base_prompt = ctx_builder.build(skill_loader=_sl, exclude_character=True)
         system_prompt = team_rules + "\n\n---\n\n" + base_prompt if base_prompt else team_rules

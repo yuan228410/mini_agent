@@ -250,6 +250,7 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
     assert typing.get_type_hints(Blackboard.get)["return"] == str | object
     assert typing.get_type_hints(Blackboard.snapshot)["return"] == BlackboardTextSnapshot | BlackboardDetailedSnapshot
     assert typing.get_type_hints(BlackboardProtocol.snapshot)["return"] == BlackboardTextSnapshot | BlackboardDetailedSnapshot
+    assert typing.get_type_hints(TaskGraph.__init__)["blackboard"] == BlackboardProtocol
     assert typing.get_type_hints(workflow_tools.normalize_workflow_tasks)["return"] == list[WorkflowTaskInput]
     assert typing.get_type_hints(WorkflowTaskInfo.to_dict)["return"] == WorkflowTaskInfoDict
     assert typing.get_type_hints(WorkflowTaskStart.to_dict)["return"] == WorkflowTaskStartDict

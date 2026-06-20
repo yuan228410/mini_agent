@@ -75,6 +75,13 @@ class TeammateManager:
                 return m
         return None
 
+    def is_member_active(self, name: str) -> bool:
+        thread = self.threads.get(name)
+        return bool(self._find(name) and thread and thread.is_alive())
+
+    def workspace_skills_dir(self) -> Path | None:
+        return self.project_dir / "skills"
+
     def _set_status(self, name: str, status: TeamMemberStatus):
         with self.lock:
             m = self._find(name)

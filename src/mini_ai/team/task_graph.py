@@ -4,7 +4,7 @@ import threading
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from .blackboard import Blackboard
+from ..core.runtime_types import BlackboardProtocol
 from .models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart, preview_text
 from ..logger import logger
 
@@ -61,7 +61,7 @@ class TaskNode:
 
 class TaskGraph:
 
-    def __init__(self, blackboard: Blackboard):
+    def __init__(self, blackboard: BlackboardProtocol):
         self.nodes: dict[str, TaskNode] = {}
         self.blackboard = blackboard
         self._lock = threading.Lock()  # 添加线程锁
@@ -245,7 +245,7 @@ class TaskGraph:
         prompt = node.prompt
         for dep_id in node.depends_on:
             dep_result = self.blackboard.get(dep_id, f"[{dep_id} 结果未找到]")
-            prompt = prompt.replace(f"{{{dep_id}}}", dep_result)
+            prompt = prompt.replace(f"{{{dep_id}}}", str(dep_result))
         all_keys = self.blackboard.snapshot()
         for key, val in all_keys.items():
             prompt = prompt.replace(f"{{blackboard.{key}}}", str(val))
