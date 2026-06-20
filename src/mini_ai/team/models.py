@@ -5,7 +5,17 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from ..core.runtime_types import InboxMessageDict, TeamConfigDict, TeamListText, TeamMemberSummary, TeamStatusResponse
+from ..core.runtime_types import (
+    BlackboardEntryDict,
+    InboxMessageDict,
+    TeamConfigDict,
+    TeamListText,
+    TeamMemberSummary,
+    TeamStatusResponse,
+    WorkflowTaskEndDict,
+    WorkflowTaskInfoDict,
+    WorkflowTaskStartDict,
+)
 
 
 class InboxMessageType(StrEnum):
@@ -64,7 +74,7 @@ class BlackboardEntry:
     ts: float = 0.0
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any] | str) -> "BlackboardEntry":
+    def from_dict(cls, data: BlackboardEntryDict | str) -> "BlackboardEntry":
         if isinstance(data, dict):
             return cls(
                 value=str(data.get("value", "")),
@@ -73,7 +83,7 @@ class BlackboardEntry:
             )
         return cls(value=str(data))
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> BlackboardEntryDict:
         return {"value": self.value, "author": self.author, "ts": self.ts}
 
 
@@ -84,7 +94,7 @@ class WorkflowTaskInfo:
     prompt: str
     depends_on: list[str] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> WorkflowTaskInfoDict:
         return {
             "id": self.id,
             "agent": self.agent,
@@ -99,7 +109,7 @@ class WorkflowTaskStart:
     agent: str
     prompt: str
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self) -> WorkflowTaskStartDict:
         return {"id": self.id, "agent": self.agent, "prompt": self.prompt}
 
 
@@ -110,8 +120,8 @@ class WorkflowTaskEnd:
     result_preview: str | None = None
     error: str | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {"id": self.id, "status": self.status}
+    def to_dict(self) -> WorkflowTaskEndDict:
+        payload: WorkflowTaskEndDict = {"id": self.id, "status": self.status}
         if self.result_preview is not None:
             payload["result_preview"] = self.result_preview
         if self.error is not None:

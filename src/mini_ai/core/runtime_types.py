@@ -70,6 +70,32 @@ class TeamStatusResponse(TypedDict):
     has_team: bool
 
 
+class BlackboardEntryDict(TypedDict):
+    value: str
+    author: str
+    ts: float
+
+
+class WorkflowTaskInfoDict(TypedDict):
+    id: str
+    agent: str
+    prompt: str
+    depends_on: list[str]
+
+
+class WorkflowTaskStartDict(TypedDict):
+    id: str
+    agent: str
+    prompt: str
+
+
+WorkflowTaskEndDict = TypedDict(
+    "WorkflowTaskEndDict",
+    {"id": str, "status": str, "result_preview": str, "error": str},
+    total=False,
+)
+
+
 class SessionComponents(TypedDict, total=False):
     store: MemoryStoreProtocol
     history_db: HistoryDBProtocol
