@@ -25,13 +25,14 @@ class SubagentLoader:
     def __init__(self, subagents_dir: Path):
         self._dir = Path(subagents_dir)
         self.specs: dict[str, SubagentSpec] = {}
-        self._load_all()
+        self.reload()
 
     @property
     def subagents_dir(self) -> Path:
         return self._dir
 
-    def _load_all(self) -> None:
+    def reload(self) -> None:
+        """Reload subagent specs from disk."""
         self.specs.clear()
         if not self.subagents_dir.exists():
             return
@@ -93,5 +94,5 @@ class SubagentLoader:
         dest = self.subagents_dir / f"{data['name']}.md"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(md_content, encoding="utf-8")
-        self._load_all()
+        self.reload()
         return dest

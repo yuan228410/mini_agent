@@ -117,7 +117,7 @@ def _install_from_content(loader, name: str, content: str, dest_dir: Path) -> st
     dest_dir.mkdir(parents=True, exist_ok=True)
     skill_file.write_text(content, encoding="utf-8")
     if loader:
-        loader._load_all()
+        loader.reload()
     logger.info(f"[安装技能] {name} → {skill_file} ({len(content)} 字符)")
     summary = _skill_summary(loader, name)
     return f"技能 '{name}' 已安装到 {skill_file}{summary}\n\n请使用 load_skill 读取该技能的完整内容，了解其功能和使用方式。"
@@ -153,7 +153,7 @@ def _install_from_archive(loader, name: str, source: str, dest_dir: Path) -> str
             return f"Error: 压缩包中未找到 SKILL.md，技能 '{name}' 安装失败"
 
         if loader:
-            loader._load_all()
+            loader.reload()
 
         logger.info(f"[安装技能] {name} 安装成功")
         summary = _skill_summary(loader, name)
@@ -177,7 +177,7 @@ def _execute_with_loader(loader, args: ToolArgs) -> str:
     if not loader:
         return "Error: 技能加载器未配置"
 
-    logger.debug(f"[安装技能] loader tiers: {[(t, str(p)) for t, p in loader._tier_paths]}, level={level}")
+    logger.debug(f"[安装技能] loader tiers: {[(t, str(p)) for t, p in loader.tier_paths()]}, level={level}")
 
     target_dir = loader.get_tier_dir(level)
     if not target_dir:

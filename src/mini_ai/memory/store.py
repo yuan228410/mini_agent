@@ -211,7 +211,8 @@ class MemoryStore:
             if not (self._workspace_dir / "MEMORY.md").exists():
                 _write_locked(self._workspace_dir / "MEMORY.md", "# 长期记忆\n\n")
 
-    def _tier_paths(self) -> list[Path]:
+    def tier_paths(self) -> list[Path]:
+        """Return memory tier directories in merge precedence order."""
         paths = []
         if self._global_dir:
             paths.append(self._global_dir)
@@ -248,7 +249,7 @@ class MemoryStore:
         return _read_locked(path)
 
     def read_memory(self) -> str:
-        texts = [self._read_file(p / "MEMORY.md") for p in self._tier_paths()]
+        texts = [self._read_file(p / "MEMORY.md") for p in self.tier_paths()]
         merged = _merge_sections(texts)
         return merged
 
@@ -280,7 +281,7 @@ class MemoryStore:
     def read_soul(self) -> str:
         """读取身份定义（三层级合并）"""
         texts = []
-        for p in self._tier_paths():
+        for p in self.tier_paths():
             soul_file = p / "SOUL.md"
             if soul_file.exists():
                 texts.append(self._read_file(soul_file))
@@ -295,7 +296,7 @@ class MemoryStore:
     def read_rules(self) -> str:
         """读取行为规范（三层级合并）"""
         texts = []
-        for p in self._tier_paths():
+        for p in self.tier_paths():
             rules_file = p / "RULES.md"
             if rules_file.exists():
                 texts.append(self._read_file(rules_file))

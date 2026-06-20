@@ -34,11 +34,11 @@ class _BoundTool:
 
 class ToolRegistry:
 
-    def __init__(self):
+    def __init__(self, *, project_path: str = "", display=None):
         self._tools: list = []
         self._by_name: dict[str, object] = {}
-        self._display = None
-        self._project_path = ""
+        self._display = display
+        self._project_path = project_path
         self._tool_metadata: dict[str, object] = {}
         self._cache = ToolCache(cacheable_resolver=self._is_cacheable)
         # 兼容测试/外部扩展；新代码优先通过 ToolMetadata.parallel_safe 声明。

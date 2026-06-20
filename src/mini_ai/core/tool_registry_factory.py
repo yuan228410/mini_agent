@@ -27,8 +27,7 @@ from ..tools import (
 
 def build_tool_registry(tool_context: ToolContext, *, mcp_loader=None, base_tools: bool = True) -> ToolRegistry:
     """Build a fully-bound session-local registry from a ToolContext."""
-    registry = ToolRegistry()
-    registry._project_path = tool_context.identity.project_path or ""
+    registry = ToolRegistry(project_path=tool_context.identity.project_path or "")
 
     if base_tools:
         registry.add_tools(

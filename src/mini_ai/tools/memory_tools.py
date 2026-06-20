@@ -78,7 +78,7 @@ def recall_with_store(store, args: ToolArgs) -> str:
         return memory if memory else "长期记忆为空"
     
     # 有关键词，逐行过滤（避免读取整个大文件）
-    tier_paths = store._tier_paths() if hasattr(store, '_tier_paths') else []
+    tier_paths = store.tier_paths() if hasattr(store, 'tier_paths') else []
     if not tier_paths:
         # 降级：使用原方法
         memory = store.read_memory()

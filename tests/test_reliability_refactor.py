@@ -1255,6 +1255,24 @@ def test_skill_tools_do_not_keep_module_level_loader_state():
     assert offenders == []
 
 
+def test_loader_tools_use_public_loader_boundaries():
+    repo = Path(__file__).resolve().parents[1]
+    checked = {
+        "tools/install_skill.py": ("._load_all(", "._tier_paths", "loader._"),
+        "tools/memory_tools.py": ("store._tier_paths", "hasattr(store, '_tier_paths')"),
+        "cli/commands.py": ("skill_loader._load_all",),
+        "core/tool_registry_factory.py": ("registry._project_path",),
+    }
+
+    offenders = []
+    for rel, forbidden in checked.items():
+        text = (repo / "src/mini_ai" / rel).read_text()
+        hits = [pattern for pattern in forbidden if pattern in text]
+        if hits:
+            offenders.append({"path": rel, "hits": hits})
+    assert offenders == []
+
+
 def test_run_command_uses_explicit_default_cwd(tmp_path):
     from mini_ai.tools import run_command
 
@@ -1357,7 +1375,7 @@ def test_subagent_loader_create_serializes_yaml_and_reloads_cleanly(tmp_path):
     }
 
     created.unlink()
-    loader._load_all()
+    loader.reload()
     assert loader.specs == {}
 
 

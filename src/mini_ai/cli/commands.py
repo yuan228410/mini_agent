@@ -590,7 +590,7 @@ tags: 标签1,标签2
                 skill_file.write_text(template, encoding="utf-8")
                 
                 # 刷新技能列表
-                self.skill_loader._load_all()
+                self.skill_loader.reload()
                 
                 self.disp.info(f"✓ 已创建技能模板: {skill_name}")
                 self.disp.info(f"  目录: {skill_dir}")

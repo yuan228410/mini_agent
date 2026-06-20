@@ -38,14 +38,19 @@ class SkillLoader:
                 self._tier_paths.append(("workspace", Path(workspace_skills_dir)))
                 seen.add(p)
         self.skills: dict[str, dict] = {}
-        self._load_all()
+        self.reload()
 
-    def _load_all(self):
+    def reload(self) -> None:
+        """Reload skills from all configured tiers."""
         self.skills.clear()
         for path in self.extra_paths:
             self._load_from_dir("extra", path)
         for tier, path in self._tier_paths:
             self._load_from_dir(tier, path)
+
+    def tier_paths(self) -> list[tuple[str, Path]]:
+        """Return configured writable skill tiers in precedence order."""
+        return list(self._tier_paths)
 
     def _load_from_dir(self, tier: str, path: Path):
         if not path.exists():
@@ -83,7 +88,7 @@ class SkillLoader:
         try:
             shutil.rmtree(skill_dir)
             logger.info(f"[删除技能] {name} ({tier}) → {skill_dir}")
-            self._load_all()
+            self.reload()
             if name in self.skills:
                 return f"技能 '{name}' 的 {tier} 级副本已删除（现在使用 {self.skills[name]['tier']} 级版本）"
             return f"技能 '{name}' 已删除"
@@ -111,7 +116,7 @@ class SkillLoader:
         try:
             shutil.rmtree(skill_dir)
             logger.info(f"[删除技能] {name} ({level}) → {skill_dir}")
-            self._load_all()
+            self.reload()
             if name in self.skills:
                 return f"技能 '{name}' 的 {level} 级副本已删除（当前使用 {self.skills[name]['tier']} 级版本）"
             return f"技能 '{name}' 的 {level} 级副本已删除"
