@@ -1,24 +1,32 @@
 """工作流编排工具 — run_workflow / workflow_status / load_workflow"""
-from ..core.runtime_types import ToolArgs, ToolDefinition
 import json
 import threading
+from collections.abc import Mapping
 from pathlib import Path
 
 import yaml
 
+from ..core.runtime_types import BlackboardProtocol, MessageBusProtocol, TeamManagerProtocol, ToolArgs, ToolDefinition, WorkflowTaskInput
 from ..logger import logger
 
-_blackboard = None
+_blackboard: BlackboardProtocol | None = None
 _workflow_dirs: list[Path] = []
 _graphs_lock = threading.Lock()
 _last_graphs: dict[int, object] = {}  # thread_id → last TaskGraph
 
 
-_bus = None
-_manager = None
+_bus: MessageBusProtocol | None = None
+_manager: TeamManagerProtocol | None = None
 _display = None
 
-def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None, manager=None, display=None):
+
+def configure(
+    blackboard: BlackboardProtocol | None = None,
+    workflow_dirs: list[Path] | None = None,
+    bus: MessageBusProtocol | None = None,
+    manager: TeamManagerProtocol | None = None,
+    display=None,
+) -> None:
     global _blackboard, _workflow_dirs, _bus, _manager, _display
     if blackboard is not None:
         _blackboard = blackboard
@@ -30,6 +38,64 @@ def configure(blackboard=None, workflow_dirs: list[Path] | None = None, bus=None
         _manager = manager
     if display is not None:
         _display = display
+
+
+def _require_blackboard() -> BlackboardProtocol:
+    if _blackboard is None:
+        raise RuntimeError("workflow tools are not configured with a blackboard")
+    return _blackboard
+
+
+def _arg_text(args: ToolArgs | Mapping[str, object], key: str, default: str = "") -> str:
+    value = args.get(key, default)
+    return value if isinstance(value, str) else str(value)
+
+
+def _arg_int(args: ToolArgs | Mapping[str, object], key: str, default: int = 0) -> int:
+    value = args.get(key, default)
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
+def _depends_on(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item if isinstance(item, str) else str(item) for item in value]
+
+
+def normalize_workflow_tasks(raw_tasks: object) -> list[WorkflowTaskInput]:
+    if not isinstance(raw_tasks, list):
+        return []
+    tasks: list[WorkflowTaskInput] = []
+    for raw in raw_tasks:
+        if not isinstance(raw, Mapping):
+            continue
+        task_id = _arg_text(raw, "id").strip()
+        agent = _arg_text(raw, "agent").strip()
+        prompt = _arg_text(raw, "prompt")
+        if not task_id or not agent or not prompt:
+            continue
+        task: WorkflowTaskInput = {
+            "id": task_id,
+            "agent": agent,
+            "prompt": prompt,
+            "depends_on": _depends_on(raw.get("depends_on", [])),
+            "max_retry": _arg_int(raw, "max_retry", 1),
+            "timeout": _arg_int(raw, "timeout", 0),
+        }
+        condition = raw.get("condition")
+        if condition:
+            task["condition"] = condition if isinstance(condition, str) else str(condition)
+        tasks.append(task)
+    return tasks
 
 
 # ── run_workflow ──
@@ -69,11 +135,12 @@ def _run_exec(args: ToolArgs) -> str:
     from ..team.orchestrator import Orchestrator
     from ..config import MODEL_CONFIG
 
-    tasks = args.get("tasks", [])
+    tasks = normalize_workflow_tasks(args.get("tasks", []))
     if not tasks:
         return "Error: tasks 列表为空"
 
-    graph = TaskGraph(_blackboard)
+    blackboard = _require_blackboard()
+    graph = TaskGraph(blackboard)
     for t in tasks:
         node = TaskNode(
             id=t["id"],
@@ -90,7 +157,7 @@ def _run_exec(args: ToolArgs) -> str:
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
     orch = Orchestrator(
-        graph, _blackboard,
+        graph, blackboard,
         context_length=MODEL_CONFIG.get("context_length", 256000),
         bus=_bus, manager=_manager, display=_display,
     )
@@ -151,7 +218,7 @@ _load_def: ToolDefinition = {
 
 
 def _load_exec(args: ToolArgs) -> str:
-    name = args.get("name", "").strip()
+    name = _arg_text(args, "name").strip()
 
     if name == "list":
         templates = []

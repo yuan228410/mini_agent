@@ -85,6 +85,21 @@ BlackboardTextSnapshot = dict[str, str]
 BlackboardDetailedSnapshot = dict[str, BlackboardEntryDict]
 
 
+WorkflowTaskInput = TypedDict(
+    "WorkflowTaskInput",
+    {
+        "id": str,
+        "agent": str,
+        "prompt": str,
+        "depends_on": list[str],
+        "condition": str,
+        "max_retry": int,
+        "timeout": int,
+    },
+    total=False,
+)
+
+
 class WorkflowTaskInfoDict(TypedDict):
     id: str
     agent: str
