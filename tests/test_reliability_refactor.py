@@ -1098,3 +1098,24 @@ def test_web_route_boundaries_use_explicit_dtos():
     assert route_types.DisplayWireEvent == DisplayWireEvent
     assert route_types.PlanArtifactDict == PlanArtifactDict
     assert route_types.TeamComponents == TeamComponents
+
+
+def test_frontend_rest_boundaries_stay_in_api_module():
+    repo = Path(__file__).resolve().parents[1]
+    api_text = (repo / "web/src/api.ts").read_text()
+    component_files = sorted((repo / "web/src/components").glob("*.vue"))
+
+    assert "_fetchJson" not in api_text
+    assert [line.strip() for line in api_text.splitlines() if "_origFetch" in line] == [
+        "const _origFetch = window.fetch.bind(window)",
+        "const resp = await _origFetch(url, { ...init, signal: controller.signal })",
+    ]
+    for wrapper in ("listFiles", "readFile", "searchFiles", "getWorkspaces", "switchWorkspace"):
+        assert f"function {wrapper}" in api_text
+
+    offenders = []
+    for path in component_files:
+        text = path.read_text()
+        if "fetch(" in text or "resp.json()" in text:
+            offenders.append(path.relative_to(repo).as_posix())
+    assert offenders == []
