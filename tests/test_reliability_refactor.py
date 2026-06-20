@@ -1254,6 +1254,16 @@ def test_skill_tools_do_not_keep_module_level_loader_state():
     assert offenders == []
 
 
+def test_team_tools_do_not_keep_module_level_dependencies():
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "src/mini_ai/tools/team_tools.py").read_text()
+    forbidden = ("def configure", "_bus:", "_bus =", "_manager:", "_manager =", "_require_bus", "_require_manager")
+    hits = [pattern for pattern in forbidden if pattern in text]
+    assert hits == []
+    assert "team_caller" in text
+    assert "def set_caller" in text
+
+
 def test_config_tool_does_not_keep_module_level_registry_state():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "src/mini_ai/tools/config_tool.py").read_text()
