@@ -32,18 +32,6 @@ class _BoundTool:
         self.metadata = metadata
 
 
-def _run_with_context(var_values, fn: Callable[[ToolArgs], str], args: ToolArgs) -> str:
-    """Run a legacy contextvar-based tool with session-local bindings."""
-    tokens = []
-    try:
-        for var, value in var_values:
-            tokens.append((var, var.set(value)))
-        return fn(args)
-    finally:
-        for var, token in reversed(tokens):
-            var.reset(token)
-
-
 class ToolRegistry:
 
     def __init__(self):
@@ -71,6 +59,8 @@ class ToolRegistry:
     def add_tools(self, *modules):
         existing = {m.definition["function"]["name"] for m in self._tools}
         for m in modules:
+            if m is config_tool:
+                m = _BoundTool(config_tool.definition, lambda args, _registry=self: config_tool.execute_with_registry(_registry, args))
             definition = self._normalize_module_definition(m)
             name = definition["function"]["name"]
             if name not in existing:
@@ -152,8 +142,6 @@ class ToolRegistry:
         mod = self._by_name.get(name)
         if not mod:
             return None
-        if mod is config_tool:
-            return _run_with_context([(config_tool._registry_ctx, self)], mod.execute, args)
         return mod.execute(args)
 
     def handle_tool_calls(self, msg: MessageDict, messages: list[MessageDict], display=None, persist_fn=None) -> bool:

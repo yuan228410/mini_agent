@@ -926,7 +926,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
 def test_tool_modules_use_explicit_argument_and_definition_aliases():
     import typing
     from mini_ai.core.runtime_types import ToolArgs, ToolDefinition, ToolParameterSchema
-    from mini_ai.tools import ToolRegistry, _BoundTool, _run_with_context
+    from mini_ai.tools import ToolRegistry, _BoundTool
     from mini_ai.tools.base import ToolBase
     from mini_ai.tools.cache import ToolCache
     from mini_ai.tools.metadata import normalize_tool_definition
@@ -935,7 +935,6 @@ def test_tool_modules_use_explicit_argument_and_definition_aliases():
 
     base_hints = typing.get_type_hints(ToolBase)
     bound_hints = typing.get_type_hints(_BoundTool.__init__)
-    context_hints = typing.get_type_hints(_run_with_context)
     registry_dispatch = typing.get_type_hints(ToolRegistry.dispatch)
     normalize_hints = typing.get_type_hints(normalize_tool_definition)
     cache_get = typing.get_type_hints(ToolCache.get)
@@ -948,7 +947,6 @@ def test_tool_modules_use_explicit_argument_and_definition_aliases():
     assert typing.get_type_hints(ToolBase.definition)["return"] == ToolDefinition
     assert typing.get_type_hints(ToolBase.execute)["args"] == ToolArgs
     assert bound_hints["definition"] == ToolDefinition
-    assert context_hints["args"] == ToolArgs
     assert registry_dispatch["args"] == ToolArgs
     assert normalize_hints["definition"] == ToolDefinition
     assert normalize_hints["return"] == ToolDefinition
@@ -1213,6 +1211,8 @@ def test_tool_registry_uses_session_local_tool_bindings():
         "delete_skill.configure",
         "memory_tools.configure",
         "history_tools.configure",
+        "config_tool.configure",
+        "config_tool._registry_ctx",
         "dispatch_subagent.configure",
         "register_subagent.configure",
         "dispatch_subagent._loader",
@@ -1230,6 +1230,7 @@ def test_tool_registry_uses_session_local_tool_bindings():
     assert "delete_skill.delete_skill_with_loader" in registry_text
     assert "memory_tools.remember_with_store" in registry_text
     assert "history_tools.search_history_with_db" in registry_text
+    assert "config_tool.execute_with_registry" in registry_text
     assert "dispatch_subagent.execute_with_context" in registry_text
     assert "register_subagent.execute_with_context" in registry_text
 
@@ -1251,6 +1252,14 @@ def test_skill_tools_do_not_keep_module_level_loader_state():
         if hits:
             offenders.append({"path": path.name, "hits": hits})
     assert offenders == []
+
+
+def test_config_tool_does_not_keep_module_level_registry_state():
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "src/mini_ai/tools/config_tool.py").read_text()
+    forbidden = ("import contextvars", "def configure", "_registry_ctx", "ContextVar")
+    hits = [pattern for pattern in forbidden if pattern in text]
+    assert hits == []
 
 
 def test_memory_history_tools_do_not_keep_module_level_runtime_state():

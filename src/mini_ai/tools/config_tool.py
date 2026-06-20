@@ -1,12 +1,9 @@
 """配置读取与修改工具"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-import contextvars
 import json
 
 from ..config import _raw, _config_path, AVAILABLE_MODELS, MODEL_CONFIG, MCP
 from ..logger import logger
-
-_registry_ctx = contextvars.ContextVar("config_tool_registry", default=None)
 
 definition: ToolDefinition = {
     "type": "function",
@@ -78,12 +75,7 @@ _CONFIG_STRUCTURE = """mini-ai 配置结构:
 修改 models/mcp/plan 后需重启生效。修改 active_model 可通过 /model 命令即时切换。"""
 
 
-def configure(registry=None):
-    if registry is not None:
-        _registry_ctx.set(registry)
-
-
-def _build_self_overview() -> str:
+def _build_self_overview(registry=None) -> str:
     try:
         from ..config import _raw, AVAILABLE_MODELS, MODEL_CONFIG, MCP, STREAMING, THINKING, DISPLAY, PLAN, COMPACTOR, DATA_DIR, PACKAGE_DIR
         from .. import __version__
@@ -95,7 +87,6 @@ def _build_self_overview() -> str:
     ctx_len = MODEL_CONFIG.get("context_length", 256000)
     api_mode = MODEL_CONFIG.get("api_mode", "openai")
 
-    registry = _registry_ctx.get()
     tools = registry.get_definitions() if registry is not None else []
     tool_names = [t["function"]["name"] for t in tools]
     mcp_tools = [n for n in tool_names if n.startswith("mcp_")]
@@ -124,13 +115,13 @@ def _build_self_overview() -> str:
     lines.append("可用工具见上方当前会话工具列表；可用 config 工具读取/修改配置")
     return "\n".join(lines)
 
-def execute(args: ToolArgs) -> str:
+def execute_with_registry(registry, args: ToolArgs) -> str:
     action = args.get("action", "read")
     path = args.get("path", "")
     value = args.get("value")
 
     if action == "list":
-        return _build_self_overview() + "\n\n" + _CONFIG_STRUCTURE
+        return _build_self_overview(registry) + "\n\n" + _CONFIG_STRUCTURE
     
     if action == "reload":
         from ..config import init_config, MODEL_CONFIG
@@ -175,3 +166,7 @@ def execute(args: ToolArgs) -> str:
         return f"已修改 {path} = {json.dumps(value, ensure_ascii=False)} {hint}"
 
     return f"未知 action: {action}"
+
+
+def execute(args: ToolArgs) -> str:
+    return execute_with_registry(None, args)
