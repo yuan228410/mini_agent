@@ -5,6 +5,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
+from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
 from datetime import datetime, timezone, timedelta
 from ..logger import logger
 
@@ -139,7 +140,7 @@ class ToolRegistry:
             targets = []
             with _m.lock:
                 for member in _m.config.get("members", []):
-                    if member["status"] in ("idle", "working"):
+                    if member["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
                         targets.append(member["name"])
             if not targets:
                 return "当前没有活跃的队友"

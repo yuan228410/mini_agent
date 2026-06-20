@@ -10,6 +10,7 @@ from ..core.runtime_types import (
     InboxMessageDict,
     TeamConfigDict,
     TeamListText,
+    TeamMemberStatus,
     TeamMemberSummary,
     TeamStatusResponse,
     WorkflowTaskEndDict,
@@ -24,6 +25,20 @@ class InboxMessageType(StrEnum):
     SHUTDOWN_REQUEST = "shutdown_request"
     SHUTDOWN_RESPONSE = "shutdown_response"
     TASK_HANDOFF = "task_handoff"
+
+
+def normalize_team_status(status: object) -> TeamMemberStatus:
+    if status == "idle":
+        return "idle"
+    if status == "working":
+        return "working"
+    if status == "shutdown":
+        return "shutdown"
+    return "offline"
+
+
+def team_member_summary(name: object, role: object = "", status: object = "offline") -> TeamMemberSummary:
+    return {"name": str(name), "role": str(role), "status": normalize_team_status(status)}
 
 
 def preview_text(text: str, limit: int = 100) -> str:

@@ -5,6 +5,7 @@ from ..core.runtime_types import ToolArgs, ToolDefinition
 import contextvars
 import json
 
+from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
 from ..logger import logger
 
 _bus = None
@@ -162,7 +163,7 @@ def _dismiss(args: ToolArgs) -> str:
     targets = []
     with _manager.lock:
         for m in _manager.config.get("members", []):
-            if m["status"] in ("idle", "working"):
+            if m["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
                 targets.append(m["name"])
     if not targets:
         return "当前没有活跃的队友"

@@ -4,7 +4,7 @@ import time
 import threading
 from ..core import events
 from ..core.events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
-from ..core.runtime_types import DisplayEventPayload, DisplayWireEvent
+from ..core.runtime_types import DisplayEventPayload, DisplayWireEvent, TeamMemberStatus
 from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
 
 # 全局事件序号计数器（每个会话独立）
@@ -271,7 +271,7 @@ class WebDisplay:
     def assistant_prefix(self):
         pass
 
-    def teammate_status(self, name: str, status: str):
+    def teammate_status(self, name: str, status: TeamMemberStatus):
         self._push(DisplayEventType.TEAMMATE_STATUS, {"name": name, "status": status})
 
     def blackboard_update(self, key: str, author: str):

@@ -8,7 +8,7 @@ outer LLM/persistence boundaries; code should use these aliases rather than bare
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict
 
 if TYPE_CHECKING:
     from .display_protocol import DisplayProtocol
@@ -54,10 +54,14 @@ InboxMessageDict = TypedDict(
 )
 
 
+TeamMemberStatus = Literal["idle", "working", "offline", "shutdown"]
+ACTIVE_TEAM_MEMBER_STATUSES: tuple[TeamMemberStatus, ...] = ("idle", "working")
+
+
 class TeamMemberSummary(TypedDict):
     name: str
     role: str
-    status: str
+    status: TeamMemberStatus
 
 
 class TeamConfigDict(TypedDict):

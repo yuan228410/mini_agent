@@ -233,10 +233,10 @@ def test_history_db_batch_normalizes_message_metadata(tmp_path):
 
 def test_team_state_boundaries_use_structured_models(tmp_path):
     import typing
-    from mini_ai.core.runtime_types import BlackboardEntryDict, InboxMessageDict, WorkflowTaskEndDict, WorkflowTaskInfoDict, WorkflowTaskStartDict
+    from mini_ai.core.runtime_types import BlackboardEntryDict, InboxMessageDict, TeamMemberStatus, TeamMemberSummary, WorkflowTaskEndDict, WorkflowTaskInfoDict, WorkflowTaskStartDict
     from mini_ai.team.blackboard import Blackboard
     from mini_ai.team.bus import MessageBus
-    from mini_ai.team.models import BlackboardEntry, InboxMessage, WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
+    from mini_ai.team.models import BlackboardEntry, InboxMessage, normalize_team_status, team_member_summary, WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
     from mini_ai.team.task_graph import TaskGraph, TaskNode, TaskStatus
 
     assert typing.get_type_hints(InboxMessage.from_dict)["data"] == InboxMessageDict
@@ -246,6 +246,10 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
     assert typing.get_type_hints(WorkflowTaskInfo.to_dict)["return"] == WorkflowTaskInfoDict
     assert typing.get_type_hints(WorkflowTaskStart.to_dict)["return"] == WorkflowTaskStartDict
     assert typing.get_type_hints(WorkflowTaskEnd.to_dict)["return"] == WorkflowTaskEndDict
+    assert typing.get_type_hints(normalize_team_status)["return"] == TeamMemberStatus
+    assert typing.get_type_hints(team_member_summary)["return"] == TeamMemberSummary
+    assert normalize_team_status("invalid") == "offline"
+    assert team_member_summary("a", "r", "working") == {"name": "a", "role": "r", "status": "working"}
 
     bb_path = tmp_path / "blackboard.json"
     bb = Blackboard(bb_path)

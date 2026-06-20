@@ -12,7 +12,8 @@ from ..config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
 from ..logger import logger
 from .prompts import build_team_prompt
 from ..utils import now_ts
-from .models import TeamConfigDict, TeamListText, TeamMemberSummary
+from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
+from .models import TeamConfigDict, TeamListText, TeamMemberStatus, TeamMemberSummary, team_member_summary
 
 _BASE_TOOL_NAMES = tuple(TEAMMATE.get("base_tools", []))
 _MAX_TEAMMATES = TEAMMATE.get("max_teammates", 5)
@@ -43,7 +44,14 @@ class TeammateManager:
             try:
                 data = json.loads(self.config_path.read_text(encoding="utf-8"))
                 if isinstance(data, dict) and isinstance(data.get("members"), list):
-                    return data
+                    return {
+                        "team_name": str(data.get("team_name") or "default"),
+                        "members": [
+                            team_member_summary(m.get("name", ""), m.get("role", ""), m.get("status", "offline"))
+                            for m in data.get("members", [])
+                            if isinstance(m, dict)
+                        ],
+                    }
             except json.JSONDecodeError:
                 pass
         return {"team_name": "default", "members": []}
@@ -55,7 +63,7 @@ class TeammateManager:
         with self.lock:
             changed = False
             for m in self.config.get("members", []):
-                if m.get("status") in ("idle", "working"):
+                if m.get("status") in ACTIVE_TEAM_MEMBER_STATUSES:
                     m["status"] = "offline"
                     changed = True
             if changed:
@@ -67,7 +75,7 @@ class TeammateManager:
                 return m
         return None
 
-    def _set_status(self, name: str, status: str):
+    def _set_status(self, name: str, status: TeamMemberStatus):
         with self.lock:
             m = self._find(name)
             if m:
@@ -102,7 +110,7 @@ class TeammateManager:
                 active = sum(1 for t in self.threads.values() if t.is_alive())
                 if active >= _MAX_TEAMMATES:
                     return f"Error: 已达队友上限 {_MAX_TEAMMATES}，请先 shutdown 一些队友"
-                member = {"name": name, "role": role, "status": "working"}
+                member = team_member_summary(name, role, "working")
                 self.config["members"].append(member)
             self._save_config()
 

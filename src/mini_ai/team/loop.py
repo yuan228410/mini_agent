@@ -2,12 +2,13 @@
 import time
 
 from ..config import TIMEOUTS
+from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES, InboxMessageDict
 from ..logger import logger
 from ..utils import now_ts
 
 REPLY_INSTRUCTION = "队友回禀已收到。先 blackboard_read 读黑板结果，再回复。"
 
-def format_inbox_messages(inbox: list[dict]) -> str | None:
+def format_inbox_messages(inbox: list[InboxMessageDict]) -> str | None:
     """将 inbox 消息列表格式化为回禀文本，过滤 shutdown_response。"""
     parts = []
     for im in inbox:
@@ -85,7 +86,7 @@ def shutdown_teammates(bus, team_mgr):
     targets = []
     with team_mgr.lock:
         for m in team_mgr.config.get("members", []):
-            if m["status"] in ("idle", "working"):
+            if m["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
                 targets.append(m["name"])
     if targets:
         logger.info(f"[自动shutdown] {len(targets)} 位队友: {', '.join(targets)}")

@@ -10,6 +10,7 @@ from rich.text import Text
 
 from ..core.events import DisplayEventType
 from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
+from ..core.runtime_types import TeamMemberStatus
 from ..logger import logger
 
 _IS_TTY = sys.stdout.isatty()
@@ -127,7 +128,7 @@ class Display:
     def llm_round_end(self, prompt_tokens: int = 0, completion_tokens: int = 0, model: str = ""):
         pass
 
-    def teammate_status(self, name: str, status: str):
+    def teammate_status(self, name: str, status: TeamMemberStatus):
         pass
 
     def blackboard_update(self, key: str, author: str):
