@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 
-from ..core.runtime_types import MetadataDict, SubagentListText, SubagentSpec
+from ..core.runtime_types import MetadataDict, SubagentCreateInput, SubagentListText, SubagentSpec
 
 
 class SubagentLoader:
@@ -31,19 +31,29 @@ class SubagentLoader:
     def subagents_dir(self) -> Path:
         return self._dir
 
-    def _load_all(self):
+    def _load_all(self) -> None:
+        self.specs.clear()
         if not self.subagents_dir.exists():
             return
         for f in sorted(self.subagents_dir.glob("*.md")):
             text = f.read_text(encoding="utf-8")
             meta, body = self._parse_frontmatter(text)
-            name = meta.get("name", f.stem)
+            name = str(meta.get("name", f.stem))
+            raw_tools = meta.get("tools", "")
+            if isinstance(raw_tools, list):
+                tool_names = [str(t).strip() for t in raw_tools if str(t).strip()]
+            else:
+                tool_names = [t.strip() for t in str(raw_tools).split(",") if t.strip()]
+            try:
+                max_turns = int(meta.get("max_turns", 10))
+            except (TypeError, ValueError):
+                max_turns = 10
             self.specs[name] = {
                 "name": name,
-                "description": meta.get("description", ""),
+                "description": str(meta.get("description", "")),
                 "system_prompt": body.strip(),
-                "tool_names": [t.strip() for t in meta.get("tools", "").split(",") if t.strip()],
-                "max_turns": int(meta.get("max_turns", 10)),
+                "tool_names": tool_names,
+                "max_turns": max_turns,
             }
 
     def _parse_frontmatter(self, text: str) -> tuple[MetadataDict, str]:
@@ -71,15 +81,16 @@ class SubagentLoader:
     def has(self, name: str) -> bool:
         return name in self.specs
 
-    def create(self, name: str, description: str, prompt: str, tools: list[str], max_turns: int) -> Path | None:
-        tools_str = ", ".join(str(t) for t in tools) if tools else ""
-        frontmatter = [f"name: {name}", f"description: {description}"]
-        if tools_str:
-            frontmatter.append(f"tools: {tools_str}")
-        frontmatter.append(f"max_turns: {max_turns}")
-
-        md_content = "---\n" + "\n".join(frontmatter) + "\n---\n\n" + prompt + "\n"
-        dest = self.subagents_dir / f"{name}.md"
+    def create(self, data: SubagentCreateInput) -> Path | None:
+        meta = {
+            "name": data["name"],
+            "description": data["description"],
+            "tools": data.get("tools", []),
+            "max_turns": data["max_turns"],
+        }
+        frontmatter = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
+        md_content = "---\n" + frontmatter + "\n---\n\n" + data["prompt"] + "\n"
+        dest = self.subagents_dir / f"{data['name']}.md"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(md_content, encoding="utf-8")
         self._load_all()

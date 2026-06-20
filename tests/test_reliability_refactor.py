@@ -844,6 +844,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
         InboxMessageDict,
         MessageBusProtocol,
         MetadataDict,
+        SubagentCreateInput,
         SubagentListText,
         SubagentLoaderProtocol,
         SubagentSpec,
@@ -887,8 +888,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert protocol_sub_list["return"] is SubagentListText
     assert protocol_sub_get["return"] == SubagentSpec | None
     assert protocol_sub_has["return"] is bool
-    assert protocol_sub_create["tools"] == list[str]
-    assert protocol_sub_create["max_turns"] is int
+    assert protocol_sub_create["data"] is SubagentCreateInput
     assert protocol_sub_create["return"] == Path | None
     assert protocol_inbox["return"] == list[InboxMessageDict]
     assert protocol_inbox["peek"] is bool
@@ -899,12 +899,19 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert protocol_member_names["return"] == list[str]
     assert protocol_active_member_names["return"] == list[str]
     assert protocol_has_working_members["return"] is bool
+    assert typing.get_type_hints(SubagentCreateInput) == {
+        "name": str,
+        "description": str,
+        "prompt": str,
+        "tools": list[str],
+        "max_turns": int,
+    }
     assert loader_hints["specs"] == dict[str, SubagentSpec]
     assert loader_parse["return"] == tuple[MetadataDict, str]
     assert loader_list["return"] is SubagentListText
     assert loader_get["return"] == SubagentSpec | None
     assert loader_has["return"] is bool
-    assert loader_create["tools"] == list[str]
+    assert loader_create["data"] is SubagentCreateInput
     assert loader_create["return"] == Path | None
     assert bus_read["return"] == list[InboxMessageDict]
     assert inbox_to_dict["return"] is InboxMessageDict
@@ -1263,6 +1270,35 @@ def test_memory_history_tools_do_not_keep_module_level_runtime_state():
     assert offenders == []
 
 
+def test_subagent_loader_create_serializes_yaml_and_reloads_cleanly(tmp_path):
+    from mini_ai.subagents import SubagentLoader
+
+    loader = SubagentLoader(tmp_path)
+    created = loader.create({
+        "name": "quoted-agent",
+        "description": "含: 冒号 # 与中文",
+        "prompt": "系统提示\n第二行",
+        "tools": ["read_file", "run_command"],
+        "max_turns": 3,
+    })
+
+    assert created == tmp_path / "quoted-agent.md"
+    text = created.read_text(encoding="utf-8")
+    assert text.startswith("---\n")
+    assert "tools:\n- read_file\n- run_command" in text
+    assert loader.get("quoted-agent") == {
+        "name": "quoted-agent",
+        "description": "含: 冒号 # 与中文",
+        "system_prompt": "系统提示\n第二行",
+        "tool_names": ["read_file", "run_command"],
+        "max_turns": 3,
+    }
+
+    created.unlink()
+    loader._load_all()
+    assert loader.specs == {}
+
+
 def test_subagent_tools_do_not_keep_module_level_runtime_state():
     repo = Path(__file__).resolve().parents[1]
     modules = {
@@ -1283,6 +1319,8 @@ def test_subagent_tools_do_not_keep_module_level_runtime_state():
             "subagents_dir",
             "loader.specs",
             "loader._load_all",
+            "frontmatter",
+            "safe_dump",
             "_registry_ctx",
             "registry._by_name",
             "dispatch_subagent._loader",

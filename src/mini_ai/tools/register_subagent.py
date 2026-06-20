@@ -1,5 +1,5 @@
 """动态注册子代理工具 — 对话中创建新的子代理类型"""
-from ..core.runtime_types import ToolArgs, ToolDefinition
+from ..core.runtime_types import SubagentCreateInput, ToolArgs, ToolDefinition
 from ..logger import logger
 
 
@@ -50,8 +50,16 @@ def execute_with_context(loader, args: ToolArgs, *, refresh_dispatch=None) -> st
     if max_turns <= 0:
         max_turns = 10
 
-    tools_str = ", ".join(str(t) for t in tools) if tools else ""
-    dest = loader.create(name, description, prompt, [str(t) for t in tools], max_turns)
+    tool_names = [str(t) for t in tools]
+    tools_str = ", ".join(tool_names) if tool_names else ""
+    create_input: SubagentCreateInput = {
+        "name": name,
+        "description": description,
+        "prompt": prompt,
+        "tools": tool_names,
+        "max_turns": max_turns,
+    }
+    dest = loader.create(create_input)
     if dest:
         logger.info(f"[注册子代理] 已写入 {dest}")
 

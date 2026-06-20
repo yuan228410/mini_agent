@@ -47,6 +47,14 @@ class SubagentSpec(TypedDict):
     max_turns: int
 
 
+class SubagentCreateInput(TypedDict):
+    name: str
+    description: str
+    prompt: str
+    tools: list[str]
+    max_turns: int
+
+
 InboxMessageTypeValue = Literal["message", "broadcast", "shutdown_request", "shutdown_response", "task_handoff"]
 InboxMessageDict = TypedDict(
     "InboxMessageDict",
@@ -182,7 +190,7 @@ class SubagentLoaderProtocol(Protocol):
     def list_specs(self) -> SubagentListText: ...
     def get(self, name: str) -> SubagentSpec | None: ...
     def has(self, name: str) -> bool: ...
-    def create(self, name: str, description: str, prompt: str, tools: list[str], max_turns: int) -> Path | None: ...
+    def create(self, data: SubagentCreateInput) -> Path | None: ...
 
 
 class McpLoaderProtocol(Protocol):
