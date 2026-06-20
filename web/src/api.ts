@@ -1181,6 +1181,36 @@ export async function getTools(sessionId?: string, workspace?: string): Promise<
   return _json(resp)
 }
 
+export async function listFiles(path: string, workspace: string): Promise<FileListResponse> {
+  const params = new URLSearchParams()
+  params.set('path', path)
+  params.set('workspace', workspace)
+  params.set('username', _username())
+  const resp = await _fetch(`/api/files/list?${params.toString()}`)
+  return _json(resp)
+}
+
+export async function readFile(path: string, workspace: string, offset = 0, limit = 200): Promise<FileReadResponse> {
+  const params = new URLSearchParams()
+  params.set('path', path)
+  params.set('workspace', workspace)
+  params.set('offset', String(offset))
+  params.set('limit', String(limit))
+  params.set('username', _username())
+  const resp = await _fetch(`/api/files/read?${params.toString()}`)
+  return _json(resp)
+}
+
+export async function searchFiles(query: string, path: string, workspace: string): Promise<FileSearchResponse> {
+  const params = new URLSearchParams()
+  params.set('query', query)
+  params.set('path', path)
+  params.set('workspace', workspace)
+  params.set('username', _username())
+  const resp = await _fetch(`/api/files/search?${params.toString()}`)
+  return _json(resp)
+}
+
 export interface BrowseDir {
   name: string
   path: string

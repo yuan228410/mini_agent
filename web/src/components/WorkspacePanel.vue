@@ -1,6 +1,13 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import type { WorkspaceInfo, WorkspaceMutationResponse, WorkspacesResponse } from '../api'
+import {
+  addWorkspace,
+  createWorkspace,
+  getWorkspaces,
+  removeWorkspace,
+  switchWorkspace,
+} from '../api'
+import type { WorkspaceInfo } from '../api'
 
 const props = defineProps<{ visible: boolean }>()
 const emit = defineEmits(['close', 'switched'])
@@ -17,21 +24,14 @@ onMounted(async () => { await refresh() })
 
 async function refresh() {
   try {
-    const resp = await fetch('/api/workspaces')
-    const data = await resp.json() as WorkspacesResponse
+    const data = await getWorkspaces()
     workspaces.value = data.workspaces || []
     active.value = data.active || 'default'
   } catch {}
 }
 
 async function switchTo(name: string) {
-  const username = localStorage.getItem('mini_ai_username') || 'default'
-  const resp = await fetch('/api/workspaces/switch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, username }),
-  })
-  const data = await resp.json() as WorkspaceMutationResponse
+  const data = await switchWorkspace(name)
   active.value = name
   emit('switched', name, data.session_id || 'default')
 }
@@ -39,11 +39,7 @@ async function switchTo(name: string) {
 async function create() {
   const name = newName.value.trim()
   if (!name) return
-  await fetch('/api/workspaces', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, project_path: newPath.value.trim() }),
-  })
+  await createWorkspace(name, newPath.value.trim())
   newName.value = ''
   newPath.value = ''
   showCreate.value = false
@@ -53,11 +49,7 @@ async function create() {
 async function addExisting() {
   const path = addPath.value.trim()
   if (!path) return
-  await fetch('/api/workspaces/add', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  })
+  await addWorkspace(path)
   addPath.value = ''
   showAdd.value = false
   await refresh()
@@ -65,14 +57,14 @@ async function addExisting() {
 
 async function remove(name: string) {
   if (name === 'default') return
-  await fetch(`/api/workspaces/${name}`, { method: 'DELETE' })
+  await removeWorkspace(name)
   await refresh()
 }
 
 async function deleteWs(name: string) {
   if (name === 'default') return
   if (!confirm(`确定删除工作空间 "${name}" 及其所有数据？`)) return
-  await fetch(`/api/workspaces/${name}?delete_data=true`, { method: 'DELETE' })
+  await removeWorkspace(name, true)
   await refresh()
 }
 </script>

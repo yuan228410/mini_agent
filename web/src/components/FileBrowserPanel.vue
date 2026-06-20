@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import { ref, nextTick, watch, onMounted, onUnmounted, computed } from 'vue'
 import hljs from '../highlight'
+import { addWorkspace, listFiles, readFile, searchFiles } from '../api'
 import type {
   BreadcrumbItem,
   FileItem,
-  FileListResponse,
-  FileReadResponse,
-  FileSearchResponse,
-  WorkspaceMutationResponse,
 } from '../api'
 
 const props = defineProps<{ visible?: boolean, embedded?: boolean; workspace: string }>()
@@ -50,12 +47,7 @@ async function setAsWorkspace(fullPath: string, name: string) {
   addWsPending.value = true
   contextMenu.value = null
   try {
-    const resp = await fetch('/api/workspaces/add', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: fullPath, username: _username() }),
-    })
-    const data = await resp.json() as WorkspaceMutationResponse
+    const data = await addWorkspace(fullPath)
     if (data.error) {
       alert(data.error)
       return
@@ -107,8 +99,7 @@ async function loadDir(path: string) {
   focusedIndex.value = -1
   showFileSearch.value = false
   try {
-    const resp = await fetch(`/api/files/list?path=${encodeURIComponent(path)}&workspace=${encodeURIComponent(props.workspace)}&username=${encodeURIComponent(_username())}`)
-    const data = await resp.json() as FileListResponse
+    const data = await listFiles(path, props.workspace)
     if (data.error) {
       items.value = []
       breadcrumb.value = []
@@ -156,10 +147,7 @@ async function loadMoreContent() {
   if (previewLoading.value) return
   previewLoading.value = true
   try {
-    const resp = await fetch(
-      `/api/files/read?path=${encodeURIComponent(previewFile.value!)}&workspace=${encodeURIComponent(props.workspace)}&offset=${previewOffset.value}&limit=200&username=${encodeURIComponent(_username())}`
-    )
-    const data = await resp.json() as FileReadResponse
+    const data = await readFile(previewFile.value!, props.workspace, previewOffset.value, 200)
     if (data.error) {
       previewContent.value += `\n// Error: ${data.error}`
       return
@@ -449,10 +437,7 @@ function onFileSearchInput() {
     }
     fileSearchLoading.value = true
     try {
-      const resp = await fetch(
-        `/api/files/search?query=${encodeURIComponent(fileSearchQuery.value)}&path=${encodeURIComponent(currentPath.value)}&workspace=${encodeURIComponent(props.workspace)}&username=${encodeURIComponent(_username())}`
-      )
-      const data = await resp.json() as FileSearchResponse
+      const data = await searchFiles(fileSearchQuery.value, currentPath.value, props.workspace)
       fileSearchResults.value = data.results || []
     } catch {} finally {
       fileSearchLoading.value = false
