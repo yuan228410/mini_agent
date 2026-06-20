@@ -85,15 +85,11 @@ class ToolRegistry:
 
     def register_skills(self, skill_loader):
         from . import list_skills, load_skill, install_skill, delete_skill
-        list_skills.configure(loader=skill_loader)
-        load_skill.configure(loader=skill_loader)
-        install_skill.configure(loader=skill_loader)
-        delete_skill.configure(loader=skill_loader)
         self.add_tools(
-            _BoundTool(list_skills.definition, lambda args, _m=list_skills: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
-            _BoundTool(load_skill.definition, lambda args, _m=load_skill: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
-            _BoundTool(install_skill.definition, lambda args, _m=install_skill: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
-            _BoundTool(delete_skill.definition, lambda args, _m=delete_skill: _run_with_context([(_m._loader_var, skill_loader)], _m.execute, args)),
+            _BoundTool(list_skills.definition, lambda args, _loader=skill_loader: list_skills.list_skills_with_loader(_loader, args)),
+            _BoundTool(load_skill.definition, lambda args, _loader=skill_loader: load_skill.load_skill_with_loader(_loader, args)),
+            _BoundTool(install_skill.definition, lambda args, _loader=skill_loader: install_skill.install_skill_with_loader(_loader, args)),
+            _BoundTool(delete_skill.definition, lambda args, _loader=skill_loader: delete_skill.delete_skill_with_loader(_loader, args)),
         )
 
     def register_subagents(self, subagent_loader):

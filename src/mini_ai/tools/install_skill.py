@@ -1,6 +1,5 @@
 """技能安装工具：压缩包下载/本地路径 或 内联内容，支持三层级安装"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-import contextvars
 import shutil
 import tarfile
 import tempfile
@@ -10,21 +9,6 @@ from pathlib import Path
 
 from ..config import TIMEOUTS
 from ..logger import logger
-
-_loader_var = contextvars.ContextVar("skill_loader", default=None)
-_loader = None
-
-
-def configure(loader=None):
-    global _loader
-    if loader is not None:
-        _loader = loader
-        _loader_var.set(loader)
-
-
-def _get_loader():
-    return _loader_var.get() or _loader
-
 
 definition: ToolDefinition = {
     "type": "function",
@@ -111,8 +95,7 @@ def _validate(dest_dir: Path) -> bool:
     return False
 
 
-def _skill_summary(name: str) -> str:
-    loader = _get_loader()
+def _skill_summary(loader, name: str) -> str:
     if not loader or name not in loader.skills:
         return ""
     meta = loader.skills[name]["meta"]
@@ -129,19 +112,18 @@ def _skill_summary(name: str) -> str:
     return info
 
 
-def _install_from_content(name: str, content: str, dest_dir: Path) -> str:
+def _install_from_content(loader, name: str, content: str, dest_dir: Path) -> str:
     skill_file = dest_dir / "SKILL.md"
     dest_dir.mkdir(parents=True, exist_ok=True)
     skill_file.write_text(content, encoding="utf-8")
-    loader = _get_loader()
     if loader:
         loader._load_all()
     logger.info(f"[安装技能] {name} → {skill_file} ({len(content)} 字符)")
-    summary = _skill_summary(name)
+    summary = _skill_summary(loader, name)
     return f"技能 '{name}' 已安装到 {skill_file}{summary}\n\n请使用 load_skill 读取该技能的完整内容，了解其功能和使用方式。"
 
 
-def _install_from_archive(name: str, source: str, dest_dir: Path) -> str:
+def _install_from_archive(loader, name: str, source: str, dest_dir: Path) -> str:
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
 
@@ -170,12 +152,11 @@ def _install_from_archive(name: str, source: str, dest_dir: Path) -> str:
             shutil.rmtree(dest_dir)
             return f"Error: 压缩包中未找到 SKILL.md，技能 '{name}' 安装失败"
 
-        loader = _get_loader()
         if loader:
             loader._load_all()
 
         logger.info(f"[安装技能] {name} 安装成功")
-        summary = _skill_summary(name)
+        summary = _skill_summary(loader, name)
         return f"技能 '{name}' 已安装到 {dest_dir}{summary}\n\n请使用 load_skill 读取该技能的完整内容，了解其功能和使用方式。"
     except Exception as e:
         if dest_dir.exists():
@@ -210,17 +191,17 @@ def _execute_with_loader(loader, args: ToolArgs) -> str:
     dest_dir = Path(target_dir) / name
 
     if content:
-        return _install_from_content(name, content, dest_dir)
-    return _install_from_archive(name, source, dest_dir)
+        return _install_from_content(loader, name, content, dest_dir)
+    return _install_from_archive(loader, name, source, dest_dir)
+
+
+def install_skill_with_loader(loader, args: ToolArgs) -> str:
+    return _execute_with_loader(loader, args)
 
 
 def _run_with_loader(loader, args: ToolArgs) -> str:
-    token = _loader_var.set(loader)
-    try:
-        return _execute_with_loader(loader, args)
-    finally:
-        _loader_var.reset(token)
+    return install_skill_with_loader(loader, args)
 
 
 def execute(args: ToolArgs) -> str:
-    return _execute_with_loader(_get_loader(), args)
+    return "Error: 技能加载器未配置"

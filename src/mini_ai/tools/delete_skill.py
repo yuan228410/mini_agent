@@ -1,22 +1,7 @@
 """技能删除工具"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-import contextvars
 
 from ..logger import logger
-
-_loader_var = contextvars.ContextVar("skill_loader", default=None)
-_loader = None
-
-
-def configure(loader=None):
-    global _loader
-    if loader is not None:
-        _loader = loader
-        _loader_var.set(loader)
-
-
-def _get_loader():
-    return _loader_var.get() or _loader
 
 
 definition: ToolDefinition = {
@@ -36,8 +21,7 @@ definition: ToolDefinition = {
 }
 
 
-def execute(args: ToolArgs) -> str:
-    loader = _get_loader()
+def delete_skill_with_loader(loader, args: ToolArgs) -> str:
     if not loader:
         return "Error: 技能加载器未配置"
     name = args.get("name", "")
@@ -53,3 +37,7 @@ def execute(args: ToolArgs) -> str:
     tier = skill.get("tier", "")
     logger.info(f"[删除技能] {name} 当前层级: {tier}，直接删除")
     return loader.delete_skill(name)
+
+
+def execute(args: ToolArgs) -> str:
+    return "Error: 技能加载器未配置"

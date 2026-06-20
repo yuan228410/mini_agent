@@ -1184,14 +1184,45 @@ def test_tool_registry_uses_session_local_tool_bindings():
     repo = Path(__file__).resolve().parents[1]
     registry_text = (repo / "src/mini_ai/tools/__init__.py").read_text()
 
-    assert "team_tools.configure" not in registry_text
-    assert "team_tools.set_caller" not in registry_text
-    assert "blackboard_tools.configure" not in registry_text
-    assert "workflow_tools.configure" not in registry_text
-    assert "from ..team.task_graph import TaskGraph" not in registry_text
+    forbidden_registry_bindings = (
+        "team_tools.configure",
+        "team_tools.set_caller",
+        "blackboard_tools.configure",
+        "workflow_tools.configure",
+        "list_skills.configure",
+        "load_skill.configure",
+        "install_skill.configure",
+        "delete_skill.configure",
+        "from ..team.task_graph import TaskGraph",
+    )
+    for pattern in forbidden_registry_bindings:
+        assert pattern not in registry_text
     assert "workflow_tools.run_workflow_with_context" in registry_text
     assert "blackboard_tools.write_to_blackboard" in registry_text
     assert "team_tools.spawn_from_args" in registry_text
+    assert "list_skills.list_skills_with_loader" in registry_text
+    assert "load_skill.load_skill_with_loader" in registry_text
+    assert "install_skill.install_skill_with_loader" in registry_text
+    assert "delete_skill.delete_skill_with_loader" in registry_text
+
+
+def test_skill_tools_do_not_keep_module_level_loader_state():
+    repo = Path(__file__).resolve().parents[1]
+    skill_tool_paths = [
+        repo / "src/mini_ai/tools/list_skills.py",
+        repo / "src/mini_ai/tools/load_skill.py",
+        repo / "src/mini_ai/tools/install_skill.py",
+        repo / "src/mini_ai/tools/delete_skill.py",
+    ]
+    forbidden = ("_loader_var", "_loader =", "def configure", "_get_loader")
+
+    offenders = []
+    for path in skill_tool_paths:
+        text = path.read_text()
+        hits = [pattern for pattern in forbidden if pattern in text]
+        if hits:
+            offenders.append({"path": path.name, "hits": hits})
+    assert offenders == []
 
 
 def test_team_orchestrator_uses_display_protocol_methods_directly():
