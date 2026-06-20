@@ -3,7 +3,9 @@ import json
 import threading
 import time
 from pathlib import Path
+from typing import Literal, overload
 
+from ..core.runtime_types import BlackboardDetailedSnapshot, BlackboardEntryDict, BlackboardTextSnapshot
 from ..logger import logger
 from .models import BlackboardEntry
 
@@ -35,7 +37,7 @@ class Blackboard:
             self._condition.notify_all()  # 通知所有等待者
             return f"已写入 blackboard[{key}]（{len(value)} 字符）"
 
-    def get(self, key: str, default: str | object = ""):
+    def get(self, key: str, default: str | object = "") -> str | object:
         with self._lock:
             entry = self._data.get(key)
         if entry is None:
@@ -49,13 +51,19 @@ class Blackboard:
             keys = [k for k in self._data if k.startswith(prefix)]
         return sorted(keys)
 
-    def snapshot(self, detailed: bool = False) -> dict:
+    @overload
+    def snapshot(self, detailed: Literal[False] = False) -> BlackboardTextSnapshot: ...
+
+    @overload
+    def snapshot(self, detailed: Literal[True]) -> BlackboardDetailedSnapshot: ...
+
+    def snapshot(self, detailed: bool = False) -> BlackboardTextSnapshot | BlackboardDetailedSnapshot:
         with self._lock:
             if detailed:
                 return {k: v.to_dict() for k, v in self._data.items()}
             return {k: v.value for k, v in self._data.items()}
 
-    def clear(self):
+    def clear(self) -> None:
         with self._condition:
             self._data.clear()
             self._version += 1
@@ -89,7 +97,7 @@ class Blackboard:
                 lines.append(f"  {k}{author}: {preview}")
             return "\n".join(lines)
 
-    def _persist(self):
+    def _persist(self) -> None:
         """原子写入文件：先写临时文件，再替换，避免写入过程中崩溃导致文件损坏"""
         if not self._persist_path:
             return
@@ -97,8 +105,9 @@ class Blackboard:
             self._persist_path.parent.mkdir(parents=True, exist_ok=True)
             # 写入临时文件
             temp_path = self._persist_path.with_suffix('.tmp')
+            payload: BlackboardDetailedSnapshot = {k: v.to_dict() for k, v in self._data.items()}
             temp_path.write_text(
-                json.dumps({k: v.to_dict() for k, v in self._data.items()}, ensure_ascii=False, indent=2),
+                json.dumps(payload, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
             # 原子替换（跨平台）
@@ -107,9 +116,16 @@ class Blackboard:
         except OSError as e:
             logger.warning(f"[Blackboard] 持久化失败: {e}")
 
-    def _load(self):
+    def _load(self) -> None:
         try:
             raw = json.loads(self._persist_path.read_text(encoding="utf-8"))
-            self._data = {str(k): BlackboardEntry.from_dict(v) for k, v in raw.items()}
+            if not isinstance(raw, dict):
+                self._data = {}
+                return
+            self._data = {
+                str(k): BlackboardEntry.from_dict(v)
+                for k, v in raw.items()
+                if isinstance(v, dict) or isinstance(v, str)
+            }
         except (json.JSONDecodeError, OSError):
             self._data = {}

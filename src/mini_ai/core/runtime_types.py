@@ -8,7 +8,7 @@ outer LLM/persistence boundaries; code should use these aliases rather than bare
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypedDict, overload
 
 if TYPE_CHECKING:
     from .display_protocol import DisplayProtocol
@@ -79,6 +79,10 @@ class BlackboardEntryDict(TypedDict):
     value: str
     author: str
     ts: float
+
+
+BlackboardTextSnapshot = dict[str, str]
+BlackboardDetailedSnapshot = dict[str, BlackboardEntryDict]
 
 
 class WorkflowTaskInfoDict(TypedDict):
@@ -182,7 +186,19 @@ class TeamManagerProtocol(Protocol):
 
 
 class BlackboardProtocol(Protocol):
-    pass
+    def put(self, key: str, value: str, author: str = "") -> str: ...
+    def get(self, key: str, default: str | object = "") -> str | object: ...
+    def list_keys(self, prefix: str = "") -> list[str]: ...
+
+    @overload
+    def snapshot(self, detailed: Literal[False] = False) -> BlackboardTextSnapshot: ...
+    @overload
+    def snapshot(self, detailed: Literal[True]) -> BlackboardDetailedSnapshot: ...
+    def snapshot(self, detailed: bool = False) -> BlackboardTextSnapshot | BlackboardDetailedSnapshot: ...
+
+    def clear(self) -> None: ...
+    def wait_for_change(self, timeout: float = 5.0) -> bool: ...
+    def render(self) -> str: ...
 
 
 class CompactorProtocol(Protocol):

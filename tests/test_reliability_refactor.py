@@ -233,7 +233,7 @@ def test_history_db_batch_normalizes_message_metadata(tmp_path):
 
 def test_team_state_boundaries_use_structured_models(tmp_path):
     import typing
-    from mini_ai.core.runtime_types import BlackboardEntryDict, InboxMessageDict, InboxMessageTypeValue, TeamMemberStatus, TeamMemberSummary, WorkflowTaskEndDict, WorkflowTaskInfoDict, WorkflowTaskStartDict
+    from mini_ai.core.runtime_types import BlackboardDetailedSnapshot, BlackboardEntryDict, BlackboardProtocol, BlackboardTextSnapshot, InboxMessageDict, InboxMessageTypeValue, TeamMemberStatus, TeamMemberSummary, WorkflowTaskEndDict, WorkflowTaskInfoDict, WorkflowTaskStartDict
     from mini_ai.team.blackboard import Blackboard
     from mini_ai.team.bus import MessageBus
     from mini_ai.team.models import BlackboardEntry, InboxMessage, normalize_inbox_message_type, normalize_team_status, team_member_summary, WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
@@ -244,6 +244,9 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
     assert typing.get_type_hints(normalize_inbox_message_type)["return"] == InboxMessageTypeValue
     assert typing.get_type_hints(BlackboardEntry.from_dict)["data"] == BlackboardEntryDict | str
     assert typing.get_type_hints(BlackboardEntry.to_dict)["return"] == BlackboardEntryDict
+    assert typing.get_type_hints(Blackboard.get)["return"] == str | object
+    assert typing.get_type_hints(Blackboard.snapshot)["return"] == BlackboardTextSnapshot | BlackboardDetailedSnapshot
+    assert typing.get_type_hints(BlackboardProtocol.snapshot)["return"] == BlackboardTextSnapshot | BlackboardDetailedSnapshot
     assert typing.get_type_hints(WorkflowTaskInfo.to_dict)["return"] == WorkflowTaskInfoDict
     assert typing.get_type_hints(WorkflowTaskStart.to_dict)["return"] == WorkflowTaskStartDict
     assert typing.get_type_hints(WorkflowTaskEnd.to_dict)["return"] == WorkflowTaskEndDict
@@ -257,7 +260,9 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
     bb = Blackboard(bb_path)
     bb.put("dep", "value", author="researcher")
     detailed = bb.snapshot(detailed=True)
+    text_snapshot = bb.snapshot()
     assert detailed["dep"]["author"] == "researcher"
+    assert text_snapshot == {"dep": "value"}
     assert json.loads(bb_path.read_text())["dep"]["value"] == "value"
     assert Blackboard(bb_path).get("dep") == "value"
 

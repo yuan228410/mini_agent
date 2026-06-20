@@ -1,14 +1,24 @@
 """黑板工具 — blackboard_write / blackboard_read / blackboard_list"""
-from ..core.runtime_types import ToolArgs, ToolDefinition
-from ..logger import logger
+from ..core.runtime_types import BlackboardProtocol, ToolArgs, ToolDefinition
 
-_blackboard = None
+_blackboard: BlackboardProtocol | None = None
 
 
-def configure(blackboard=None):
+def configure(blackboard: BlackboardProtocol | None = None) -> None:
     global _blackboard
     if blackboard is not None:
         _blackboard = blackboard
+
+
+def _require_blackboard() -> BlackboardProtocol:
+    if _blackboard is None:
+        raise RuntimeError("blackboard tools are not configured")
+    return _blackboard
+
+
+def _arg_text(args: ToolArgs, key: str, default: str = "") -> str:
+    value = args.get(key, default)
+    return value if isinstance(value, str) else str(value)
 
 
 # ── blackboard_write ──
@@ -33,7 +43,7 @@ _write_def: ToolDefinition = {
 def _write_exec(args: ToolArgs) -> str:
     from ..tools.team_tools import _sender
     author = _sender()
-    return _blackboard.put(args.get("key", ""), args.get("value", ""), author=author)
+    return _require_blackboard().put(_arg_text(args, "key"), _arg_text(args, "value"), author=author)
 
 
 # ── blackboard_read ──
@@ -55,11 +65,12 @@ _read_def: ToolDefinition = {
 
 
 def _read_exec(args: ToolArgs) -> str:
-    _MISS = object()
-    value = _blackboard.get(args.get("key", ""), default=_MISS)
-    if value is _MISS:
-        return f"blackboard[{args['key']}] 不存在"
-    return value if value else "(空)" 
+    key = _arg_text(args, "key")
+    missing = object()
+    value = _require_blackboard().get(key, default=missing)
+    if value is missing:
+        return f"blackboard[{key}] 不存在"
+    return value if isinstance(value, str) and value else "(空)"
 
 
 # ── blackboard_list ──
@@ -80,7 +91,7 @@ _list_def: ToolDefinition = {
 
 
 def _list_exec(args: ToolArgs) -> str:
-    keys = _blackboard.list_keys(args.get("prefix", ""))
+    keys = _require_blackboard().list_keys(_arg_text(args, "prefix"))
     if not keys:
         return "黑板为空"
     return "\n".join(keys)
