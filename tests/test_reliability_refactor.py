@@ -1119,3 +1119,14 @@ def test_frontend_rest_boundaries_stay_in_api_module():
         if "fetch(" in text or "resp.json()" in text:
             offenders.append(path.relative_to(repo).as_posix())
     assert offenders == []
+
+
+def test_team_orchestrator_uses_display_protocol_methods_directly():
+    repo = Path(__file__).resolve().parents[1]
+    orchestrator_text = (repo / "src/mini_ai/team/orchestrator.py").read_text()
+
+    assert "from ..core import events" not in orchestrator_text
+    assert "_push_event" not in orchestrator_text
+    assert ".emit(" not in orchestrator_text
+    for method in ("workflow_start", "workflow_task_start", "workflow_task_end", "workflow_end"):
+        assert f"self._display.{method}" in orchestrator_text

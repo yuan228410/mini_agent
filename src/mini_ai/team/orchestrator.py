@@ -5,7 +5,6 @@ import time
 
 from .blackboard import Blackboard
 from ..config import TEAMMATE
-from ..core import events
 from ..logger import logger
 from .prompts import build_team_prompt
 from .task_graph import TaskGraph, TaskNode, TaskStatus
@@ -25,17 +24,6 @@ class Orchestrator:
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
         self._emitted_task_end: set[str] = set()
 
-    def _push_event(self, event):
-        """通过 DisplayProtocol 推送结构化工作流事件。"""
-        if self._display:
-            try:
-                self._display.emit(event)
-                logger.info(f"[Orchestrator] 推送事件成功: {event.event.value}")
-            except Exception as e:
-                logger.warning(f"[Orchestrator] 推送事件失败: {e}")
-        else:
-            logger.debug(f"[Orchestrator] display 为空，跳过事件: {event.event.value}")
-
     def _emit_task_end(self, task: TaskNode) -> None:
         if task.id in self._emitted_task_end:
             return
@@ -50,8 +38,8 @@ class Orchestrator:
                 result_preview=end_event.result_preview,
                 error=end_event.error,
             )
-        except Exception:
-            self._push_event(events.workflow_task_end_event(end_event))
+        except Exception as exc:
+            logger.warning(f"[Orchestrator] 推送任务结束事件失败: {exc}")
 
     def run(self, timeout: int = 1800) -> str:
         logger.info(f"[Orchestrator] 启动，{len(self.graph.nodes)} 个任务，超时 {timeout}s")
@@ -62,8 +50,8 @@ class Orchestrator:
         if self._display:
             try:
                 self._display.workflow_start(tasks_info, len(self.graph.nodes))
-            except Exception:
-                self._push_event(events.workflow_start(tasks_info, len(self.graph.nodes)))
+            except Exception as exc:
+                logger.warning(f"[Orchestrator] 推送工作流开始事件失败: {exc}")
 
         while not self.graph.is_complete():
             if time.monotonic() - start > timeout:
@@ -85,8 +73,8 @@ class Orchestrator:
                 if self._display:
                     try:
                         self._display.workflow_task_start(task_start.id, task_start.agent, task_start.prompt)
-                    except Exception:
-                        self._push_event(events.workflow_task_start_event(task_start))
+                    except Exception as exc:
+                        logger.warning(f"[Orchestrator] 推送任务开始事件失败: {exc}")
                 prompt = self.graph.resolve_prompt(task)
                 # 捕获当前上下文（包含 ContextVar）
                 ctx = contextvars.copy_context()
@@ -118,8 +106,8 @@ class Orchestrator:
         if self._display:
             try:
                 self._display.workflow_end(elapsed, completed, failed, len(self.graph.nodes))
-            except Exception:
-                self._push_event(events.workflow_end(elapsed, completed, failed, len(self.graph.nodes)))
+            except Exception as exc:
+                logger.warning(f"[Orchestrator] 推送工作流结束事件失败: {exc}")
 
         return self._summarize()
 
