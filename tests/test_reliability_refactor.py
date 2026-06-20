@@ -1130,3 +1130,25 @@ def test_team_orchestrator_uses_display_protocol_methods_directly():
     assert ".emit(" not in orchestrator_text
     for method in ("workflow_start", "workflow_task_start", "workflow_task_end", "workflow_end"):
         assert f"self._display.{method}" in orchestrator_text
+
+
+def test_non_adapter_modules_do_not_reach_display_transport_details():
+    import ast
+
+    repo = Path(__file__).resolve().parents[1]
+    src_root = repo / "src/mini_ai"
+    private_attrs = {"queue", "loop", "_push", "_thinking_buf"}
+    offenders = []
+
+    for path in sorted(src_root.rglob("*.py")):
+        rel = path.relative_to(src_root).as_posix()
+        if rel.startswith(("web/", "cli/")):
+            continue
+        tree = ast.parse(path.read_text(), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and node.module.endswith("web.display"):
+                offenders.append(f"{rel}:{node.lineno}: imports WebDisplay")
+            elif isinstance(node, ast.Attribute) and node.attr in private_attrs:
+                offenders.append(f"{rel}:{node.lineno}: accesses display transport attr {node.attr}")
+
+    assert offenders == []
