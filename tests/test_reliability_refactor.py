@@ -1222,6 +1222,7 @@ def test_tool_registry_uses_session_local_tool_bindings():
     for pattern in forbidden_registry_bindings:
         assert pattern not in registry_text
     assert "workflow_tools.run_workflow_with_context" in registry_text
+    assert "run_command.execute_with_cwd" in registry_text
     assert "blackboard_tools.write_to_blackboard" in registry_text
     assert "team_tools.spawn_from_args" in registry_text
     assert "list_skills.list_skills_with_loader" in registry_text
@@ -1252,6 +1253,21 @@ def test_skill_tools_do_not_keep_module_level_loader_state():
         if hits:
             offenders.append({"path": path.name, "hits": hits})
     assert offenders == []
+
+
+def test_run_command_uses_explicit_default_cwd(tmp_path):
+    from mini_ai.tools import run_command
+
+    output = run_command.execute_with_cwd(str(tmp_path), {"command": "pwd"})
+    assert output == str(tmp_path)
+
+
+def test_run_command_does_not_depend_on_dispatch_context():
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "src/mini_ai/tools/run_command.py").read_text()
+    forbidden = ("dispatch_subagent", "get_project_path", "ContextVar", "contextvars")
+    hits = [pattern for pattern in forbidden if pattern in text]
+    assert hits == []
 
 
 def test_team_tools_do_not_keep_module_level_dependencies():

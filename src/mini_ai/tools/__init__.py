@@ -61,6 +61,8 @@ class ToolRegistry:
         for m in modules:
             if m is config_tool:
                 m = _BoundTool(config_tool.definition, lambda args, _registry=self: config_tool.execute_with_registry(_registry, args))
+            elif m is run_command:
+                m = _BoundTool(run_command.definition, lambda args: run_command.execute_with_cwd(self._project_path or None, args))
             definition = self._normalize_module_definition(m)
             name = definition["function"]["name"]
             if name not in existing:

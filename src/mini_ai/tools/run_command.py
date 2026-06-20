@@ -22,17 +22,13 @@ definition: ToolDefinition = {
 }
 
 
-def execute(args: ToolArgs) -> str:
+def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str:
     command = args.get("command", "")
     if not command or not isinstance(command, str):
         return "Error: 缺少 command 参数"
     timeout = args.get("timeout", 30)
-    
-    # 优先使用传入的 cwd，否则从 ContextVar 获取项目路径
-    cwd = args.get("cwd")
-    if not cwd:
-        from .dispatch_subagent import get_project_path
-        cwd = get_project_path() or None
+
+    cwd = args.get("cwd") or default_cwd or None
     try:
         timeout = int(timeout)
     except (TypeError, ValueError):
@@ -64,3 +60,7 @@ def execute(args: ToolArgs) -> str:
         output = f"Error: {e}"
     logger.debug(f"[执行←] len={len(output)}")
     return output
+
+
+def execute(args: ToolArgs) -> str:
+    return execute_with_cwd(None, args)
