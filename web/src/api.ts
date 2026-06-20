@@ -64,17 +64,17 @@ async function _fetch(url: string, init?: RequestInit & { timeout?: number }): P
   }
 }
 
-async function _fetchJson<T>(url: string, init?: RequestInit & { timeout?: number }): Promise<T> {
-  const resp = await _fetch(url, init)
-  try {
-    return await resp.json() as T
-  } catch (e) {
-    throw new ApiError(`响应不是有效 JSON: ${e instanceof Error ? e.message : String(e)}`, resp.status, null, url)
-  }
-}
-
 function _json<T>(resp: Response): Promise<T> {
   return resp.json() as Promise<T>
+}
+
+async function _withFallbackError<T>(operation: () => Promise<T>, fallback: string): Promise<T> {
+  try {
+    return await operation()
+  } catch (e) {
+    if (e instanceof ApiError) throw new Error(e.message || fallback)
+    throw e
+  }
 }
 
 function _parseWsEvent(raw: string): DisplayWireEvent {
@@ -1506,19 +1506,7 @@ export async function exportSession(sessionId: string, workspace?: string, limit
   if (limit && limit > 0) params.set('limit', String(limit))
   if (includeThinking) params.set('include_thinking', 'true')
   if (includeTools) params.set('include_tools', 'true')
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), 30000)
-  let resp: Response
-  try {
-    resp = await _origFetch(`/api/chat/export?${params.toString()}`, { signal: controller.signal })
-  } finally {
-    clearTimeout(timer)
-  }
-  if (!resp.ok) {
-    const data = await _parseErrorBody(resp)
-    const errorData = _asApiErrorBody(data)
-    throw new Error(typeof errorData?.error === 'string' ? errorData.error : '导出失败')
-  }
+  const resp = await _fetch(`/api/chat/export?${params.toString()}`, { timeout: 30000 })
   const blob = await resp.blob()
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -1533,41 +1521,45 @@ export async function exportSession(sessionId: string, workspace?: string, limit
 }
 
 export async function getTeamStatus(username: string, workspace: string): Promise<TeamStatusResponse> {
-  const params = new URLSearchParams()
-  params.set('username', username)
-  if (workspace) params.set('workspace', workspace)
-  const resp = await _origFetch(`/api/team/status?${params.toString()}`)
-  if (!resp.ok) throw new Error('获取 Team 状态失败')
-  return _json(resp)
+  return _withFallbackError(async () => {
+    const params = new URLSearchParams()
+    params.set('username', username)
+    if (workspace) params.set('workspace', workspace)
+    const resp = await _fetch(`/api/team/status?${params.toString()}`)
+    return _json(resp)
+  }, '获取 Team 状态失败')
 }
 
 export async function getBlackboard(username: string, workspace: string): Promise<BlackboardResponse> {
-  const params = new URLSearchParams()
-  params.set('username', username)
-  if (workspace) params.set('workspace', workspace)
-  const resp = await _origFetch(`/api/team/blackboard?${params.toString()}`)
-  if (!resp.ok) throw new Error('获取黑板失败')
-  return _json(resp)
+  return _withFallbackError(async () => {
+    const params = new URLSearchParams()
+    params.set('username', username)
+    if (workspace) params.set('workspace', workspace)
+    const resp = await _fetch(`/api/team/blackboard?${params.toString()}`)
+    return _json(resp)
+  }, '获取黑板失败')
 }
 
 export async function dismissTeammate(username: string, workspace: string, name: string): Promise<TeamMutationResponse> {
-  const resp = await _origFetch('/api/team/dismiss', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, workspace, name }),
-  })
-  if (!resp.ok) throw new Error('解散队友失败')
-  return _json(resp)
+  return _withFallbackError(async () => {
+    const resp = await _fetch('/api/team/dismiss', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, workspace, name }),
+    })
+    return _json(resp)
+  }, '解散队友失败')
 }
 
 export async function clearBlackboard(username: string, workspace: string): Promise<TeamMutationResponse> {
-  const resp = await _origFetch('/api/team/blackboard/clear', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, workspace }),
-  })
-  if (!resp.ok) throw new Error('清空黑板失败')
-  return _json(resp)
+  return _withFallbackError(async () => {
+    const resp = await _fetch('/api/team/blackboard/clear', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, workspace }),
+    })
+    return _json(resp)
+  }, '清空黑板失败')
 }
 
 export async function getTodos(sessionId: string, workspace?: string): Promise<TodosResponse> {
