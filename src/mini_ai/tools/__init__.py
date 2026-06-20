@@ -427,20 +427,17 @@ class ToolRegistry:
 
     def register_memory_tools(self, memory_store):
         from . import memory_tools
-        memory_tools.configure(memory_store=memory_store)
         self.add_tools(
-            _BoundTool(memory_tools._remember_def, lambda args, _m=memory_tools: _run_with_context([(_m._memory_store, memory_store)], _m._remember_exec, args)),
-            _BoundTool(memory_tools._recall_def, lambda args, _m=memory_tools: _run_with_context([(_m._memory_store, memory_store)], _m._recall_exec, args)),
-            _BoundTool(memory_tools._forget_def, lambda args, _m=memory_tools: _run_with_context([(_m._memory_store, memory_store)], _m._forget_exec, args)),
+            _BoundTool(memory_tools._remember_def, lambda args, _store=memory_store: memory_tools.remember_with_store(_store, args)),
+            _BoundTool(memory_tools._recall_def, lambda args, _store=memory_store: memory_tools.recall_with_store(_store, args)),
+            _BoundTool(memory_tools._forget_def, lambda args, _store=memory_store: memory_tools.forget_with_store(_store, args)),
         )
 
     def register_history_tools(self, history_db, workspace: str = "default"):
         from . import history_tools
-        history_tools.configure(history_db=history_db, workspace=workspace)
-        bindings = [(history_tools._history_db, history_db), (history_tools._current_workspace, workspace)]
         self.add_tools(
-            _BoundTool(history_tools._search_def, lambda args, _m=history_tools: _run_with_context(bindings, _m._search_exec, args)),
-            _BoundTool(history_tools._manage_def, lambda args, _m=history_tools: _run_with_context(bindings, _m._manage_exec, args)),
+            _BoundTool(history_tools._search_def, lambda args, _db=history_db, _workspace=workspace: history_tools.search_history_with_db(_db, _workspace, args)),
+            _BoundTool(history_tools._manage_def, lambda args, _db=history_db, _workspace=workspace: history_tools.manage_history_with_db(_db, _workspace, args)),
         )
 
 # ── 禁止运行时模块级 registry fallback ──

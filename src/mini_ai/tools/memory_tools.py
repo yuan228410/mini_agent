@@ -1,19 +1,7 @@
 """主动记忆工具 — Agent 实时写入/读取长期记忆"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-import contextvars
 
 from ..logger import logger
-
-_memory_store = contextvars.ContextVar("memory_store", default=None)
-
-
-def configure(memory_store=None):
-    if memory_store is not None:
-        _memory_store.set(memory_store)
-
-
-def _get_store():
-    return _memory_store.get()
 
 
 # ── remember ──
@@ -36,8 +24,7 @@ _remember_def: ToolDefinition = {
 }
 
 
-def _remember_exec(args: ToolArgs) -> str:
-    store = _get_store()
+def remember_with_store(store, args: ToolArgs) -> str:
     if not store:
         return "Error: 记忆系统未初始化"
     content = args.get("content", "").strip()
@@ -80,8 +67,7 @@ _recall_def: ToolDefinition = {
 }
 
 
-def _recall_exec(args: ToolArgs) -> str:
-    store = _get_store()
+def recall_with_store(store, args: ToolArgs) -> str:
     if not store:
         return "Error: 记忆系统未初始化"
     keyword = args.get("keyword", "").strip()
@@ -147,8 +133,7 @@ _forget_def: ToolDefinition = {
 }
 
 
-def _forget_exec(args: ToolArgs) -> str:
-    store = _get_store()
+def forget_with_store(store, args: ToolArgs) -> str:
     if not store:
         return "Error: 记忆系统未初始化"
     keyword = args.get("keyword", "").strip()
@@ -175,6 +160,18 @@ def _forget_exec(args: ToolArgs) -> str:
     store.write_memory_at("\n".join(remaining) + "\n" if remaining else "", level)
     logger.info(f"[记忆-] 删除 {removed} 条包含 '{keyword}' 的记忆 level={level}")
     return f"已删除 {removed} 条记忆({level})"
+
+
+def _remember_exec(args: ToolArgs) -> str:
+    return "Error: 记忆系统未初始化"
+
+
+def _recall_exec(args: ToolArgs) -> str:
+    return "Error: 记忆系统未初始化"
+
+
+def _forget_exec(args: ToolArgs) -> str:
+    return "Error: 记忆系统未初始化"
 
 
 # ── 构建可注册的工具模块对象 ──

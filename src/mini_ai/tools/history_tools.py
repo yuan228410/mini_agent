@@ -1,27 +1,9 @@
 """历史搜索工具 — 跨会话全文检索"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-import contextvars
 import json
 import re
 
 from ..logger import logger
-
-_history_db = contextvars.ContextVar("history_db", default=None)
-_current_workspace = contextvars.ContextVar("current_workspace", default="default")
-
-
-def configure(history_db=None, workspace: str = "default"):
-    if history_db is not None:
-        _history_db.set(history_db)
-    _current_workspace.set(workspace)
-
-
-def _get_db():
-    return _history_db.get()
-
-
-def _get_workspace() -> str:
-    return _current_workspace.get()
 
 
 def _compact_message(msg: dict) -> dict:
@@ -128,12 +110,10 @@ _search_def: ToolDefinition = {
 }
 
 
-def _search_exec(args: ToolArgs) -> str:
-    db = _get_db()
+def search_history_with_db(db, workspace: str, args: ToolArgs) -> str:
     if not db:
         return "Error: 历史数据库未初始化"
 
-    workspace = _get_workspace()
     keyword = args.get("keyword", "")
     date_from = args.get("date_from", "")
     date_to = args.get("date_to", "")
@@ -184,6 +164,10 @@ class _ToolMod:
         self.execute = execute
 
 
+def _search_exec(args: ToolArgs) -> str:
+    return "Error: 历史数据库未初始化"
+
+
 search_history_mod = _ToolMod(_search_def, _search_exec)
 
 _manage_def: ToolDefinition = {
@@ -209,12 +193,10 @@ _manage_def: ToolDefinition = {
     },
 }
 
-def _manage_exec(args: ToolArgs) -> str:
-    db = _get_db()
+def manage_history_with_db(db, workspace: str, args: ToolArgs) -> str:
     if not db:
         return "Error: 历史数据库未初始化"
 
-    workspace = _get_workspace()
     action = args.get("action", "list")
     confirmed = args.get("confirmed", False)
 
@@ -289,6 +271,11 @@ def _manage_exec(args: ToolArgs) -> str:
         return f"已彻底删除所有 {total_deleted} 条历史消息"
 
     return f"未知 action: {action}"
+
+
+def _manage_exec(args: ToolArgs) -> str:
+    return "Error: 历史数据库未初始化"
+
 
 manage_history_mod = _ToolMod(_manage_def, _manage_exec)
 ALL_HISTORY_TOOLS = [search_history_mod, manage_history_mod]
