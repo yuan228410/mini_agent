@@ -233,15 +233,18 @@ def test_history_db_batch_normalizes_message_metadata(tmp_path):
 
 def test_team_state_boundaries_use_structured_models(tmp_path):
     import typing
-    from mini_ai.core.runtime_types import BlackboardDetailedSnapshot, BlackboardEntryDict, BlackboardProtocol, BlackboardTextSnapshot, InboxMessageDict, InboxMessageTypeValue, TeamMemberStatus, TeamMemberSummary, WorkflowTaskEndDict, WorkflowTaskInfoDict, WorkflowTaskStartDict
+    from mini_ai.core.runtime_types import BlackboardDetailedSnapshot, BlackboardEntryDict, BlackboardProtocol, BlackboardTextSnapshot, InboxMessageDict, InboxMessageTypeValue, MessageBusProtocol, TeamMemberStatus, TeamMemberSummary, WorkflowTaskEndDict, WorkflowTaskInfoDict, WorkflowTaskStartDict
     from mini_ai.team.blackboard import Blackboard
     from mini_ai.team.bus import MessageBus
     from mini_ai.team.models import BlackboardEntry, InboxMessage, normalize_inbox_message_type, normalize_team_status, team_member_summary, WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
     from mini_ai.team.task_graph import TaskGraph, TaskNode, TaskStatus
+    from mini_ai.tools import team_tools
 
     assert typing.get_type_hints(InboxMessage.from_dict)["data"] == InboxMessageDict
     assert typing.get_type_hints(InboxMessage.to_dict)["return"] == InboxMessageDict
     assert typing.get_type_hints(normalize_inbox_message_type)["return"] == InboxMessageTypeValue
+    assert typing.get_type_hints(MessageBus.send)["msg_type"] == InboxMessageTypeValue
+    assert typing.get_type_hints(MessageBusProtocol.send)["msg_type"] == InboxMessageTypeValue
     assert typing.get_type_hints(BlackboardEntry.from_dict)["data"] == BlackboardEntryDict | str
     assert typing.get_type_hints(BlackboardEntry.to_dict)["return"] == BlackboardEntryDict
     assert typing.get_type_hints(Blackboard.get)["return"] == str | object
@@ -268,6 +271,7 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
 
     bus = MessageBus(tmp_path / "inbox")
     assert bus.send("lead", "worker", "hello") == "已送达 worker 的 inbox"
+    assert bus.send("lead", "worker", "bad", "invalid") == "Error: invalid msg_type 'invalid'"
     peeked = bus.read_inbox("worker", peek=True)
     inbox = bus.read_inbox("worker")
     assert peeked == inbox == [{
@@ -277,6 +281,10 @@ def test_team_state_boundaries_use_structured_models(tmp_path):
         "timestamp": inbox[0]["timestamp"],
     }]
     assert bus.read_inbox("worker") == []
+    assert team_tools.send_from_args(bus, "lead", {"to": "worker", "content": "normalized", "msg_type": "invalid"}) == "已送达 worker 的 inbox"
+    normalized = bus.read_inbox("worker")
+    assert normalized[0]["type"] == "message"
+    assert normalized[0]["content"] == "normalized"
 
     graph = TaskGraph(bb)
     task = TaskNode(id="task", agent="subagent:tester", prompt="x" * 120, depends_on=["dep"])

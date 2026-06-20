@@ -1,27 +1,69 @@
-from ..core.runtime_types import ToolArgs, ToolDefinition
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """Team 协作工具集：spawn_teammate, list_teammates, send_message, read_inbox, broadcast"""
 import contextvars
 import json
-
-from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
+from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES, InboxMessageTypeValue, MessageBusProtocol, TeamManagerProtocol, ToolArgs, ToolDefinition
+from ..team.models import normalize_inbox_message_type
 from ..logger import logger
 
-_bus = None
-_manager = None
+_bus: MessageBusProtocol | None = None
+_manager: TeamManagerProtocol | None = None
 
 _caller = contextvars.ContextVar("team_caller", default="assistant")
 
 
-def configure(bus=None, manager=None):
+def configure(bus: MessageBusProtocol | None = None, manager: TeamManagerProtocol | None = None) -> None:
     global _bus, _manager
     if bus is not None:
         _bus = bus
     if manager is not None:
         _manager = manager
 
+
 def _sender() -> str: return _caller.get()
+
+
+def _require_bus() -> MessageBusProtocol:
+    if _bus is None:
+        raise RuntimeError("team message bus is not configured")
+    return _bus
+
+
+def _require_manager() -> TeamManagerProtocol:
+    if _manager is None:
+        raise RuntimeError("team manager is not configured")
+    return _manager
+
+
+def _arg_text(args: ToolArgs, key: str, default: str = "") -> str:
+    value = args.get(key, default)
+    return value if isinstance(value, str) else str(value)
+
+
+def _arg_msg_type(args: ToolArgs, key: str = "msg_type") -> InboxMessageTypeValue:
+    return normalize_inbox_message_type(args.get(key, "message"))
+
+
+def send_from_args(bus: MessageBusProtocol, sender: str, args: ToolArgs) -> str:
+    return bus.send(sender, _arg_text(args, "to"), _arg_text(args, "content"), _arg_msg_type(args))
+
+
+def broadcast_from_args(bus: MessageBusProtocol, manager: TeamManagerProtocol, sender: str, args: ToolArgs) -> str:
+    return bus.broadcast(sender, _arg_text(args, "content"), manager.member_names())
+
+
+def dismiss_team(bus: MessageBusProtocol, manager: TeamManagerProtocol) -> str:
+    targets = []
+    with manager.lock:
+        for member in manager.config.get("members", []):
+            if member["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
+                targets.append(member["name"])
+    if not targets:
+        return "当前没有活跃的队友"
+    for name in targets:
+        bus.send("lead", name, "任务结束，请退出。", "shutdown_request")
+    return f"已发送 shutdown 请求给 {len(targets)} 位队友: {', '.join(targets)}"
 
 
 # ── spawn_teammate ──
@@ -45,7 +87,7 @@ _spawn_def: ToolDefinition = {
 
 
 def _spawn(args: ToolArgs) -> str:
-    return _manager.spawn(args.get("name", ""), args.get("role", ""), args.get("prompt", ""))
+    return _require_manager().spawn(_arg_text(args, "name"), _arg_text(args, "role"), _arg_text(args, "prompt"))
 
 
 # ── list_teammates ──
@@ -61,7 +103,7 @@ _list_def: ToolDefinition = {
 
 
 def _list(args: ToolArgs) -> str:
-    return _manager.list_all()
+    return _require_manager().list_all()
 
 
 # ── send_message ──
@@ -86,10 +128,9 @@ _send_def: ToolDefinition = {
 
 def _send(args: ToolArgs) -> str:
     caller = _sender()
-    to = args.get("to", "")
+    to = _arg_text(args, "to")
     logger.debug(f"[send→] caller={caller} to={to}")
-    return _bus.send(caller, to, args.get("content", ""),
-                     args.get("msg_type", "message"))
+    return send_from_args(_require_bus(), caller, args)
 
 
 # ── read_inbox ──
@@ -107,7 +148,7 @@ _read_def: ToolDefinition = {
 def _read(args: ToolArgs) -> str:
     caller = _sender()
     logger.debug(f"[read_inbox] caller={caller}")
-    messages = _bus.read_inbox(caller)
+    messages = _require_bus().read_inbox(caller)
     return json.dumps(messages, ensure_ascii=False, indent=2)
 
 
@@ -130,7 +171,7 @@ _broadcast_def: ToolDefinition = {
 
 
 def _broadcast(args: ToolArgs) -> str:
-    return _bus.broadcast(_sender(), args.get("content", ""), _manager.member_names())
+    return broadcast_from_args(_require_bus(), _require_manager(), _sender(), args)
 
 
 # ── 构建可注册的工具模块对象 ──
@@ -160,16 +201,7 @@ _dismiss_def: ToolDefinition = {
 
 
 def _dismiss(args: ToolArgs) -> str:
-    targets = []
-    with _manager.lock:
-        for m in _manager.config.get("members", []):
-            if m["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
-                targets.append(m["name"])
-    if not targets:
-        return "当前没有活跃的队友"
-    for name in targets:
-        _bus.send("lead", name, "任务结束，请退出。", "shutdown_request")
-    return f"已发送 shutdown 请求给 {len(targets)} 位队友: {', '.join(targets)}"
+    return dismiss_team(_require_bus(), _require_manager())
 
 
 _dismiss_mod = _ToolMod(_dismiss_def, _dismiss)

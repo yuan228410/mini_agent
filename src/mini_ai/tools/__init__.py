@@ -5,7 +5,6 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from ..config import TOOL
-from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
 from datetime import datetime, timezone, timedelta
 from ..logger import logger
 
@@ -129,24 +128,15 @@ class ToolRegistry:
             return team_tools._sender()
 
         bound = [
-            _BoundTool(team_tools._spawn_def, lambda args, _m=manager: _m.spawn(args.get("name", ""), args.get("role", ""), args.get("prompt", ""))),
+            _BoundTool(team_tools._spawn_def, lambda args, _m=manager: _m.spawn(team_tools._arg_text(args, "name"), team_tools._arg_text(args, "role"), team_tools._arg_text(args, "prompt"))),
             _BoundTool(team_tools._list_def, lambda args, _m=manager: _m.list_all()),
-            _BoundTool(team_tools._send_def, lambda args, _b=bus: _b.send(sender(), args.get("to", ""), args.get("content", ""), args.get("msg_type", "message"))),
+            _BoundTool(team_tools._send_def, lambda args, _b=bus: team_tools.send_from_args(_b, sender(), args)),
             _BoundTool(team_tools._read_def, lambda args, _b=bus: json.dumps(_b.read_inbox(sender()), ensure_ascii=False, indent=2)),
-            _BoundTool(team_tools._broadcast_def, lambda args, _b=bus, _m=manager: _b.broadcast(sender(), args.get("content", ""), _m.member_names())),
+            _BoundTool(team_tools._broadcast_def, lambda args, _b=bus, _m=manager: team_tools.broadcast_from_args(_b, _m, sender(), args)),
         ]
 
         def dismiss(args, _b=bus, _m=manager):
-            targets = []
-            with _m.lock:
-                for member in _m.config.get("members", []):
-                    if member["status"] in ACTIVE_TEAM_MEMBER_STATUSES:
-                        targets.append(member["name"])
-            if not targets:
-                return "当前没有活跃的队友"
-            for name in targets:
-                _b.send("lead", name, "任务结束，请退出。", "shutdown_request")
-            return f"已发送 shutdown 请求给 {len(targets)} 位队友: {', '.join(targets)}"
+            return team_tools.dismiss_team(_b, _m)
 
         bound.append(_BoundTool(team_tools._dismiss_def, dismiss))
         self.add_tools(*bound)
