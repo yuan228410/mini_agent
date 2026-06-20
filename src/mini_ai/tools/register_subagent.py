@@ -1,7 +1,5 @@
 """动态注册子代理工具 — 对话中创建新的子代理类型"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
-from pathlib import Path
-
 from ..logger import logger
 
 
@@ -42,7 +40,7 @@ def execute_with_context(loader, args: ToolArgs, *, refresh_dispatch=None) -> st
     if not loader:
         return "Error: 子代理加载器未配置"
 
-    if name in loader.specs:
+    if loader.has(name):
         return f"Error: 子代理 '{name}' 已存在，如需覆盖请先删除"
 
     try:
@@ -53,24 +51,10 @@ def execute_with_context(loader, args: ToolArgs, *, refresh_dispatch=None) -> st
         max_turns = 10
 
     tools_str = ", ".join(str(t) for t in tools) if tools else ""
-
-    frontmatter = []
-    frontmatter.append(f"name: {name}")
-    frontmatter.append(f"description: {description}")
-    if tools_str:
-        frontmatter.append(f"tools: {tools_str}")
-    frontmatter.append(f"max_turns: {max_turns}")
-
-    md_content = "---\n" + "\n".join(frontmatter) + "\n---\n\n" + prompt + "\n"
-
-    subagents_dir = getattr(loader, "subagents_dir", None)
-    if subagents_dir:
-        dest = Path(subagents_dir) / f"{name}.md"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(md_content, encoding="utf-8")
+    dest = loader.create(name, description, prompt, [str(t) for t in tools], max_turns)
+    if dest:
         logger.info(f"[注册子代理] 已写入 {dest}")
 
-    loader._load_all()
     if refresh_dispatch:
         refresh_dispatch()
         logger.info("[注册子代理] 已刷新 dispatch_subagent 工具定义")

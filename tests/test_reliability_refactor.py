@@ -861,6 +861,8 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
 
     protocol_sub_list = typing.get_type_hints(SubagentLoaderProtocol.list_specs)
     protocol_sub_get = typing.get_type_hints(SubagentLoaderProtocol.get)
+    protocol_sub_has = typing.get_type_hints(SubagentLoaderProtocol.has)
+    protocol_sub_create = typing.get_type_hints(SubagentLoaderProtocol.create)
     protocol_inbox = typing.get_type_hints(MessageBusProtocol.read_inbox)
     protocol_team = typing.get_type_hints(TeamManagerProtocol)
     protocol_team_list = typing.get_type_hints(TeamManagerProtocol.list_all)
@@ -872,6 +874,8 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     loader_parse = typing.get_type_hints(SubagentLoader._parse_frontmatter)
     loader_list = typing.get_type_hints(SubagentLoader.list_specs)
     loader_get = typing.get_type_hints(SubagentLoader.get)
+    loader_has = typing.get_type_hints(SubagentLoader.has)
+    loader_create = typing.get_type_hints(SubagentLoader.create)
     bus_read = typing.get_type_hints(MessageBus.read_inbox)
     inbox_to_dict = typing.get_type_hints(InboxMessage.to_dict)
     manager_load = typing.get_type_hints(TeammateManager._load_config)
@@ -882,6 +886,10 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
 
     assert protocol_sub_list["return"] is SubagentListText
     assert protocol_sub_get["return"] == SubagentSpec | None
+    assert protocol_sub_has["return"] is bool
+    assert protocol_sub_create["tools"] == list[str]
+    assert protocol_sub_create["max_turns"] is int
+    assert protocol_sub_create["return"] == Path | None
     assert protocol_inbox["return"] == list[InboxMessageDict]
     assert protocol_inbox["peek"] is bool
     assert "config" not in protocol_team
@@ -895,6 +903,9 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
     assert loader_parse["return"] == tuple[MetadataDict, str]
     assert loader_list["return"] is SubagentListText
     assert loader_get["return"] == SubagentSpec | None
+    assert loader_has["return"] is bool
+    assert loader_create["tools"] == list[str]
+    assert loader_create["return"] == Path | None
     assert bus_read["return"] == list[InboxMessageDict]
     assert inbox_to_dict["return"] is InboxMessageDict
     assert manager_load["return"] is TeamConfigDict
@@ -1269,6 +1280,9 @@ def test_subagent_tools_do_not_keep_module_level_runtime_state():
             "def configure",
             "_loader =",
             "_subagents_dir",
+            "subagents_dir",
+            "loader.specs",
+            "loader._load_all",
             "_registry_ctx",
             "registry._by_name",
             "dispatch_subagent._loader",

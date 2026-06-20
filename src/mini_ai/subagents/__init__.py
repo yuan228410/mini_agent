@@ -67,3 +67,20 @@ class SubagentLoader:
 
     def get(self, name: str) -> SubagentSpec | None:
         return self.specs.get(name)
+
+    def has(self, name: str) -> bool:
+        return name in self.specs
+
+    def create(self, name: str, description: str, prompt: str, tools: list[str], max_turns: int) -> Path | None:
+        tools_str = ", ".join(str(t) for t in tools) if tools else ""
+        frontmatter = [f"name: {name}", f"description: {description}"]
+        if tools_str:
+            frontmatter.append(f"tools: {tools_str}")
+        frontmatter.append(f"max_turns: {max_turns}")
+
+        md_content = "---\n" + "\n".join(frontmatter) + "\n---\n\n" + prompt + "\n"
+        dest = self.subagents_dir / f"{name}.md"
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(md_content, encoding="utf-8")
+        self._load_all()
+        return dest
