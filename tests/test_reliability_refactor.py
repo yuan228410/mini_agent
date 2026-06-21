@@ -1612,6 +1612,20 @@ def test_web_model_routes_use_runtime_settings_boundary():
     assert "model_config_for_name" in runtime_helpers
 
 
+def test_web_skill_routes_use_runtime_settings_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_skills = (repo / "src/mini_ai/web/routes/skills.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+
+    assert "from ...config import" not in routes_skills
+    assert "DATA_DIR" not in routes_skills
+    assert "SKILL_PATHS" not in routes_skills
+    assert "user_data_dir" not in routes_skills
+    assert "skill_loader_for_user_workspace" in routes_skills
+    assert "skill_loader_for_user_workspace" in runtime_helpers
+    assert "user_data_dir_for_settings" in runtime_helpers
+
+
 def test_cli_display_uses_runtime_settings_boundary():
     repo = Path(__file__).resolve().parents[1]
     display_text = (repo / "src/mini_ai/cli/display.py").read_text()

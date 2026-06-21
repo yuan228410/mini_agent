@@ -5,9 +5,13 @@ models and create request contexts at the adapter boundary.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
+from ..skills import SkillLoader
+from ..workspace import WorkspaceManager
 
 
 def current_settings_snapshot() -> SettingsSnapshot:
@@ -29,6 +33,38 @@ def available_model_names(settings: SettingsSnapshot | None = None) -> list[str]
 def model_config_for_name(model_name: str | None, settings: SettingsSnapshot | None = None) -> ModelConfigDict | None:
     runtime_settings = settings or current_settings_snapshot()
     return runtime_settings.model_config_for(model_name)
+
+
+def user_data_dir_for_settings(username: str, settings: SettingsSnapshot | None = None) -> Path:
+    """Return a user data directory from runtime path settings."""
+
+    runtime_settings = settings or current_settings_snapshot()
+    data_dir = runtime_settings.paths.data_dir or Path.home() / ".mini_ai"
+    user = username or "default"
+    user_dir = data_dir / "users" / user
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir
+
+
+def skill_loader_for_user_workspace(username: str = "", workspace: str = "", settings: SettingsSnapshot | None = None) -> SkillLoader:
+    """Build a Web skill loader from runtime paths plus user/workspace tiers."""
+
+    runtime_settings = settings or current_settings_snapshot()
+    data_dir = runtime_settings.paths.data_dir or Path.home() / ".mini_ai"
+    user_dir = user_data_dir_for_settings(username, runtime_settings)
+    user_skills_dir = user_dir / "skills"
+    ws_skills_dir = None
+    if workspace:
+        ws_mgr = WorkspaceManager(user_dir, ensure_default=False)
+        ws = ws_mgr.get(workspace)
+        if ws:
+            ws_skills_dir = ws.ws_dir / "skills"
+    return SkillLoader(
+        data_dir / "skills",
+        runtime_settings.paths.skill_paths,
+        user_skills_dir=user_skills_dir,
+        workspace_skills_dir=ws_skills_dir,
+    )
 
 
 def settings_for_model(base_settings: SettingsSnapshot, model_name: str | None) -> SettingsSnapshot:

@@ -1,10 +1,9 @@
 """技能接口"""
 from fastapi import APIRouter, Query, HTTPException
-from pathlib import Path
 
-from ...config import DATA_DIR, SKILL_PATHS, user_data_dir
 from ...skills import SkillLoader
 from ...tools import install_skill as install_skill_tool
+from ..runtime_helpers import skill_loader_for_user_workspace
 from ..route_types import (
     RouteErrorResponse,
     SkillCreateResponse,
@@ -19,16 +18,7 @@ router = APIRouter()
 
 
 def _get_skill_loader(username: str, workspace: str) -> SkillLoader:
-    user_skills_dir = user_data_dir(username) / "skills"
-    ws_dir = None
-    if workspace:
-        from ...workspace import WorkspaceManager
-        ws_mgr = WorkspaceManager(user_data_dir(username), ensure_default=False)
-        ws = ws_mgr.get(workspace)
-        if ws:
-            ws_dir = ws.ws_dir
-    ws_skills_dir = ws_dir / "skills" if ws_dir else None
-    return SkillLoader(DATA_DIR / "skills", SKILL_PATHS, user_skills_dir=user_skills_dir, workspace_skills_dir=ws_skills_dir)
+    return skill_loader_for_user_workspace(username, workspace)
 
 
 @router.get("/skills")
