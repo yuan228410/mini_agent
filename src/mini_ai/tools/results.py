@@ -1,0 +1,25 @@
+"""Standard tool execution result DTOs."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExecutionResult:
+    """Normalized result for one tool invocation.
+
+    Tool implementations may still return plain strings.  The registry normalizes
+    both forms so scheduler/policy layers can consume metadata without parsing
+    user-visible text.
+    """
+
+    content: str = ""
+    ok: bool = True
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_value(cls, value: object) -> "ToolExecutionResult":
+        if isinstance(value, cls):
+            return value
+        return cls(content="" if value is None else str(value))

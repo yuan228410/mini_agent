@@ -4,6 +4,7 @@ import subprocess
 
 from ..logger import logger
 from .policy import enforce_command_policy
+from .results import ToolExecutionResult
 
 definition: ToolDefinition = {
     "type": "function",
@@ -23,7 +24,7 @@ definition: ToolDefinition = {
 }
 
 
-def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str:
+def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str | ToolExecutionResult:
     command = args.get("command", "")
     if not command or not isinstance(command, str):
         return "Error: 缺少 command 参数"
@@ -31,7 +32,11 @@ def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str:
 
     verdict = enforce_command_policy(command)
     if not verdict.allowed:
-        return f"Error: 命令被策略拒绝：{verdict.reason}"
+        return ToolExecutionResult(
+            content=f"Error: 命令被策略拒绝：{verdict.reason}",
+            ok=False,
+            metadata={"policy_denied": True, "policy": verdict.to_metadata()},
+        )
 
     cwd = args.get("cwd") or default_cwd or None
     try:
@@ -67,5 +72,5 @@ def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str:
     return output
 
 
-def execute(args: ToolArgs) -> str:
+def execute(args: ToolArgs) -> str | ToolExecutionResult:
     return execute_with_cwd(None, args)

@@ -14,7 +14,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket
 
-from ...config import MODEL_CONFIG, RequestContext, get_model_config
 from ...core.events import DisplayEvent, DisplayEventType
 from ...core.runtime_types import DisplayWireEvent, MessageDict, PlanArtifactDict
 from ...logger import logger
@@ -37,6 +36,7 @@ from ..session_manager import (
     _update_meta_cache, _build_meta,
 )
 from ..chat_runner import run_tool_loop_sync
+from ..runtime_helpers import request_context_for_settings, settings_for_model
 from ...plan.service import PlanService
 from ...plan.store import PlanStore
 
@@ -339,8 +339,8 @@ async def chat_ws_endpoint(ws: WebSocket):
                         session_key = cache_key(username, ws_name, sid)
                         sm = SessionManager.instance()
                         model_name = sm.get_model(session_key)
-                        cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
-                        ctx = RequestContext(model_config=cfg, display=None)
+                        settings = settings_for_model(comp["settings"], model_name)
+                        ctx = request_context_for_settings(settings, display=None)
 
                         try:
                             from ...llm import chat

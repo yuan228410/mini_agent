@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..config import DATA_DIR, PACKAGE_DIR, get_model_config
+from ..config import DATA_DIR, PACKAGE_DIR
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..core import ApplicationService, RunTurnOptions, build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -24,6 +24,7 @@ from .session_manager import (
     resolve_base, get_or_create_components, build_system_prompt,
     _save_session_name, _update_meta_cache,
 )
+from .runtime_helpers import settings_for_model
 from ..utils import now_ts
 
 # 线程池配置
@@ -78,8 +79,8 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 disp = WebDisplay(queue, loop, session_id=comp_key, suppress_text=plan_turn)
                 from .deps import SUBAGENT_LOADER, _MCP_LOADER
                 base_settings = comp.get("settings")
-                cfg = get_model_config(model_name) if model_name else None
-                runtime_settings = base_settings.with_model_config(cfg) if (base_settings and cfg) else base_settings
+                runtime_settings = settings_for_model(base_settings, model_name) if base_settings else None
+                cfg = runtime_settings.model.to_dict() if runtime_settings else None
                 runtime = build_session_runtime(
                     identity=SessionIdentity(
                         username=username or "default",

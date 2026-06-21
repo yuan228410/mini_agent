@@ -10,6 +10,7 @@ from ..logger import logger
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 from .cache import ToolCache, get_tool_cache
 from .metadata import metadata_for, normalize_tool_definition
+from .results import ToolExecutionResult
 from ..core.execution import ExecutionBudget
 from ..core.runtime_types import MessageDict, ToolArgs, ToolDefinition, ToolWirePayload
 from ..core.tool_models import ToolCall, ToolResult
@@ -24,7 +25,7 @@ def _truncate(output: str, max_chars: int = 8000) -> str:
 class _BoundTool:
     """Small module-like wrapper binding a tool definition to a closure."""
 
-    def __init__(self, definition: ToolDefinition, execute: Callable[[ToolArgs], str], metadata=None):
+    def __init__(self, definition: ToolDefinition, execute: Callable[[ToolArgs], object], metadata=None):
         self.definition = definition
         self.execute = execute
         self.metadata = metadata
@@ -167,13 +168,21 @@ class ToolRegistry:
     def _is_allowed(self, name: str) -> bool:
         return self._allowed_tools is None or name in self._allowed_tools
 
-    def dispatch(self, name: str, args: ToolArgs) -> str | None:
+    def dispatch_result(self, name: str, args: ToolArgs) -> ToolExecutionResult | None:
         if not self._is_allowed(name):
-            return f"Error: 工具 '{name}' 不在当前执行策略允许范围内"
+            return ToolExecutionResult(
+                content=f"Error: 工具 '{name}' 不在当前执行策略允许范围内",
+                ok=False,
+                metadata={"policy_denied": True, "reason": "tool_not_allowed"},
+            )
         mod = self._by_name.get(name)
         if not mod:
             return None
-        return mod.execute(args)
+        return ToolExecutionResult.from_value(mod.execute(args))
+
+    def dispatch(self, name: str, args: ToolArgs) -> str | None:
+        result = self.dispatch_result(name, args)
+        return result.content if result is not None else None
 
     def handle_tool_calls(self, msg: MessageDict, messages: list[MessageDict], display=None, persist_fn=None) -> bool:
         calls = [ToolCall.from_dict(tc) for tc in msg["tool_calls"]]
@@ -264,7 +273,8 @@ class ToolRegistry:
             display.tool_call_start(name, args_summary, tc.id)
         t0 = time.monotonic()
         try:
-            output = self.dispatch(name, args)
+            execution_result = self.dispatch_result(name, args)
+            output = execution_result.content if execution_result is not None else None
             if name == "update_todos" and display and output and not output.startswith("Error:"):
                 display.todos_updated(output)
             # 写入缓存
@@ -339,7 +349,8 @@ class ToolRegistry:
                 if display:
                     display.tool_call_start(name, json.dumps(args, ensure_ascii=False), tc.id)
                 t0 = time.monotonic()
-                result = ctx_copy.run(self.dispatch, name, args)
+                execution_result = ctx_copy.run(self.dispatch_result, name, args)
+                result = execution_result.content if execution_result is not None else None
                 elapsed = time.monotonic() - t0
                 if name == "update_todos" and display and result and not result.startswith("Error:"):
                     display.todos_updated(result)

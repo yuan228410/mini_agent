@@ -392,11 +392,13 @@ def test_config_tool_lists_session_bound_registry_tools_only():
     assert "read_file" not in output
 
 
-def test_web_chat_runner_does_not_import_model_config_global():
+def test_web_runtime_paths_do_not_import_model_config_global():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
-    text = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
-    assert "MODEL_CONFIG" not in text
-    assert "with_model_config" in text
+    for rel in ["web/chat_runner.py", "web/routes/chat.py"]:
+        text = (root / rel).read_text(encoding="utf-8")
+        assert "MODEL_CONFIG" not in text
+    assert "settings_for_model" in (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    assert "request_context_for_settings" in (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
 
 
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
@@ -495,7 +497,12 @@ def test_tool_registry_scoped_allowlist_filters_definitions_and_dispatch():
 
     assert [d["function"]["name"] for d in registry.get_definitions()] == ["read_file"]
     assert registry.dispatch("read_file", {}) == "allowed"
-    assert "不在当前执行策略" in registry.dispatch("write_file", {})
+    denied = registry.dispatch_result("write_file", {})
+    assert denied is not None
+    assert denied.ok is False
+    assert denied.metadata["policy_denied"] is True
+    assert "不在当前执行策略" in denied.content
+    assert registry.dispatch("write_file", {}) == denied.content
 
 
 def test_command_policy_rejects_destructive_commands():
@@ -524,6 +531,8 @@ def test_command_policy_rejects_destructive_commands():
         verdict = classify_command(command)
         assert verdict.risk is CommandRisk.DENY, command
         assert verdict.allowed is False
+        assert verdict.code
+        assert verdict.to_metadata()["allowed"] is False
 
     safe = [
         "pwd",
@@ -552,8 +561,11 @@ def test_run_command_enforces_command_policy(monkeypatch):
     assert len(calls) == 1
 
     denied = run_command.execute({"command": "rm -rf /tmp/demo"})
-    assert "命令被策略拒绝" in denied
-    assert "递归强制删除" in denied
+    assert denied.ok is False
+    assert denied.metadata["policy_denied"] is True
+    assert denied.metadata["policy"]["code"] == "recursive_force_delete"
+    assert "命令被策略拒绝" in denied.content
+    assert "递归强制删除" in denied.content
     assert len(calls) == 1
 
 
