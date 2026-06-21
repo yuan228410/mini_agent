@@ -517,6 +517,26 @@ def test_derived_agent_tools_use_runtime_settings_boundaries():
 
 
 
+def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
+    root = Path(__file__).resolve().parents[1] / "src/mini_ai"
+    checked = {
+        "tools/read_image.py": ("from ..config import IMAGE", "IMAGE.get"),
+        "tools/dispatch_subagent.py": ("from ..config import IMAGE", "IMAGE.get"),
+        "tools/web_fetch.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get"),
+        "tools/install_skill.py": ("from ..config import TIMEOUTS", "TIMEOUTS["),
+        "team/loop.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get"),
+    }
+
+    offenders = []
+    for rel, forbidden in checked.items():
+        text = (root / rel).read_text()
+        hits = [pattern for pattern in forbidden if pattern in text]
+        if hits:
+            offenders.append({"path": rel, "hits": hits})
+    assert offenders == []
+
+
+
 def test_tool_registry_executes_mixed_calls_in_order_with_bounded_parallelism():
     from mini_ai.core.execution import ExecutionBudget
 

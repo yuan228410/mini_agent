@@ -17,6 +17,7 @@ from ..utils import now_ts
 from .display_protocol import DisplayProtocol
 from .persister import HistoryPersister
 from .runtime_types import CompactorProtocol, HistoryDBProtocol, MessageBusProtocol, MessageDict, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol
+from .settings import TimeoutSettings
 
 
 class ChatSession:
@@ -36,7 +37,8 @@ class ChatSession:
                  bus: MessageBusProtocol | None = None, team_mgr=None, lead_event: threading.Event | None = None,
                  context_length: int = 256000,
                  workspace: str = "", session_id: str = "",
-                 tool_registry: ToolRegistryProtocol | None = None):
+                 tool_registry: ToolRegistryProtocol | None = None,
+                 timeout_settings: TimeoutSettings | None = None):
         self.messages = messages
         self.compactor = compactor
         self.history_db = history_db
@@ -47,6 +49,7 @@ class ChatSession:
         self.workspace = workspace
         self.session_id = session_id
         self.tool_registry = tool_registry
+        self.timeout_settings = timeout_settings
         self._persister = HistoryPersister(history_db, workspace, session_id)
 
     def run(self, user_input: str, tools: list[ToolDefinition],
@@ -133,6 +136,7 @@ class ChatSession:
             _inject_todos, display,
             history_db=self.history_db, ctx=ctx,
             workspace=self.workspace, session_id=self.session_id,
+            timeout_settings=self.timeout_settings,
         )
 
         cleanup_inbox(self.bus)

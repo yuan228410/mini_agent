@@ -1,7 +1,7 @@
 """队友轮询与回禀处理"""
 import time
 
-from ..config import TIMEOUTS
+from ..core.settings import TimeoutSettings
 from ..core.runtime_types import InboxMessageDict
 from ..logger import logger
 from ..utils import now_ts
@@ -31,9 +31,7 @@ def poll_inbox(bus, name="lead"):
 def has_active_teammates(team_mgr):
     return team_mgr.has_working_members()
 
-def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, history_db=None, ctx=None, workspace="default", session_id=""):
-    from datetime import datetime, timezone, timedelta
-    
+def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, inject_fn, disp, history_db=None, ctx=None, workspace="default", session_id="", timeout_settings: TimeoutSettings | None = None):
     # run_tool_loop 内部每轮已检查 inbox 并注入回禀，这里只等队友完成 + 处理 loop 退出后到达的消息
     if not has_active_teammates(team_mgr):
         return None
@@ -42,9 +40,11 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
     disp.info("⏳ 队友工作中，等待回禀...")
     waited = 0
     last_msg = None
-    poll_interval = TIMEOUTS.get("lead_poll_interval", 2)
+    timeouts = timeout_settings or TimeoutSettings()
+    poll_interval = timeouts.lead_poll_interval
+    lead_wait = timeouts.lead_wait
 
-    while waited < TIMEOUTS.get("lead_wait", 1800):
+    while waited < lead_wait:
         if not has_active_teammates(team_mgr):
             break
         lead_event.clear()
@@ -77,7 +77,7 @@ def wait_for_teammates(bus, team_mgr, lead_event, run_loop_fn, messages, tools, 
     if not has_active_teammates(team_mgr):
         logger.info("[等待] 所有队友已完成，退出等待")
     else:
-        logger.warning(f"[等待] 超时 ({TIMEOUTS.get('lead_wait', 1800)}s)，强制退出等待")
+        logger.warning(f"[等待] 超时 ({lead_wait}s)，强制退出等待")
 
     return last_msg
 

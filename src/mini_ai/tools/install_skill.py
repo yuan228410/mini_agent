@@ -7,7 +7,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-from ..config import TIMEOUTS
+from ..core.settings import TimeoutSettings
 from ..logger import logger
 
 definition: ToolDefinition = {
@@ -33,9 +33,10 @@ def _is_url(source: str) -> bool:
     return source.startswith("http://") or source.startswith("https://")
 
 
-def _download(url: str) -> str:
+def _download(url: str, timeout_settings: TimeoutSettings | None = None) -> str:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=TIMEOUTS["web_fetch"]) as resp:
+    timeouts = timeout_settings or TimeoutSettings()
+    with urllib.request.urlopen(req, timeout=timeouts.web_fetch) as resp:
         suffix = _guess_suffix(url, resp)
         fd, path = tempfile.mkstemp(suffix=suffix, prefix="mini_ai_skill_")
         with open(fd, "wb") as f:
@@ -123,7 +124,7 @@ def _install_from_content(loader, name: str, content: str, dest_dir: Path) -> st
     return f"技能 '{name}' 已安装到 {skill_file}{summary}\n\n请使用 load_skill 读取该技能的完整内容，了解其功能和使用方式。"
 
 
-def _install_from_archive(loader, name: str, source: str, dest_dir: Path) -> str:
+def _install_from_archive(loader, name: str, source: str, dest_dir: Path, timeout_settings: TimeoutSettings | None = None) -> str:
     if dest_dir.exists():
         shutil.rmtree(dest_dir)
 
@@ -132,7 +133,7 @@ def _install_from_archive(loader, name: str, source: str, dest_dir: Path) -> str
     try:
         if _is_url(source):
             logger.info(f"[安装技能] 下载 {source}")
-            archive_path = _download(source)
+            archive_path = _download(source, timeout_settings)
             is_temp = True
         else:
             local = Path(source).expanduser().resolve()
@@ -168,7 +169,7 @@ def _install_from_archive(loader, name: str, source: str, dest_dir: Path) -> str
             Path(archive_path).unlink(missing_ok=True)
 
 
-def _execute_with_loader(loader, args: ToolArgs) -> str:
+def _execute_with_loader(loader, args: ToolArgs, timeout_settings: TimeoutSettings | None = None) -> str:
     name = args.get("name", "")
     source = args.get("source")
     content = args.get("content")
@@ -192,11 +193,11 @@ def _execute_with_loader(loader, args: ToolArgs) -> str:
 
     if content:
         return _install_from_content(loader, name, content, dest_dir)
-    return _install_from_archive(loader, name, source, dest_dir)
+    return _install_from_archive(loader, name, source, dest_dir, timeout_settings)
 
 
-def install_skill_with_loader(loader, args: ToolArgs) -> str:
-    return _execute_with_loader(loader, args)
+def install_skill_with_loader(loader, args: ToolArgs, timeout_settings: TimeoutSettings | None = None) -> str:
+    return _execute_with_loader(loader, args, timeout_settings)
 
 
 def _run_with_loader(loader, args: ToolArgs) -> str:

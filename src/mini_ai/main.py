@@ -579,6 +579,7 @@ def main():
                     cmd.run_tool_fn, messages, _lead_tool_defs(_app_ctx, tool_registry),
                     _inject_todos, disp, history_db=history_db, ctx=cmd.ctx,
                     workspace=_get_workspace_name(), session_id=current_session_id,
+                    timeout_settings=session.runtime.settings.timeouts if session.runtime and session.runtime.settings else None,
                 )
                 if teammate_msg:
                     msg = teammate_msg

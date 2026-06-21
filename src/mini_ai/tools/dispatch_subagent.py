@@ -7,8 +7,7 @@ import re
 import threading
 from pathlib import Path
 
-from ..config import IMAGE
-from ..core.settings import ModelSettings
+from ..core.settings import ImageSettings, ModelSettings
 from ..logger import logger
 from ..utils import now_ts
 
@@ -33,7 +32,7 @@ def _is_image_path(path_str: str) -> bool:
     path = Path(path_str)
     return path.suffix.lower() in IMAGE_FORMATS and path.exists() and path.is_file()
 
-def _load_image_as_data_url(path_or_url: str) -> str | None:
+def _load_image_as_data_url(path_or_url: str, image_settings: ImageSettings | None = None) -> str | None:
     """将图片文件或 URL 转换为 data URL 格式（自动压缩大图）
     
     Args:
@@ -42,9 +41,11 @@ def _load_image_as_data_url(path_or_url: str) -> str | None:
     Returns:
         data URL 格式字符串，失败返回 None
     """
+    settings = image_settings or ImageSettings()
+
     # 检测是否是 URL
     if path_or_url.startswith('http://') or path_or_url.startswith('https://'):
-        return _download_image_as_data_url(path_or_url)
+        return _download_image_as_data_url(path_or_url, settings)
     
     # 本地文件处理
     try:
@@ -66,15 +67,14 @@ def _load_image_as_data_url(path_or_url: str) -> str | None:
         original_size = len(image_data)
         
         # 如果图片大于阈值，自动压缩
-        if original_size > IMAGE.get("compress_threshold", 500 * 1024):
+        if original_size > settings.compress_threshold:
             try:
                 from PIL import Image
                 
                 img = Image.open(path)
                 
                 # 缩放到最大尺寸
-                max_dim = IMAGE.get("compress_max_dimension", 800)
-                img.thumbnail((max_dim, max_dim))
+                img.thumbnail((settings.compress_max_dimension, settings.compress_max_dimension))
                 
                 # 如果有透明通道，转换为 RGB
                 if img.mode in ('RGBA', 'P'):
@@ -82,8 +82,7 @@ def _load_image_as_data_url(path_or_url: str) -> str | None:
                 
                 # 转换为 JPEG 格式
                 buffer = io.BytesIO()
-                quality = IMAGE.get("compress_quality", 85)
-                img.save(buffer, format='JPEG', quality=quality)
+                img.save(buffer, format='JPEG', quality=settings.compress_quality)
                 image_data = buffer.getvalue()
                 mime_type = 'image/jpeg'  # 压缩后统一为 JPEG
                 
@@ -108,7 +107,7 @@ def _load_image_as_data_url(path_or_url: str) -> str | None:
         return None
 
 
-def _download_image_as_data_url(url: str) -> str | None:
+def _download_image_as_data_url(url: str, image_settings: ImageSettings | None = None) -> str | None:
     """下载网络图片并转换为 data URL
     
     Args:
@@ -154,7 +153,7 @@ def _download_image_as_data_url(url: str) -> str | None:
                 f.write(chunk)
         
         # 递归调用 _load_image_as_data_url 处理本地文件
-        data_url = _load_image_as_data_url(str(tmp_path))
+        data_url = _load_image_as_data_url(str(tmp_path), image_settings)
         
         # 清理临时文件
         try:
@@ -171,7 +170,7 @@ def _download_image_as_data_url(url: str) -> str | None:
         logger.warning(f"[dispatch_subagent] 图片下载失败: {url}, {e}")
         return None
 
-def _build_image_message(image_paths: list[str], task: str) -> dict:
+def _build_image_message(image_paths: list[str], task: str, image_settings: ImageSettings | None = None) -> dict:
     """构建包含图片的消息（兼容 OpenAI 和 Anthropic 格式）"""
     content = []
     
@@ -183,7 +182,7 @@ def _build_image_message(image_paths: list[str], task: str) -> dict:
     
     # 添加图片
     for img_path in image_paths:
-        data_url = _load_image_as_data_url(img_path)
+        data_url = _load_image_as_data_url(img_path, image_settings)
         if data_url:
             content.append({
                 "type": "image_url",
@@ -317,6 +316,8 @@ def execute_with_context(
     if project_path:
         system_prompt += f"\n\n## 当前工作空间\n\n项目路径: {project_path}\n\n重要：执行命令时必须传 cwd=\"{project_path}\" 参数；搜索文件时使用绝对路径基于此目录。读写文件使用绝对路径。"
 
+    image_settings = getattr(settings, "image", None)
+
     # 检测并处理图片路径
     image_paths = _extract_image_paths(task, project_path=project_path)
     if image_paths:
@@ -329,7 +330,7 @@ def execute_with_context(
     
     # 根据是否有图片构建不同的消息格式
     if image_paths:
-        messages.append(_build_image_message(image_paths, task))
+        messages.append(_build_image_message(image_paths, task, image_settings))
     else:
         messages.append({"role": "user", "content": task, "timestamp": _ts})
 

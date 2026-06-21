@@ -4,7 +4,7 @@ import base64
 import io
 from pathlib import Path
 
-from ..config import IMAGE
+from ..core.settings import ImageSettings
 from ..logger import logger
 
 definition: ToolDefinition = {
@@ -33,7 +33,7 @@ SUPPORTED_FORMATS = {
 }
 
 
-def execute(args: ToolArgs) -> str:
+def execute_with_settings(args: ToolArgs, image_settings: ImageSettings | None = None) -> str:
     """读取图片并转换为 data URL 格式
     
     Args:
@@ -61,11 +61,11 @@ def execute(args: ToolArgs) -> str:
         supported = ", ".join(SUPPORTED_FORMATS.keys())
         return f"⚠ 不支持的图片格式: {suffix}，支持: {supported}"
     
-    # 从配置读取参数
-    max_size = IMAGE.get("max_size", 10 * 1024 * 1024)
-    compress_threshold = IMAGE.get("compress_threshold", 500 * 1024)
-    compress_max_dim = IMAGE.get("compress_max_dimension", 800)
-    compress_quality = IMAGE.get("compress_quality", 85)
+    settings = image_settings or ImageSettings()
+    max_size = settings.max_size
+    compress_threshold = settings.compress_threshold
+    compress_max_dim = settings.compress_max_dimension
+    compress_quality = settings.compress_quality
     
     # 检查文件大小
     file_size = path.stat().st_size
@@ -118,3 +118,7 @@ def execute(args: ToolArgs) -> str:
     except Exception as e:
         logger.error(f"[read_image] 读取失败: {e}", exc_info=True)
         return f"⚠ 读取图片失败: {type(e).__name__}: {e}"
+
+
+def execute(args: ToolArgs) -> str:
+    return execute_with_settings(args)

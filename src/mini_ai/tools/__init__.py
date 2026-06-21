@@ -61,6 +61,18 @@ class ToolRegistry:
                 m = _BoundTool(config_tool.definition, lambda args, _registry=self: config_tool.execute_with_registry(_registry, args))
             elif m is run_command:
                 m = _BoundTool(run_command.definition, lambda args: run_command.execute_with_cwd(self._project_path or None, args))
+            elif m is read_image:
+                def run_read_image(args, _registry=self):
+                    settings = getattr(getattr(_registry, "_derived_agent_resources", None), "settings", None)
+                    return read_image.execute_with_settings(args, settings.image if settings else None)
+
+                m = _BoundTool(read_image.definition, run_read_image)
+            elif m is web_fetch:
+                def run_web_fetch(args, _registry=self):
+                    settings = getattr(getattr(_registry, "_derived_agent_resources", None), "settings", None)
+                    return web_fetch.execute_with_settings(args, settings.timeouts if settings else None)
+
+                m = _BoundTool(web_fetch.definition, run_web_fetch)
             bound_modules.append(m)
         self._catalog.add_tools(*bound_modules)
 
@@ -69,7 +81,16 @@ class ToolRegistry:
         self.add_tools(
             _BoundTool(list_skills.definition, lambda args, _loader=skill_loader: list_skills.list_skills_with_loader(_loader, args)),
             _BoundTool(load_skill.definition, lambda args, _loader=skill_loader: load_skill.load_skill_with_loader(_loader, args)),
-            _BoundTool(install_skill.definition, lambda args, _loader=skill_loader: install_skill.install_skill_with_loader(_loader, args)),
+            _BoundTool(
+                install_skill.definition,
+                lambda args, _loader=skill_loader, _registry=self: install_skill.install_skill_with_loader(
+                    _loader,
+                    args,
+                    getattr(getattr(_registry, "_derived_agent_resources", None), "settings", None).timeouts
+                    if getattr(getattr(_registry, "_derived_agent_resources", None), "settings", None)
+                    else None,
+                ),
+            ),
             _BoundTool(delete_skill.definition, lambda args, _loader=skill_loader: delete_skill.delete_skill_with_loader(_loader, args)),
         )
 

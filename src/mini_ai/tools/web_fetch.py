@@ -6,7 +6,7 @@ from html.parser import HTMLParser
 
 import requests
 
-from ..config import TIMEOUTS
+from ..core.settings import TimeoutSettings
 from ..logger import logger
 
 _MAX_CONSECUTIVE_FAILURES = 5
@@ -82,7 +82,7 @@ def _detect_encoding(resp: requests.Response) -> str:
     return "utf-8"
 
 
-def execute(args: ToolArgs) -> str:
+def execute_with_settings(args: ToolArgs, timeout_settings: TimeoutSettings | None = None) -> str:
     global _consecutive_failures
     url = args.get("url")
     if not url:
@@ -99,7 +99,8 @@ def execute(args: ToolArgs) -> str:
     logger.info(f"[抓取→] {url} mode={extract_mode}")
 
     try:
-        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=TIMEOUTS.get("web_fetch", 20))
+        timeouts = timeout_settings or TimeoutSettings()
+        resp = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeouts.web_fetch)
         resp.raise_for_status()
         # 正确处理编码：优先使用 apparent_encoding，避免乱码
         if resp.apparent_encoding:
@@ -128,3 +129,7 @@ def execute(args: ToolArgs) -> str:
 
     logger.debug(f"[抓取←] {url} chars={len(text)}")
     return text[:max_chars]
+
+
+def execute(args: ToolArgs) -> str:
+    return execute_with_settings(args)
