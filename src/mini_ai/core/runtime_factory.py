@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
-from ..config import DATABASE, DISPLAY, IMAGE, MCP, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TEAMMATE, TIMEOUTS, TOOL, WEB
+from ..config import COMPACTOR, DATABASE, DISPLAY, IMAGE, MCP, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TEAMMATE, TIMEOUTS, TOOL, WEB
 from .display_protocol import DisplayProtocol
 from .execution import CancellationToken, ExecutionBudget
 from .runtime_context import DerivedAgentResources, SessionIdentity, SessionRuntimeContext, ToolContext
@@ -32,6 +32,29 @@ from .runtime_types import (
 from .settings import SettingsSnapshot
 from .tool_registry_factory import build_tool_registry
 from .usage import UsageCollector
+
+
+def build_settings_snapshot(model_config: ModelConfigDict | None = None) -> SettingsSnapshot:
+    """Capture current config globals into an immutable runtime settings snapshot."""
+
+    return SettingsSnapshot.from_config_dicts(
+        model_config=model_config or MODEL_CONFIG,
+        timeouts=TIMEOUTS,
+        runner=RUNNER,
+        compactor=COMPACTOR,
+        display=DISPLAY,
+        tool=TOOL,
+        team=TEAMMATE,
+        workflow={
+            "max_concurrency": TEAMMATE.get("max_workflow_concurrency", TEAMMATE.get("max_concurrency", 8)),
+            "task_timeout": TEAMMATE.get("task_timeout", 600),
+        },
+        web=WEB,
+        mcp=MCP,
+        image=IMAGE,
+        database=DATABASE,
+        streaming=STREAMING,
+    )
 
 
 def build_session_runtime(
@@ -66,20 +89,7 @@ def build_session_runtime(
     module-level tool registry is mutated by this factory.
     """
 
-    snapshot = settings or SettingsSnapshot.from_config_dicts(
-        model_config=model_config or MODEL_CONFIG,
-        timeouts=TIMEOUTS,
-        runner=RUNNER,
-        display=DISPLAY,
-        tool=TOOL,
-        team=TEAMMATE,
-        workflow={"max_concurrency": TEAMMATE.get("max_workflow_concurrency", TEAMMATE.get("max_concurrency", 8)), "task_timeout": TEAMMATE.get("task_timeout", 600)},
-        web=WEB,
-        mcp=MCP,
-        image=IMAGE,
-        database=DATABASE,
-        streaming=STREAMING,
-    )
+    snapshot = settings or build_settings_snapshot(model_config)
     budget = execution_budget or ExecutionBudget(
         max_parallel_tools=snapshot.tool.max_parallel_tools,
         max_web_turns=snapshot.web.max_turns,

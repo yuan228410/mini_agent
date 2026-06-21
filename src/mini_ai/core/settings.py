@@ -18,6 +18,7 @@ from .runtime_types import (
     McpConfigDict,
     ModelConfigDict,
     RunnerConfigDict,
+    CompactorConfigDict,
     TeamConfigSettingsDict,
     TimeoutConfigDict,
     ToolConfigDict,
@@ -150,6 +151,50 @@ class RunnerSettings:
 
     def to_dict(self) -> RunnerConfigDict:
         data = {"context_usage_limit": self.context_usage_limit, "max_turns": self.max_turns}
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class CompactorSettings:
+    keep_recent: int = 50
+    context_usage_threshold: float = 0.8
+    keep_budget_ratio: float = 0.2
+    early_compact_ratio: float = 0.85
+    max_cached_summaries: int = 200
+    max_summary_sections: int = 50
+    context_limit: int = 50
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: CompactorConfigDict | None) -> "CompactorSettings":
+        raw = copy.deepcopy(data or {})
+        known = {
+            "keep_recent", "context_usage_threshold", "keep_budget_ratio",
+            "early_compact_ratio", "max_cached_summaries", "max_summary_sections",
+            "context_limit",
+        }
+        return cls(
+            keep_recent=int(raw.get("keep_recent", 50)),
+            context_usage_threshold=float(raw.get("context_usage_threshold", 0.8)),
+            keep_budget_ratio=float(raw.get("keep_budget_ratio", 0.2)),
+            early_compact_ratio=float(raw.get("early_compact_ratio", 0.85)),
+            max_cached_summaries=int(raw.get("max_cached_summaries", 200)),
+            max_summary_sections=int(raw.get("max_summary_sections", 50)),
+            context_limit=int(raw.get("context_limit", 50)),
+            extra={k: v for k, v in raw.items() if k not in known},
+        )
+
+    def to_dict(self) -> CompactorConfigDict:
+        data = {
+            "keep_recent": self.keep_recent,
+            "context_usage_threshold": self.context_usage_threshold,
+            "keep_budget_ratio": self.keep_budget_ratio,
+            "early_compact_ratio": self.early_compact_ratio,
+            "max_cached_summaries": self.max_cached_summaries,
+            "max_summary_sections": self.max_summary_sections,
+            "context_limit": self.context_limit,
+        }
         data.update(copy.deepcopy(self.extra))
         return data
 
@@ -422,6 +467,7 @@ class SettingsSnapshot:
     model: ModelSettings
     timeouts: TimeoutSettings = field(default_factory=TimeoutSettings)
     runner: RunnerSettings = field(default_factory=RunnerSettings)
+    compactor: CompactorSettings = field(default_factory=CompactorSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
     tool: ToolSettings = field(default_factory=ToolSettings)
     team: TeamSettings = field(default_factory=TeamSettings)
@@ -444,6 +490,7 @@ class SettingsSnapshot:
         model_config: ModelConfigDict | None,
         timeouts: TimeoutConfigDict | None = None,
         runner: RunnerConfigDict | None = None,
+        compactor: CompactorConfigDict | None = None,
         display: DisplayConfigDict | None = None,
         tool: ToolConfigDict | None = None,
         team: TeamConfigSettingsDict | None = None,
@@ -458,6 +505,7 @@ class SettingsSnapshot:
             model=ModelSettings.from_dict(model_config),
             timeouts=TimeoutSettings.from_dict(timeouts),
             runner=RunnerSettings.from_dict(runner),
+            compactor=CompactorSettings.from_dict(compactor),
             display=DisplaySettings.from_dict(display),
             tool=ToolSettings.from_dict(tool),
             team=TeamSettings.from_dict(team),

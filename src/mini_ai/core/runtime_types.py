@@ -26,6 +26,7 @@ RawConfigDict = ConfigDict
 ModelConfigDict = ConfigDict
 TimeoutConfigDict = ConfigDict
 RunnerConfigDict = ConfigDict
+CompactorConfigDict = ConfigDict
 DisplayConfigDict = ConfigDict
 ToolConfigDict = ConfigDict
 TeamConfigSettingsDict = ConfigDict

@@ -12,8 +12,8 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, DATABASE, DISPLAY, IMAGE, MCP, RUNNER, STREAMING, TEAMMATE, TIMEOUTS, TOOL, WEB, user_data_dir
-from ..core.settings import SettingsSnapshot
+from ..config import DATA_DIR, user_data_dir
+from ..core.runtime_factory import build_settings_snapshot
 from ..core.events import TERMINAL_EVENT_TYPES
 from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
 from .route_types import SessionMeta
@@ -497,23 +497,7 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
         else:
             logger.warning(f"[Web] 工作空间 '{workspace}' 不存在，使用默认配置")
 
-    settings = SettingsSnapshot.from_config_dicts(
-        model_config=MODEL_CONFIG,
-        timeouts=TIMEOUTS,
-        runner=RUNNER,
-        display=DISPLAY,
-        tool=TOOL,
-        team=TEAMMATE,
-        workflow={
-            "max_concurrency": TEAMMATE.get("max_workflow_concurrency", TEAMMATE.get("max_concurrency", 8)),
-            "task_timeout": TEAMMATE.get("task_timeout", 600),
-        },
-        web=WEB,
-        mcp=MCP,
-        image=IMAGE,
-        database=DATABASE,
-        streaming=STREAMING,
-    )
+    settings = build_settings_snapshot()
 
     user_memory_dir = user_data_dir(username) / "memory"
 
@@ -538,14 +522,15 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
 
     ctx_builder = ContextBuilder(DATA_DIR)
 
+    compactor_settings = settings.compactor
     compactor = Compactor(
         user_store,
-        keep_recent=COMPACTOR.get("keep_recent", 50),
-        context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
-        keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
-        early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
-        max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
-        max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
+        keep_recent=compactor_settings.keep_recent,
+        context_usage_threshold=compactor_settings.context_usage_threshold,
+        keep_budget_ratio=compactor_settings.keep_budget_ratio,
+        early_compact_ratio=compactor_settings.early_compact_ratio,
+        max_cached_summaries=compactor_settings.max_cached_summaries,
+        max_summary_sections=compactor_settings.max_summary_sections,
         context_length=settings.model.context_length,
         context_builder=ctx_builder,
         skill_loader=skill_loader,
@@ -611,7 +596,9 @@ def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: 
         if base is None:
             base = resolve_base(username, workspace or "default")
         comp = get_or_create_components(username, sid, base, workspace)
-        result = comp["history_db"].load_session(workspace or "default", sid, limit=COMPACTOR.get("context_limit", 50))
+        settings = comp.get("settings")
+        context_limit = settings.compactor.context_limit if settings else 50
+        result = comp["history_db"].load_session(workspace or "default", sid, limit=context_limit)
         logger.debug(f"[perf] _load_from_db sid={sid} msgs={len(result) if result else 0} time={time.time()-_t0:.3f}s")
         return result
     except Exception as e:

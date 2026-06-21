@@ -8,12 +8,11 @@ from datetime import datetime
 from . import __version__
 from .cli import CommandHandler, Display
 from .memory import MemoryStore, Compactor, HistoryDB, HistoryDBPool
-from .config import (DATA_DIR, PACKAGE_DIR, COMPACTOR, MODEL_CONFIG,
-                     DISPLAY, SKILL_PATHS, PLAN, MCP, _raw, user_data_dir)
+from .config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS, _raw, user_data_dir
 from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
 from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
-from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime
+from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime, build_settings_snapshot
 from .core.runtime_context import SessionIdentity, SessionRuntimeContext
 from .core.settings import SettingsSnapshot
 from .logger import logger
@@ -153,12 +152,7 @@ def _create_workspace_session(
                                user_skills_dir=user_skills_dir,
                                workspace_skills_dir=ws_skills_dir)
 
-    app_ctx.settings = SettingsSnapshot.from_config_dicts(
-        model_config=MODEL_CONFIG,
-        timeouts=None,
-        tool=None,
-        mcp=MCP,
-    )
+    app_ctx.settings = app_ctx.settings or build_settings_snapshot()
 
     # ── Team + Bus ──
     bus = MessageBus(ws_dir / ".team" / "inbox")
@@ -235,15 +229,16 @@ def _create_workspace_session(
     ctx_builder = ContextBuilder(DATA_DIR)
 
     # ── Compactor ──
+    compactor_settings = app_ctx.settings.compactor
     compactor = Compactor(
         store,
-        keep_recent=COMPACTOR.get("keep_recent", 50),
-        context_usage_threshold=COMPACTOR.get("context_usage_threshold", 0.8),
-        keep_budget_ratio=COMPACTOR.get("keep_budget_ratio", 0.2),
-        early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
-        max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
-        max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
-        context_length=MODEL_CONFIG.get("context_length", 256000),
+        keep_recent=compactor_settings.keep_recent,
+        context_usage_threshold=compactor_settings.context_usage_threshold,
+        keep_budget_ratio=compactor_settings.keep_budget_ratio,
+        early_compact_ratio=compactor_settings.early_compact_ratio,
+        max_cached_summaries=compactor_settings.max_cached_summaries,
+        max_summary_sections=compactor_settings.max_summary_sections,
+        context_length=app_ctx.settings.model.context_length,
         context_builder=ctx_builder,
         skill_loader=skill_loader,
         project_path=ws.project_path or str(Path.cwd()),
@@ -266,6 +261,7 @@ def _create_workspace_session(
         mcp_loader=app_ctx.mcp_loader,
         compactor=compactor,
         context_builder=ctx_builder,
+        settings=app_ctx.settings,
     )
     tool_registry = runtime.tool_registry
     req_ctx = runtime.request_context
@@ -307,7 +303,7 @@ def _create_workspace_session(
     _inject_todos(messages)
 
     # 加载指定会话的历史消息
-    ctx_limit = COMPACTOR.get("context_limit", 50)
+    ctx_limit = app_ctx.settings.compactor.context_limit
     restored = history_db.load_session(ws_name, session_id, limit=ctx_limit)
     if restored:
         cleaned = rebuild_tool_messages(restored)
@@ -408,10 +404,12 @@ def main():
     user_root = user_data_dir(args.user)
     ws_mgr = WorkspaceManager(user_root, ensure_default=False)
 
+    settings = build_settings_snapshot()
+
     # 显示
     disp = Display(
-        thinking_mode=DISPLAY.get("thinking_mode", "collapsed"),
-        tool_detail=DISPLAY.get("tool_detail", "summary"),
+        thinking_mode=settings.display.thinking_mode,
+        tool_detail=settings.display.tool_detail,
         on_status_update=None,  # 延后设置
     )
 
@@ -439,6 +437,7 @@ def main():
         ws.update_project_path(str(Path.cwd()))
 
     # 通过 _create_workspace_session 创建会话
+    _app_ctx.settings = settings
     session, messages = _create_workspace_session(
         ws, disp, _app_ctx, ws_mgr,
         username=args.user,

@@ -48,8 +48,14 @@ class TestWebRuntimeSettings:
         monkeypatch.setattr("mini_ai.memory.Compactor", FakeCompactor)
         monkeypatch.setattr("mini_ai.skills.SkillLoader", FakeSkillLoader)
         monkeypatch.setattr("mini_ai.context.ContextBuilder", FakeContextBuilder)
-        monkeypatch.setattr(smod, "MODEL_CONFIG", {"api_url": "u", "api_key": "k", "model": "m", "context_length": 1234})
-        monkeypatch.setattr(smod, "WEB", {"max_turns": 4, "stream_chunk_flush_ms": 33, "stream_chunk_max_chars": 99})
+        monkeypatch.setattr(
+            smod,
+            "build_settings_snapshot",
+            lambda: SettingsSnapshot.from_config_dicts(
+                model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 1234},
+                web={"max_turns": 4, "stream_chunk_flush_ms": 33, "stream_chunk_max_chars": 99},
+            ),
+        )
         SessionManager.instance()._sessions.clear()
 
         comp = get_or_create_components("u", "sid", tmp_path / "sessions", None)
