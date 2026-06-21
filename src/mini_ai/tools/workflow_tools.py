@@ -105,6 +105,7 @@ def run_workflow_with_context(
     bus: MessageBusProtocol | None = None,
     manager: TeamManagerProtocol | None = None,
     display: DisplayProtocol | None = None,
+    derived_agent_resources=None,
 ) -> str:
     from ..team.task_graph import TaskGraph, TaskNode
     from ..team.orchestrator import Orchestrator
@@ -130,10 +131,13 @@ def run_workflow_with_context(
     graphs[threading.current_thread().ident] = graph
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
+    settings = getattr(derived_agent_resources, "settings", None)
+    context_length = settings.model.context_length if settings else MODEL_CONFIG.get("context_length", 256000)
     orch = Orchestrator(
         graph, blackboard,
-        context_length=MODEL_CONFIG.get("context_length", 256000),
+        context_length=context_length,
         bus=bus, manager=manager, display=display,
+        derived_agent_resources=derived_agent_resources,
     )
     result = orch.run()
     return result

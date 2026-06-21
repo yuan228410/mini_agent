@@ -40,9 +40,13 @@ class ToolRegistry:
         self._display = display
         self._project_path = project_path
         self._tool_metadata: dict[str, object] = {}
+        self._derived_agent_resources = None
         self._cache = ToolCache(cacheable_resolver=self._is_cacheable)
         # 兼容测试/外部扩展；新代码优先通过 ToolMetadata.parallel_safe 声明。
         self._parallel_tools: set[str] = set()
+
+    def bind_derived_agent_resources(self, resources):
+        self._derived_agent_resources = resources
 
     def _normalize_module_definition(self, module) -> ToolDefinition:
         raw = module.definition() if callable(getattr(module, "definition", None)) else module.definition
@@ -85,15 +89,21 @@ class ToolRegistry:
         )
 
     def _refresh_dispatch_subagent(self, subagent_loader):
-        self.add_tools(_BoundTool(
-            dispatch_subagent.build_definition(subagent_loader.list_specs()),
-            lambda args, _loader=subagent_loader: dispatch_subagent.execute_with_context(
+        def run_dispatch(args, _loader=subagent_loader):
+            resources = self._derived_agent_resources
+            return dispatch_subagent.execute_with_context(
                 _loader,
                 args,
                 project_path=self._project_path,
                 display=self._display,
                 registry=self,
-            ),
+                abort_event=getattr(resources, "abort_event", None),
+                compactor=getattr(resources, "compactor", None),
+            )
+
+        self.add_tools(_BoundTool(
+            dispatch_subagent.build_definition(subagent_loader.list_specs()),
+            run_dispatch,
         ))
 
     def register_subagents(self, subagent_loader):
@@ -114,7 +124,14 @@ class ToolRegistry:
             return team_tools._sender()
 
         bound = [
-            _BoundTool(team_tools._spawn_def, lambda args, _m=manager: team_tools.spawn_from_args(_m, args)),
+            _BoundTool(
+                team_tools._spawn_def,
+                lambda args, _m=manager: team_tools.spawn_from_args(
+                    _m,
+                    args,
+                    derived_agent_resources=self._derived_agent_resources,
+                ),
+            ),
             _BoundTool(team_tools._list_def, lambda args, _m=manager: _m.list_all()),
             _BoundTool(team_tools._send_def, lambda args, _b=bus: team_tools.send_from_args(_b, sender(), args)),
             _BoundTool(team_tools._read_def, lambda args, _b=bus: json.dumps(_b.read_inbox(sender()), ensure_ascii=False, indent=2)),
@@ -395,6 +412,7 @@ class ToolRegistry:
                 bus=_bus,
                 manager=_manager,
                 display=self._display,
+                derived_agent_resources=self._derived_agent_resources,
             )
 
         def workflow_status(args, _graphs=graphs):

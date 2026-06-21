@@ -11,7 +11,7 @@ from threading import Event
 
 from ..config import DATABASE, DISPLAY, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TIMEOUTS, TOOL
 from .display_protocol import DisplayProtocol
-from .runtime_context import SessionIdentity, SessionRuntimeContext, ToolContext
+from .runtime_context import DerivedAgentResources, SessionIdentity, SessionRuntimeContext, ToolContext
 from .runtime_types import (
     BlackboardProtocol,
     CompactorProtocol,
@@ -61,6 +61,15 @@ def build_session_runtime(
     module-level tool registry is mutated by this factory.
     """
 
+    snapshot = settings or SettingsSnapshot.from_config_dicts(
+        model_config=model_config or MODEL_CONFIG,
+        timeouts=TIMEOUTS,
+        runner=RUNNER,
+        display=DISPLAY,
+        tool=TOOL,
+        database=DATABASE,
+        streaming=STREAMING,
+    )
     tool_context = ToolContext(
         identity=identity,
         display=display,
@@ -73,17 +82,26 @@ def build_session_runtime(
         blackboard=blackboard,
         workflow_dirs=workflow_dirs,
         abort_event=abort_event,
+        compactor=compactor,
+        context_builder=context_builder,
+        mcp_loader=mcp_loader,
+        settings=snapshot,
     )
     registry = tool_registry or build_tool_registry(tool_context, mcp_loader=mcp_loader)
-    snapshot = settings or SettingsSnapshot.from_config_dicts(
-        model_config=model_config or MODEL_CONFIG,
-        timeouts=TIMEOUTS,
-        runner=RUNNER,
-        display=DISPLAY,
-        tool=TOOL,
-        database=DATABASE,
-        streaming=STREAMING,
+    resources = DerivedAgentResources(
+        identity=identity,
+        tool_registry=registry,
+        subagent_loader=subagent_loader,
+        skill_loader=skill_loader,
+        context_builder=context_builder,
+        compactor=compactor,
+        abort_event=abort_event,
+        mcp_loader=mcp_loader,
+        settings=snapshot,
     )
+    bind_resources = getattr(registry, "bind_derived_agent_resources", None)
+    if callable(bind_resources):
+        bind_resources(resources)
     req_ctx = request_context or RequestContext(model_config=snapshot.model.to_dict(), display=display)
 
     return SessionRuntimeContext(
@@ -101,4 +119,6 @@ def build_session_runtime(
         bus=bus,
         team_mgr=team_mgr,
         blackboard=blackboard,
+        mcp_loader=mcp_loader,
+        derived_agent_resources=resources,
     )

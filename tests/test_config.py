@@ -1,4 +1,5 @@
 """测试配置模块"""
+import threading
 import time
 import pytest
 from pathlib import Path
@@ -18,6 +19,12 @@ from mini_ai.core.runtime_factory import build_session_runtime
 
 
 class FakeToolRegistry:
+    def __init__(self):
+        self.bound_resources = None
+
+    def bind_derived_agent_resources(self, resources):
+        self.bound_resources = resources
+
     def get_definitions(self):
         return []
 
@@ -104,6 +111,46 @@ def test_runtime_factory_attaches_settings_snapshot():
 
     assert runtime.settings is snapshot
     assert runtime.request_context.model_config["context_length"] == 42
+    runtime.close()
+
+
+def test_runtime_factory_attaches_derived_agent_resources():
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 42},
+        streaming=True,
+    )
+    registry = FakeToolRegistry()
+    abort_event = threading.Event()
+    compactor = object()
+    context_builder = object()
+    mcp_loader = object()
+
+    runtime = build_session_runtime(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s", project_path="/tmp/project"),
+        messages=[],
+        settings=snapshot,
+        tool_registry=registry,
+        abort_event=abort_event,
+        compactor=compactor,
+        context_builder=context_builder,
+        mcp_loader=mcp_loader,
+    )
+
+    resources = runtime.derived_agent_resources
+    assert resources is not None
+    assert resources.identity is runtime.identity
+    assert resources.tool_registry is registry
+    assert resources.abort_event is abort_event
+    assert resources.compactor is compactor
+    assert resources.context_builder is context_builder
+    assert resources.mcp_loader is mcp_loader
+    assert resources.settings is snapshot
+    assert runtime.mcp_loader is mcp_loader
+    assert runtime.tool_context.compactor is compactor
+    assert runtime.tool_context.context_builder is context_builder
+    assert runtime.tool_context.mcp_loader is mcp_loader
+    assert runtime.tool_context.settings is snapshot
+    assert registry.bound_resources is resources
     runtime.close()
 
 

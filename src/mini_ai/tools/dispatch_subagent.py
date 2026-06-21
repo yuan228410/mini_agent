@@ -287,6 +287,7 @@ def execute_with_context(
     display=None,
     registry=None,
     abort_event: threading.Event | None = None,
+    compactor=None,
 ) -> str:
     from ..runner import run_agent
     from ..config import MODEL_CONFIG, RequestContext, SUBAGENT_MODELS, get_model_config
@@ -362,7 +363,16 @@ def execute_with_context(
         ctx = RequestContext(model_config=model_config)
 
     try:
-        result = run_agent(messages, max_turns=spec["max_turns"], tool_names=spec["tool_names"], ctx=ctx, abort_event=abort_event, context_length=MODEL_CONFIG.get("context_length", 256000), tool_registry=registry)
+        result = run_agent(
+            messages,
+            max_turns=spec["max_turns"],
+            tool_names=spec["tool_names"],
+            ctx=ctx,
+            abort_event=abort_event,
+            context_length=MODEL_CONFIG.get("context_length", 256000),
+            compactor=compactor,
+            tool_registry=registry,
+        )
         logger.debug(f"[派遣←] {spec['name']}: {result or 'None'}")
         return result or f"[{spec['name']}] 超出轮次限制或执行失败"
     except Exception as e:

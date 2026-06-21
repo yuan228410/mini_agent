@@ -21,8 +21,13 @@ def _arg_msg_type(args: ToolArgs, key: str = "msg_type") -> InboxMessageTypeValu
     return normalize_inbox_message_type(args.get(key, "message"))
 
 
-def spawn_from_args(manager: TeamManagerProtocol, args: ToolArgs) -> str:
-    return manager.spawn(_arg_text(args, "name"), _arg_text(args, "role"), _arg_text(args, "prompt"))
+def spawn_from_args(manager: TeamManagerProtocol, args: ToolArgs, *, derived_agent_resources=None) -> str:
+    return manager.spawn(
+        _arg_text(args, "name"),
+        _arg_text(args, "role"),
+        _arg_text(args, "prompt"),
+        derived_agent_resources=derived_agent_resources,
+    )
 
 
 def send_from_args(bus: MessageBusProtocol, sender: str, args: ToolArgs) -> str:

@@ -106,7 +106,7 @@ class TeammateManager:
             except Exception:
                 pass
 
-    def spawn(self, name: str, role: str, prompt: str) -> str:
+    def spawn(self, name: str, role: str, prompt: str, *, derived_agent_resources=None) -> str:
         _NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 
         name, role = name.strip(), role.strip() or "teammate"
@@ -141,7 +141,7 @@ class TeammateManager:
             parent_ctx = _cv.copy_context()
             thread = threading.Thread(
                 target=parent_ctx.run,
-                args=(self._teammate_loop, name, role, prompt, self._display),
+                args=(self._teammate_loop, name, role, prompt, self._display, derived_agent_resources),
                 daemon=True,
             )
             self.threads[name] = thread
@@ -155,7 +155,7 @@ class TeammateManager:
         if ev:
             ev.set()
 
-    def _teammate_loop(self, name: str, role: str, prompt: str, lead_display=None):
+    def _teammate_loop(self, name: str, role: str, prompt: str, lead_display=None, derived_agent_resources=None):
         from ..runner import run_agent
         from ..tools.team_tools import set_caller
 
@@ -176,14 +176,16 @@ class TeammateManager:
                 logger.debug(f"[队友] 创建 display 失败: {exc}")
                 tm_display = None
             from ..config import RequestContext, MODEL_CONFIG as _MC
-            ctx = RequestContext(model_config=_MC, display=tm_display)
+            settings = getattr(derived_agent_resources, "settings", None)
+            model_config = settings.model.to_dict() if settings else _MC
+            ctx = RequestContext(model_config=model_config, display=tm_display)
 
         from ..context import ContextBuilder
         from ..skills import SkillLoader
         from ..config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
 
-        ctx_builder = ContextBuilder(DATA_DIR)
-        _sl = SkillLoader(DATA_DIR / "skills", _SP)
+        ctx_builder = getattr(derived_agent_resources, "context_builder", None) or ContextBuilder(DATA_DIR)
+        _sl = getattr(derived_agent_resources, "skill_loader", None) or SkillLoader(DATA_DIR / "skills", _SP)
         base_prompt = ctx_builder.build(skill_loader=_sl, project_path=str(self.project_dir), exclude_character=True)
         tool_names = list(_BASE_TOOL_NAMES) + [
             "send_message", "list_teammates",
@@ -239,8 +241,22 @@ class TeammateManager:
             self._set_status(name, "working")
             logger.info(f"[队友▶] {name} 开始工作，消息数={len(messages)}")
             try:
-                result = run_agent(messages, max_turns=TEAMMATE["max_turns"], tool_names=tool_names,
-                                     context_length=MODEL_CONFIG.get("context_length", 256000), ctx=ctx)
+                tool_registry = getattr(derived_agent_resources, "tool_registry", None)
+                if tool_registry is None:
+                    result = "⚠ 队友执行失败: 缺少 session-local runtime resources"
+                else:
+                    settings = getattr(derived_agent_resources, "settings", None)
+                    context_length = settings.model.context_length if settings else MODEL_CONFIG.get("context_length", 256000)
+                    result = run_agent(
+                        messages,
+                        max_turns=TEAMMATE["max_turns"],
+                        tool_names=tool_names,
+                        context_length=context_length,
+                        ctx=ctx,
+                        abort_event=getattr(derived_agent_resources, "abort_event", None),
+                        compactor=getattr(derived_agent_resources, "compactor", None),
+                        tool_registry=tool_registry,
+                    )
             except Exception as exc:
                 logger.error(f"[队友✗] {name} 异常: {exc}", exc_info=True)
                 # 异常信息通过 bus 发送给 lead，不会吞掉

@@ -22,6 +22,7 @@ class Orchestrator:
         bus: MessageBusProtocol | None = None,
         manager: TeamManagerProtocol | None = None,
         display: DisplayProtocol | None = None,
+        derived_agent_resources=None,
     ):
         self.graph = graph
         self.blackboard = blackboard
@@ -29,6 +30,7 @@ class Orchestrator:
         self.bus = bus
         self.manager = manager
         self._display = display
+        self._derived_agent_resources = derived_agent_resources
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
@@ -184,8 +186,24 @@ class Orchestrator:
             return self._run_teammate(task.agent, prompt, abort_event)
 
     def _run_subagent(self, agent_type: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
-        from ..tools.dispatch_subagent import execute as dispatch_exec
-        result = dispatch_exec({"type": agent_type, "task": prompt}, abort_event=abort_event)
+        from ..tools.dispatch_subagent import execute_with_context
+
+        resources = self._derived_agent_resources
+        loader = getattr(resources, "subagent_loader", None)
+        registry = getattr(resources, "tool_registry", None)
+        if loader is None or registry is None:
+            return "Error: workflow subagent 缺少 session-local runtime resources"
+        identity = getattr(resources, "identity", None)
+        project_path = getattr(identity, "project_path", "") if identity else ""
+        result = execute_with_context(
+            loader,
+            {"type": agent_type, "task": prompt},
+            project_path=project_path,
+            display=self._display,
+            registry=registry,
+            abort_event=abort_event,
+            compactor=getattr(resources, "compactor", None),
+        )
         return result
 
     def _run_teammate(self, agent_name: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
@@ -248,11 +266,14 @@ class Orchestrator:
             error_instruction="报告错误",
         )
 
-        ctx_builder = ContextBuilder(DATA_DIR)
+        resources = self._derived_agent_resources
+        ctx_builder = getattr(resources, "context_builder", None) or ContextBuilder(DATA_DIR)
         # 加载 workspace 级技能（通过 manager 获取 workspace 技能目录）
         ws_skills = self.manager.workspace_skills_dir() if self.manager else None
-        _sl = SkillLoader(DATA_DIR / "skills", _SP, workspace_skills_dir=ws_skills)
-        base_prompt = ctx_builder.build(skill_loader=_sl, exclude_character=True)
+        _sl = getattr(resources, "skill_loader", None) or SkillLoader(DATA_DIR / "skills", _SP, workspace_skills_dir=ws_skills)
+        identity = getattr(resources, "identity", None)
+        project_path = getattr(identity, "project_path", "") if identity else ""
+        base_prompt = ctx_builder.build(skill_loader=_sl, project_path=project_path, exclude_character=True)
         system_prompt = team_rules + "\n\n---\n\n" + base_prompt if base_prompt else team_rules
 
         _ts = now_ts()
@@ -271,9 +292,14 @@ class Orchestrator:
         ctx = None
         if sub_display:
             from ..config import MODEL_CONFIG as _MC, RequestContext
-            ctx = RequestContext(model_config=_MC, display=sub_display)
+            settings = getattr(resources, "settings", None)
+            model_config = settings.model.to_dict() if settings else _MC
+            ctx = RequestContext(model_config=model_config, display=sub_display)
 
         try:
+            tool_registry = getattr(resources, "tool_registry", None)
+            if tool_registry is None:
+                return "⚠ Agent 执行失败: 缺少 session-local runtime resources"
             result = run_agent(
                 messages,
                 max_turns=TEAMMATE.get("max_turns", 20),
@@ -281,6 +307,9 @@ class Orchestrator:
                 context_length=self.context_length,
                 ctx=ctx,
                 abort_event=abort_event,
+                compactor=getattr(resources, "compactor", None),
+                tool_registry=tool_registry,
+                bus=self.bus,
             )
             return result
         except Exception as e:

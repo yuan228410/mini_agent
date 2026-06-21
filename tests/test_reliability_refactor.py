@@ -1379,6 +1379,206 @@ def test_subagent_loader_create_serializes_yaml_and_reloads_cleanly(tmp_path):
     assert loader.specs == {}
 
 
+def test_dispatch_subagent_passes_runtime_resources(monkeypatch):
+    from mini_ai.tools import dispatch_subagent
+
+    captured = {}
+
+    def fake_run_agent(messages, **kwargs):
+        captured.update(kwargs)
+        return "done"
+
+    class FakeLoader:
+        specs = {"worker": {}}
+
+        def get(self, name):
+            return {
+                "name": name,
+                "system_prompt": "system",
+                "tool_names": ["read_file"],
+                "max_turns": 3,
+            }
+
+    registry = object()
+    abort_event = threading.Event()
+    compactor = object()
+    monkeypatch.setattr("mini_ai.runner.run_agent", fake_run_agent)
+
+    result = dispatch_subagent.execute_with_context(
+        FakeLoader(),
+        {"type": "worker", "task": "do it"},
+        project_path="/tmp/project",
+        registry=registry,
+        abort_event=abort_event,
+        compactor=compactor,
+    )
+
+    assert result == "done"
+    assert captured["tool_registry"] is registry
+    assert captured["abort_event"] is abort_event
+    assert captured["compactor"] is compactor
+    assert captured["tool_names"] == ["read_file"]
+
+
+def test_tool_registry_dispatch_subagent_uses_bound_runtime_resources(monkeypatch):
+    from mini_ai.core.runtime_context import DerivedAgentResources, SessionIdentity
+    from mini_ai.tools import ToolRegistry
+
+    captured = {}
+
+    def fake_run_agent(messages, **kwargs):
+        captured.update(kwargs)
+        return "done"
+
+    class FakeLoader:
+        specs = {"worker": {}}
+
+        def list_specs(self):
+            return "worker: test worker"
+
+        def get(self, name):
+            return {
+                "name": name,
+                "system_prompt": "system",
+                "tool_names": ["read_file"],
+                "max_turns": 3,
+            }
+
+    registry = ToolRegistry(project_path="/tmp/project")
+    abort_event = threading.Event()
+    compactor = object()
+    resources = DerivedAgentResources(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s", project_path="/tmp/project"),
+        tool_registry=registry,
+        subagent_loader=FakeLoader(),
+        abort_event=abort_event,
+        compactor=compactor,
+    )
+    registry.bind_derived_agent_resources(resources)
+    registry.register_subagents(resources.subagent_loader)
+    monkeypatch.setattr("mini_ai.runner.run_agent", fake_run_agent)
+
+    result = registry.dispatch("dispatch_subagent", {"type": "worker", "task": "do it"})
+
+    assert result == "done"
+    assert captured["tool_registry"] is registry
+    assert captured["abort_event"] is abort_event
+    assert captured["compactor"] is compactor
+
+
+def test_teammate_spawn_passes_derived_agent_resources(tmp_path, monkeypatch):
+    from mini_ai.team.manager import TeammateManager
+
+    captured = {}
+
+    class FakeBus:
+        def set_wake_callback(self, callback):
+            self.callback = callback
+
+        def send(self, sender, to, content, msg_type="message"):
+            return "ok"
+
+    class FakeThread:
+        def __init__(self, target, args=(), daemon=False):
+            captured["target"] = target
+            captured["args"] = args
+            self.daemon = daemon
+
+        def start(self):
+            captured["started"] = True
+
+        def is_alive(self):
+            return True
+
+    resources = object()
+    monkeypatch.setattr("mini_ai.team.manager.threading.Thread", FakeThread)
+    manager = TeammateManager(team_dir=tmp_path / "team", bus=FakeBus(), project_dir=tmp_path)
+
+    result = manager.spawn("worker", "helper", "do it", derived_agent_resources=resources)
+
+    assert "已召入队友" in result
+    assert captured["started"] is True
+    assert captured["args"][-1] is resources
+
+
+def test_orchestrator_subagent_uses_session_local_dispatch(monkeypatch):
+    from mini_ai.core.runtime_context import DerivedAgentResources, SessionIdentity
+    from mini_ai.team.orchestrator import Orchestrator
+
+    captured = {}
+
+    def fake_execute_with_context(loader, args, **kwargs):
+        captured["loader"] = loader
+        captured["args"] = args
+        captured.update(kwargs)
+        return "subagent done"
+
+    loader = object()
+    registry = object()
+    abort_event = threading.Event()
+    compactor = object()
+    resources = DerivedAgentResources(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s", project_path="/tmp/project"),
+        tool_registry=registry,
+        subagent_loader=loader,
+        compactor=compactor,
+    )
+    monkeypatch.setattr("mini_ai.tools.dispatch_subagent.execute_with_context", fake_execute_with_context)
+
+    orch = Orchestrator(object(), object(), derived_agent_resources=resources)
+    result = orch._run_subagent("worker", "do it", abort_event=abort_event)
+
+    assert result == "subagent done"
+    assert captured["loader"] is loader
+    assert captured["registry"] is registry
+    assert captured["abort_event"] is abort_event
+    assert captured["compactor"] is compactor
+    assert captured["project_path"] == "/tmp/project"
+    assert captured["args"] == {"type": "worker", "task": "do it"}
+
+
+def test_orchestrator_oneoff_agent_passes_runtime_resources(monkeypatch):
+    from mini_ai.core.runtime_context import DerivedAgentResources, SessionIdentity
+    from mini_ai.team.orchestrator import Orchestrator
+
+    captured = {}
+
+    def fake_run_agent(messages, **kwargs):
+        captured["messages"] = messages
+        captured.update(kwargs)
+        return "oneoff done"
+
+    class FakeContextBuilder:
+        def build(self, **kwargs):
+            captured["context_builder_kwargs"] = kwargs
+            return "base prompt"
+
+    class FakeSkillLoader:
+        pass
+
+    registry = object()
+    abort_event = threading.Event()
+    compactor = object()
+    resources = DerivedAgentResources(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s", project_path="/tmp/project"),
+        tool_registry=registry,
+        skill_loader=FakeSkillLoader(),
+        context_builder=FakeContextBuilder(),
+        compactor=compactor,
+    )
+    monkeypatch.setattr("mini_ai.runner.run_agent", fake_run_agent)
+
+    orch = Orchestrator(object(), object(), bus=object(), derived_agent_resources=resources)
+    result = orch._run_oneoff_agent("worker", "do it", abort_event=abort_event)
+
+    assert result == "oneoff done"
+    assert captured["tool_registry"] is registry
+    assert captured["abort_event"] is abort_event
+    assert captured["compactor"] is compactor
+    assert captured["bus"] is orch.bus
+    assert captured["context_builder_kwargs"]["project_path"] == "/tmp/project"
+
+
 def test_subagent_tools_do_not_keep_module_level_runtime_state():
     repo = Path(__file__).resolve().parents[1]
     modules = {
