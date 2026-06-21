@@ -570,7 +570,13 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
             from ..team import MessageBus, TeammateManager, Blackboard
             team_dir = ws_dir / ".team"
             bus = MessageBus(team_dir / "inbox")
-            team_mgr = TeammateManager(team_dir=team_dir, bus=bus, project_dir=ws_dir)
+            team_mgr = TeammateManager(
+                team_dir=team_dir,
+                bus=bus,
+                project_dir=ws_dir,
+                team_settings=settings.team,
+                timeout_settings=settings.timeouts,
+            )
             bb = Blackboard(persist_path=team_dir / "blackboard.json")
             sm.set_team_component(wk, {"bus": bus, "team_mgr": team_mgr, "blackboard": bb})
 

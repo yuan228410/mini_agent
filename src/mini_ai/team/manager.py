@@ -5,29 +5,30 @@ import json
 import re
 import threading
 import time
-from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from ..config import DATA_DIR, TIMEOUTS, TEAMMATE, MODEL_CONFIG
+from ..config import DATA_DIR
+from ..core.settings import ModelSettings, TeamSettings, TimeoutSettings
 from ..logger import logger
 from .prompts import build_team_prompt
 from ..utils import now_ts
 from ..core.runtime_types import ACTIVE_TEAM_MEMBER_STATUSES
 from .models import TeamConfigDict, TeamListText, TeamMemberStatus, TeamMemberSummary, team_member_summary
 
-_BASE_TOOL_NAMES = tuple(TEAMMATE.get("base_tools", []))
-_MAX_TEAMMATES = TEAMMATE.get("max_teammates", 5)
-_IDLE_TIMEOUT = TEAMMATE.get("idle_timeout", 300)
+_DEFAULT_TEAM_SETTINGS = TeamSettings()
+_DEFAULT_TIMEOUT_SETTINGS = TimeoutSettings()
 
 class TeammateManager:
     """队友持久化管理，配置持久到 team_config.json"""
 
-    def __init__(self, *, team_dir: Path, bus, project_dir: Path):
+    def __init__(self, *, team_dir: Path, bus, project_dir: Path, team_settings: TeamSettings | None = None, timeout_settings: TimeoutSettings | None = None):
         self.dir = Path(team_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.config_path = self.dir / "team_config.json"
         self.bus = bus
         self.project_dir = project_dir
+        self.team_settings = team_settings or _DEFAULT_TEAM_SETTINGS
+        self.timeout_settings = timeout_settings or _DEFAULT_TIMEOUT_SETTINGS
         self.config = self._load_config()
         self.threads: dict[str, threading.Thread] = {}
         self._wake_events: dict[str, threading.Event] = {}
@@ -113,6 +114,9 @@ class TeammateManager:
         if not _NAME_RE.fullmatch(name):
             return "Error: 名字只能包含字母、数字、下划线、点和短横线，长度不超64"
 
+        settings = getattr(derived_agent_resources, "settings", None)
+        effective_team_settings = settings.team if settings else self.team_settings
+
         with self.lock:
             member = self._find(name)
             if member:
@@ -127,8 +131,9 @@ class TeammateManager:
                 member["status"] = "working"
             else:
                 active = sum(1 for t in self.threads.values() if t.is_alive())
-                if active >= _MAX_TEAMMATES:
-                    return f"Error: 已达队友上限 {_MAX_TEAMMATES}，请先 shutdown 一些队友"
+                max_teammates = effective_team_settings.max_teammates
+                if active >= max_teammates:
+                    return f"Error: 已达队友上限 {max_teammates}，请先 shutdown 一些队友"
                 member = team_member_summary(name, role, "working")
                 self.config["members"].append(member)
             self._save_config()
@@ -162,6 +167,11 @@ class TeammateManager:
         set_caller(name)
         
 
+        settings = getattr(derived_agent_resources, "settings", None)
+        team_settings = settings.team if settings else self.team_settings
+        timeout_settings = settings.timeouts if settings else self.timeout_settings
+        model_settings = settings.model if settings else ModelSettings.from_dict(None)
+        model_config = model_settings.to_dict()
         tm_display = None
         ctx = None
         if lead_display:
@@ -175,9 +185,7 @@ class TeammateManager:
             except Exception as exc:
                 logger.debug(f"[队友] 创建 display 失败: {exc}")
                 tm_display = None
-            from ..config import RequestContext, MODEL_CONFIG as _MC
-            settings = getattr(derived_agent_resources, "settings", None)
-            model_config = settings.model.to_dict() if settings else _MC
+            from ..config import RequestContext
             ctx = RequestContext(model_config=model_config, display=tm_display)
 
         from ..context import ContextBuilder
@@ -187,7 +195,7 @@ class TeammateManager:
         ctx_builder = getattr(derived_agent_resources, "context_builder", None) or ContextBuilder(DATA_DIR)
         _sl = getattr(derived_agent_resources, "skill_loader", None) or SkillLoader(DATA_DIR / "skills", _SP)
         base_prompt = ctx_builder.build(skill_loader=_sl, project_path=str(self.project_dir), exclude_character=True)
-        tool_names = list(_BASE_TOOL_NAMES) + [
+        tool_names = list(team_settings.base_tools) + [
             "send_message", "list_teammates",
             "blackboard_read", "blackboard_write", "blackboard_list",
             "dispatch_subagent",
@@ -235,7 +243,7 @@ class TeammateManager:
                 has_work = True
 
             if not has_work:
-                ev.wait(timeout=TIMEOUTS["teammate_recv"])
+                ev.wait(timeout=timeout_settings.teammate_recv)
                 continue
 
             self._set_status(name, "working")
@@ -245,11 +253,10 @@ class TeammateManager:
                 if tool_registry is None:
                     result = "⚠ 队友执行失败: 缺少 session-local runtime resources"
                 else:
-                    settings = getattr(derived_agent_resources, "settings", None)
-                    context_length = settings.model.context_length if settings else MODEL_CONFIG.get("context_length", 256000)
+                    context_length = model_settings.context_length
                     result = run_agent(
                         messages,
-                        max_turns=TEAMMATE["max_turns"],
+                        max_turns=team_settings.max_turns,
                         tool_names=tool_names,
                         context_length=context_length,
                         ctx=ctx,
@@ -267,7 +274,7 @@ class TeammateManager:
                 self.bus.send(name, "lead",
                               f"队友 {name} 任务未完成（超出轮次或执行失败）")
 
-            max_history = TEAMMATE.get('max_history', 20)
+            max_history = team_settings.max_history
             if len(messages) > max_history:
                 messages[:] = [messages[0]] + messages[-(max_history - 1):]
             logger.info(f"[队友■] {name} 空闲，等待 inbox")
@@ -277,7 +284,7 @@ class TeammateManager:
 
             while not has_work:
                 ev.clear()
-                ev.wait(timeout=TIMEOUTS["teammate_recv"])
+                ev.wait(timeout=timeout_settings.teammate_recv)
                 inbox = self.bus.read_inbox(name)
                 if inbox:
                     for msg in inbox:
@@ -294,8 +301,9 @@ class TeammateManager:
                         has_work = True
                     if has_work:
                         break
-                if _IDLE_TIMEOUT > 0 and (time.monotonic() - idle_start) > _IDLE_TIMEOUT:
-                    logger.info(f"[队友⏱] {name} 空闲超时 ({_IDLE_TIMEOUT}s)，自动退出")
+                idle_timeout = team_settings.idle_timeout
+                if idle_timeout > 0 and (time.monotonic() - idle_start) > idle_timeout:
+                    logger.info(f"[队友⏱] {name} 空闲超时 ({idle_timeout}s)，自动退出")
                     self._set_status(name, "shutdown")
                     return
         except Exception as exc:

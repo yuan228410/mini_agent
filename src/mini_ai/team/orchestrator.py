@@ -3,8 +3,8 @@ import contextvars
 import threading
 import time
 
-from ..config import TEAMMATE
 from ..core.display_protocol import DisplayProtocol
+from ..core.settings import ModelSettings, TeamSettings, WorkflowSettings
 from ..core.runtime_types import BlackboardProtocol, MessageBusProtocol, TeamManagerProtocol
 from ..logger import logger
 from .prompts import build_team_prompt
@@ -31,6 +31,10 @@ class Orchestrator:
         self.manager = manager
         self._display = display
         self._derived_agent_resources = derived_agent_resources
+        settings = getattr(derived_agent_resources, "settings", None)
+        self._team_settings = settings.team if settings else TeamSettings()
+        self._workflow_settings = settings.workflow if settings else WorkflowSettings()
+        self._model_settings = settings.model if settings else ModelSettings.from_dict({"context_length": context_length})
         self._lock = threading.Lock()
         self._condition = threading.Condition(self._lock)
         self._pending_results: dict[str, tuple[str | None, str | None]] = {}
@@ -137,7 +141,7 @@ class Orchestrator:
 
         logger.info(f"[Orchestrator] 派遣 [{task.id}] → {task.agent}: {prompt[:80]}...")
 
-        task_timeout = task.timeout or TEAMMATE.get('task_timeout', 600)
+        task_timeout = task.timeout or self._workflow_settings.task_timeout or self._team_settings.task_timeout
         
         # 创建取消事件
         abort_event = threading.Event()
@@ -203,6 +207,7 @@ class Orchestrator:
             registry=registry,
             abort_event=abort_event,
             compactor=getattr(resources, "compactor", None),
+            settings=getattr(resources, "settings", None),
         )
         return result
 
@@ -247,12 +252,11 @@ class Orchestrator:
 
     def _run_oneoff_agent(self, agent_name: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
         from ..runner import run_agent
-        from ..config import TEAMMATE, DATA_DIR, SKILL_PATHS as _SP
+        from ..config import DATA_DIR, SKILL_PATHS as _SP
         from ..context import ContextBuilder
         from ..skills import SkillLoader
-        from datetime import datetime, timezone, timedelta
 
-        tool_names = list(TEAMMATE.get("base_tools", ["run_command", "web_fetch", "load_skill"])) + [
+        tool_names = list(self._team_settings.base_tools) + [
             "send_message", "list_teammates",
             "blackboard_read", "blackboard_write", "blackboard_list",
             "dispatch_subagent",
@@ -291,10 +295,8 @@ class Orchestrator:
 
         ctx = None
         if sub_display:
-            from ..config import MODEL_CONFIG as _MC, RequestContext
-            settings = getattr(resources, "settings", None)
-            model_config = settings.model.to_dict() if settings else _MC
-            ctx = RequestContext(model_config=model_config, display=sub_display)
+            from ..config import RequestContext
+            ctx = RequestContext(model_config=self._model_settings.to_dict(), display=sub_display)
 
         try:
             tool_registry = getattr(resources, "tool_registry", None)
@@ -302,9 +304,9 @@ class Orchestrator:
                 return "⚠ Agent 执行失败: 缺少 session-local runtime resources"
             result = run_agent(
                 messages,
-                max_turns=TEAMMATE.get("max_turns", 20),
+                max_turns=self._team_settings.max_turns,
                 tool_names=tool_names,
-                context_length=self.context_length,
+                context_length=self._model_settings.context_length,
                 ctx=ctx,
                 abort_event=abort_event,
                 compactor=getattr(resources, "compactor", None),

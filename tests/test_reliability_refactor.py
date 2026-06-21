@@ -497,17 +497,23 @@ def test_application_service_uses_injected_runtime_settings_not_config_globals()
 
 
 def test_derived_agent_tools_use_runtime_settings_boundaries():
-    root = Path(__file__).resolve().parents[1] / "src/mini_ai/tools"
+    root = Path(__file__).resolve().parents[1] / "src/mini_ai"
 
-    dispatch_text = (root / "dispatch_subagent.py").read_text()
-    workflow_text = (root / "workflow_tools.py").read_text()
+    dispatch_text = (root / "tools/dispatch_subagent.py").read_text()
+    workflow_text = (root / "tools/workflow_tools.py").read_text()
+    manager_text = (root / "team/manager.py").read_text()
+    orchestrator_text = (root / "team/orchestrator.py").read_text()
 
+    for text in (dispatch_text, workflow_text, manager_text, orchestrator_text):
+        assert "MODEL_CONFIG" not in text
     assert "from ..config import MODEL_CONFIG" not in dispatch_text
     assert "from ..config import MODEL_CONFIG" not in workflow_text
-    assert "MODEL_CONFIG" not in dispatch_text
-    assert "MODEL_CONFIG" not in workflow_text
+    assert "from ..config import TEAMMATE" not in manager_text
+    assert "from ..config import TEAMMATE" not in orchestrator_text
     assert "settings.model.context_length" in workflow_text
     assert "base_model_settings.context_length" in dispatch_text
+    assert "team_settings.max_turns" in manager_text
+    assert "self._team_settings.max_turns" in orchestrator_text
 
 
 
@@ -1820,6 +1826,7 @@ def test_orchestrator_subagent_uses_session_local_dispatch(monkeypatch):
 
 def test_orchestrator_oneoff_agent_passes_runtime_resources(monkeypatch):
     from mini_ai.core.runtime_context import DerivedAgentResources, SessionIdentity
+    from mini_ai.core.settings import SettingsSnapshot
     from mini_ai.team.orchestrator import Orchestrator
 
     captured = {}
@@ -1840,12 +1847,19 @@ def test_orchestrator_oneoff_agent_passes_runtime_resources(monkeypatch):
     registry = object()
     abort_event = threading.Event()
     compactor = object()
+    settings = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 12345},
+        team={"max_turns": 7, "base_tools": ["read_file"]},
+        workflow={"task_timeout": 33},
+        streaming=True,
+    )
     resources = DerivedAgentResources(
         identity=SessionIdentity(username="u", workspace="w", session_id="s", project_path="/tmp/project"),
         tool_registry=registry,
         skill_loader=FakeSkillLoader(),
         context_builder=FakeContextBuilder(),
         compactor=compactor,
+        settings=settings,
     )
     monkeypatch.setattr("mini_ai.runner.run_agent", fake_run_agent)
 
@@ -1857,6 +1871,9 @@ def test_orchestrator_oneoff_agent_passes_runtime_resources(monkeypatch):
     assert captured["abort_event"] is abort_event
     assert captured["compactor"] is compactor
     assert captured["bus"] is orch.bus
+    assert captured["context_length"] == 12345
+    assert captured["max_turns"] == 7
+    assert captured["tool_names"] == ["read_file", "send_message", "list_teammates", "blackboard_read", "blackboard_write", "blackboard_list", "dispatch_subagent"]
     assert captured["context_builder_kwargs"]["project_path"] == "/tmp/project"
 
 
