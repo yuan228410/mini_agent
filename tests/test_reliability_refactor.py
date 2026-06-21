@@ -491,6 +491,65 @@ def test_tool_registry_scoped_allowlist_filters_definitions_and_dispatch():
     assert "不在当前执行策略" in registry.dispatch("write_file", {})
 
 
+def test_command_policy_rejects_destructive_commands():
+    from mini_ai.tools.policy import CommandRisk, classify_command
+
+    dangerous = [
+        "rm -rf /tmp/demo",
+        "rm -fr /tmp/demo",
+        "RM -RF /tmp/demo",
+        "rm --force --recursive /tmp/demo",
+        "sudo rm /tmp/demo",
+        "git reset --hard HEAD~1",
+        "git push origin master --force",
+        "git push origin master --force-with-lease",
+        "chmod -R 777 /tmp/demo",
+        "chmod -r 777 /tmp/demo",
+        "chown -R root /tmp/demo",
+        "chown -r root /tmp/demo",
+        "dd if=/dev/zero of=/dev/disk0",
+        "mkfs.ext4 /dev/sda1",
+        "diskutil eraseDisk APFS X /dev/disk1",
+        "printf x > ~/.zshrc",
+    ]
+
+    for command in dangerous:
+        verdict = classify_command(command)
+        assert verdict.risk is CommandRisk.DENY, command
+        assert verdict.allowed is False
+
+    safe = [
+        "pwd",
+        "python -m pytest tests/test_config.py -q",
+        "git status --short",
+        "rm /tmp/demo-file",
+        "printf x >> ./local.log",
+    ]
+    for command in safe:
+        assert classify_command(command).allowed is True, command
+
+
+def test_run_command_enforces_command_policy(monkeypatch):
+    import subprocess
+    from mini_ai.tools import run_command
+
+    calls = []
+
+    def fake_run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="safe\n", stderr="")
+
+    monkeypatch.setattr(run_command.subprocess, "run", fake_run)
+
+    assert run_command.execute({"command": "pwd"}) == "safe"
+    assert len(calls) == 1
+
+    denied = run_command.execute({"command": "rm -rf /tmp/demo"})
+    assert "命令被策略拒绝" in denied
+    assert "递归强制删除" in denied
+    assert len(calls) == 1
+
+
 def test_module_level_tool_registry_apis_fail_fast():
     from mini_ai import tools
 

@@ -3,6 +3,7 @@ from ..core.runtime_types import ToolArgs, ToolDefinition
 import subprocess
 
 from ..logger import logger
+from .policy import enforce_command_policy
 
 definition: ToolDefinition = {
     "type": "function",
@@ -27,6 +28,10 @@ def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str:
     if not command or not isinstance(command, str):
         return "Error: 缺少 command 参数"
     timeout = args.get("timeout", 30)
+
+    verdict = enforce_command_policy(command)
+    if not verdict.allowed:
+        return f"Error: 命令被策略拒绝：{verdict.reason}"
 
     cwd = args.get("cwd") or default_cwd or None
     try:

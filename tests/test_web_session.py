@@ -7,6 +7,59 @@ from unittest.mock import Mock, patch, AsyncMock
 import threading
 
 
+class TestWebRuntimeSettings:
+    def test_session_components_include_settings_snapshot(self, tmp_path, monkeypatch):
+        from mini_ai.core import SettingsSnapshot
+        from mini_ai.web import session_manager as smod
+        from mini_ai.web.session_manager import SessionManager, get_or_create_components
+
+        class FakeWorkspaceManager:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def get(self, workspace):
+                return None
+
+        class FakeMemoryStore:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class FakeHistoryDBPool:
+            @staticmethod
+            def get(username):
+                return object()
+
+        class FakeSkillLoader:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class FakeContextBuilder:
+            def __init__(self, *args, **kwargs):
+                pass
+
+        class FakeCompactor:
+            def __init__(self, *args, **kwargs):
+                self.context_length = kwargs.get("context_length")
+
+        monkeypatch.setattr(smod, "WorkspaceManager", FakeWorkspaceManager)
+        monkeypatch.setattr(smod, "user_data_dir", lambda username: tmp_path / username)
+        monkeypatch.setattr("mini_ai.memory.MemoryStore", FakeMemoryStore)
+        monkeypatch.setattr("mini_ai.memory.HistoryDBPool", FakeHistoryDBPool)
+        monkeypatch.setattr("mini_ai.memory.Compactor", FakeCompactor)
+        monkeypatch.setattr("mini_ai.skills.SkillLoader", FakeSkillLoader)
+        monkeypatch.setattr("mini_ai.context.ContextBuilder", FakeContextBuilder)
+        monkeypatch.setattr(smod, "MODEL_CONFIG", {"api_url": "u", "api_key": "k", "model": "m", "context_length": 1234})
+        monkeypatch.setattr(smod, "WEB", {"max_turns": 4, "stream_chunk_flush_ms": 33, "stream_chunk_max_chars": 99})
+        SessionManager.instance()._sessions.clear()
+
+        comp = get_or_create_components("u", "sid", tmp_path / "sessions", None)
+
+        assert isinstance(comp["settings"], SettingsSnapshot)
+        assert comp["settings"].model.context_length == 1234
+        assert comp["settings"].web.max_turns == 4
+        assert comp["compactor"].context_length == 1234
+
+
 class TestWebSessionConcurrency:
     """测试 Web 会话并发安全性"""
     

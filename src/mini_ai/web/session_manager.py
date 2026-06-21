@@ -12,7 +12,8 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, user_data_dir
+from ..config import DATA_DIR, MODEL_CONFIG, COMPACTOR, DATABASE, DISPLAY, IMAGE, MCP, RUNNER, STREAMING, TEAMMATE, TIMEOUTS, TOOL, WEB, user_data_dir
+from ..core.settings import SettingsSnapshot
 from ..core.events import TERMINAL_EVENT_TYPES
 from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
 from .route_types import SessionMeta
@@ -496,6 +497,24 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
         else:
             logger.warning(f"[Web] 工作空间 '{workspace}' 不存在，使用默认配置")
 
+    settings = SettingsSnapshot.from_config_dicts(
+        model_config=MODEL_CONFIG,
+        timeouts=TIMEOUTS,
+        runner=RUNNER,
+        display=DISPLAY,
+        tool=TOOL,
+        team=TEAMMATE,
+        workflow={
+            "max_concurrency": TEAMMATE.get("max_workflow_concurrency", TEAMMATE.get("max_concurrency", 8)),
+            "task_timeout": TEAMMATE.get("task_timeout", 600),
+        },
+        web=WEB,
+        mcp=MCP,
+        image=IMAGE,
+        database=DATABASE,
+        streaming=STREAMING,
+    )
+
     user_memory_dir = user_data_dir(username) / "memory"
 
     if base is None:
@@ -527,7 +546,7 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
         early_compact_ratio=COMPACTOR.get("early_compact_ratio", 0.85),
         max_cached_summaries=COMPACTOR.get("max_cached_summaries", 200),
         max_summary_sections=COMPACTOR.get("max_summary_sections", 50),
-        context_length=MODEL_CONFIG.get("context_length", 256000),
+        context_length=settings.model.context_length,
         context_builder=ctx_builder,
         skill_loader=skill_loader,
         project_path=project_path,
@@ -541,6 +560,7 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
         "ctx_builder": ctx_builder,
         "project_path": project_path,
         "skill_loader": skill_loader,
+        "settings": settings,
     }
 
     sm = SessionManager.instance()

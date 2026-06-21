@@ -140,6 +140,7 @@ class SessionComponents(TypedDict, total=False):
     ctx_builder: ContextBuilderProtocol
     project_path: str
     skill_loader: SkillLoaderProtocol
+    settings: Any
     bus: MessageBusProtocol | None
     team_mgr: TeamManagerProtocol | None
     blackboard: BlackboardProtocol | None

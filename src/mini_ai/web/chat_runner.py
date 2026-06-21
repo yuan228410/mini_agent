@@ -97,6 +97,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     workflow_dirs=[DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
                     abort_event=abort_event,
                     model_config=cfg,
+                    settings=comp.get("settings"),
                     mcp_loader=_MCP_LOADER,
                     compactor=comp.get("compactor"),
                     context_builder=comp.get("ctx_builder"),
@@ -184,8 +185,6 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 bus = comp.get("bus")
                 team_mgr = comp.get("team_mgr")
                 if bus and team_mgr and msg is not None and not msg.get("error") and msg.get("tool_calls"):
-                    from ..config import TIMEOUTS
-
                     def _inject_inbox(inbox_msgs, label="兜底"):
                         from ..team.loop import format_inbox_messages
                         inbox_text = format_inbox_messages(inbox_msgs)
@@ -197,8 +196,9 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         return True
 
                     lead_event = threading.Event()
-                    deadline = time.monotonic() + TIMEOUTS.get("lead_wait", 1800)
-                    poll_interval = TIMEOUTS.get("lead_poll_interval", 2)
+                    timeout_settings = settings.timeouts if settings else None
+                    deadline = time.monotonic() + (timeout_settings.lead_wait if timeout_settings else 1800)
+                    poll_interval = timeout_settings.lead_poll_interval if timeout_settings else 2
 
                     while time.monotonic() < deadline:
                         inbox = bus.read_inbox("lead")
