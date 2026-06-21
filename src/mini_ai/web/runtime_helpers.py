@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..application import model_use_cases, runtime_paths
+from ..application import command_service, model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
@@ -134,6 +134,14 @@ def config_mutation_dependencies() -> ConfigMutationDependencies:
         },
         set_streaming=lambda value: setattr(cfg, "STREAMING", value),
     )
+
+
+def mcp_status_dependencies() -> command_service.McpStatusDependencies:
+    """Build Web MCP status dependencies at the adapter boundary."""
+
+    from .deps import MCP_SETTINGS, _MCP_LOADER
+
+    return command_service.McpStatusDependencies(settings=MCP_SETTINGS, loader=_MCP_LOADER)
 
 
 def model_route_dependencies() -> ModelRouteDependencies:

@@ -1,7 +1,14 @@
 """Web command catalog and MCP status use cases."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class McpStatusDependencies:
+    settings: Any
+    loader: Any | None = None
 
 
 WEB_COMMANDS: list[dict[str, Any]] = [
@@ -25,16 +32,16 @@ def list_commands() -> dict[str, Any]:
     return {"commands": [dict(command) for command in WEB_COMMANDS]}
 
 
-def mcp_status(mcp_settings, mcp_loader=None) -> dict[str, Any]:
+def mcp_status(deps: McpStatusDependencies) -> dict[str, Any]:
     """Return configured and connected MCP server status."""
 
-    if not mcp_settings.enabled:
+    if not deps.settings.enabled:
         return {"enabled": False, "servers": []}
     servers = []
-    configured_servers = mcp_settings.servers
-    if mcp_loader:
-        configured_servers = mcp_loader.servers
-        for name, conn in mcp_loader._connections.items():
+    configured_servers = deps.settings.servers
+    if deps.loader:
+        configured_servers = deps.loader.servers
+        for name, conn in deps.loader._connections.items():
             servers.append({
                 "name": name,
                 "type": conn.conn_type,

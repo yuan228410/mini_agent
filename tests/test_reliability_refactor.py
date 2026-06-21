@@ -1711,15 +1711,22 @@ def test_web_config_routes_use_application_service_boundary():
 def test_web_command_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_commands = (repo / "src/mini_ai/web/routes/commands.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
     command_service = (repo / "src/mini_ai/application/command_service.py").read_text()
 
     assert "_WEB_COMMANDS" not in routes_commands
     assert "WebCommand" not in routes_commands
     assert "_connections" not in routes_commands
     assert "conn.tools" not in routes_commands
+    assert "MCP_SETTINGS" not in routes_commands
+    assert "_MCP_LOADER" not in routes_commands
+    assert "from ..deps import" not in routes_commands
     assert "command_service.list_commands" in routes_commands
     assert "command_service.mcp_status" in routes_commands
+    assert "mcp_status_dependencies" in routes_commands
+    assert "def mcp_status_dependencies" in runtime_helpers
     assert "WEB_COMMANDS" in command_service
+    assert "class McpStatusDependencies" in command_service
     assert "def mcp_status" in command_service
 
 
