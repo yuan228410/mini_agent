@@ -1,10 +1,25 @@
-"""Application-level session orchestration shared by adapters."""
+"""Application-level chat turn orchestration shared by adapters."""
 from __future__ import annotations
 
 import json
 import threading
 from dataclasses import dataclass
 
+from ..core.display_protocol import DisplayProtocol
+from ..core.persister import HistoryPersister
+from ..core.runtime_context import SessionRuntimeContext
+from ..core.runtime_factory import build_request_context
+from ..core.runtime_types import (
+    HistoryDBProtocol,
+    MessageBusProtocol,
+    MessageDict,
+    PlanStateStoreProtocol,
+    RequestContextProtocol,
+    ToolDefinition,
+    ToolRegistryProtocol,
+    UsageDict,
+)
+from ..core.settings import ModelSettings, SettingsSnapshot
 from ..llm import chat as llm_chat, get_usage, reset_usage
 from ..plan.artifact_parser import strip_artifact_blocks
 from ..plan.service import PlanService
@@ -13,12 +28,6 @@ from ..plan.tool_policy import ToolPolicy, filter_tools
 from ..runner import run_tool_loop
 from ..tools import inject_todos as _inject_todos
 from ..utils import now_ts
-from .display_protocol import DisplayProtocol
-from .persister import HistoryPersister
-from .runtime_context import SessionRuntimeContext
-from .runtime_factory import build_request_context
-from .runtime_types import HistoryDBProtocol, MessageBusProtocol, MessageDict, PlanStateStoreProtocol, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol, UsageDict
-from .settings import ModelSettings, SettingsSnapshot
 
 
 @dataclass
@@ -46,7 +55,7 @@ class RunTurnResult:
 class ApplicationService:
     """Central turn runner used by CLI/Web adapters.
 
-    Adapters still own transport concerns (terminal input, WebSocket queues,
+    Adapters own transport concerns (terminal input, WebSocket queues,
     active-task locks), while this service owns the common LLM/tool/persist/plan
     flow.
     """

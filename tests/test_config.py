@@ -13,7 +13,8 @@ from mini_ai.config import (
     MODEL_CONFIG,
     _raw,
 )
-from mini_ai.core import ApplicationService, RunTurnOptions, SettingsSnapshot
+from mini_ai.application.chat_service import ApplicationService, RunTurnOptions
+from mini_ai.core import SettingsSnapshot
 from mini_ai.core.runtime_context import SessionIdentity
 from mini_ai.core.runtime_factory import build_session_runtime
 
@@ -99,7 +100,7 @@ def test_application_service_defaults_to_runtime_settings(monkeypatch):
         captured.update(kwargs)
         return {"role": "assistant", "content": "ok"}, False
 
-    monkeypatch.setattr("mini_ai.core.application_service.run_tool_loop", fake_run_tool_loop)
+    monkeypatch.setattr("mini_ai.application.chat_service.run_tool_loop", fake_run_tool_loop)
     snapshot = SettingsSnapshot.from_config_dicts(
         model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 77},
         runner={"max_turns": 6, "context_usage_limit": 0.44},

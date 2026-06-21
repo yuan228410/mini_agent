@@ -6,7 +6,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..core import ApplicationService, RunTurnOptions, build_session_runtime
+from ..application.chat_service import ApplicationService, RunTurnOptions
+from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
 from ..core.runtime_context import SessionIdentity
 from ..core.runtime_types import MessageDict, ToolDefinition

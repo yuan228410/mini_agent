@@ -489,7 +489,9 @@ def test_tool_registry_delegates_catalog_boundaries():
 
 
 def test_application_service_uses_injected_runtime_settings_not_config_globals():
-    text = (Path(__file__).resolve().parents[1] / "src/mini_ai/core/application_service.py").read_text()
+    repo = Path(__file__).resolve().parents[1]
+    text = (repo / "src/mini_ai/application/chat_service.py").read_text()
+    core_init = (repo / "src/mini_ai/core/__init__.py").read_text()
 
     assert "from ..config import MODEL_CONFIG" not in text
     assert "from ..config import STREAMING" not in text
@@ -499,13 +501,15 @@ def test_application_service_uses_injected_runtime_settings_not_config_globals()
     assert "settings.streaming" in text
     assert "from ..config import RequestContext" not in text
     assert "build_request_context" in text
+    assert "ApplicationService" not in core_init
+    assert "RunTurnOptions" not in core_init
 
 
 
 def test_request_context_construction_uses_runtime_factory_boundary():
     root = Path(__file__).resolve().parents[1] / "src/mini_ai"
     checked = {
-        "core/application_service.py",
+        "application/chat_service.py",
         "web/runtime_helpers.py",
         "tools/dispatch_subagent.py",
         "team/manager.py",
@@ -1376,7 +1380,7 @@ def test_tool_modules_use_explicit_argument_and_definition_aliases():
 
 def test_provider_usage_uses_explicit_usage_aliases():
     import typing
-    from mini_ai.core.application_service import RunTurnResult
+    from mini_ai.application.chat_service import RunTurnResult
     from mini_ai.core.runtime_types import UsageDict
     from mini_ai.llm import base
     from mini_ai.llm.provider_types import ProviderUsage

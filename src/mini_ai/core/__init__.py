@@ -7,9 +7,6 @@ def __getattr__(name):
     if name == "ChatSession":
         from .chat_session import ChatSession
         return ChatSession
-    if name in ("ApplicationService", "RunTurnOptions", "RunTurnResult"):
-        from .application_service import ApplicationService, RunTurnOptions, RunTurnResult
-        return {"ApplicationService": ApplicationService, "RunTurnOptions": RunTurnOptions, "RunTurnResult": RunTurnResult}[name]
     if name == "build_tool_registry":
         from .tool_registry_factory import build_tool_registry
         return build_tool_registry
@@ -67,7 +64,6 @@ def __getattr__(name):
 
 __all__ = [
     "DisplayProtocol", "HistoryPersister", "ChatSession",
-    "ApplicationService", "RunTurnOptions", "RunTurnResult",
     "build_tool_registry", "build_session_runtime", "build_settings_snapshot", "build_request_context", "build_child_request_context",
     "ChatMessage", "MessageRole", "normalize_messages", "to_provider_messages",
     "ToolCall", "ToolFunctionCall", "ToolResult",

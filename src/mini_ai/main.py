@@ -22,7 +22,8 @@ from .memory import MemoryStore, Compactor, HistoryDB, HistoryDBPool
 from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
 from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
-from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime
+from .application.chat_service import ApplicationService, RunTurnOptions
+from .core import ChatSession, HistoryPersister, build_session_runtime
 from .core.runtime_context import SessionIdentity, SessionRuntimeContext
 from .core.settings import SettingsSnapshot
 from .logger import logger
