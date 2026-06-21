@@ -1603,27 +1603,32 @@ def test_web_model_routes_use_runtime_settings_boundary():
     routes_models = (repo / "src/mini_ai/web/routes/models.py").read_text()
     routes_sessions = (repo / "src/mini_ai/web/routes/sessions.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    model_use_cases = (repo / "src/mini_ai/application/model_use_cases.py").read_text()
 
     assert "from ...config import" not in routes_models
     assert "from ...config import" not in routes_sessions
     assert "get_model_config" not in runtime_helpers
     assert "build_settings_snapshot" in runtime_helpers
     assert "current_settings_snapshot" in runtime_helpers
-    assert "model_config_for_name" in runtime_helpers
+    assert "model_use_cases.model_config_for_name" in runtime_helpers
+    assert "def model_options" in model_use_cases
+    assert "def settings_for_model" in model_use_cases
 
 
 def test_web_skill_routes_use_runtime_settings_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_skills = (repo / "src/mini_ai/web/routes/skills.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    runtime_paths = (repo / "src/mini_ai/application/runtime_paths.py").read_text()
 
     assert "from ...config import" not in routes_skills
     assert "DATA_DIR" not in routes_skills
     assert "SKILL_PATHS" not in routes_skills
     assert "user_data_dir" not in routes_skills
     assert "skill_loader_for_user_workspace" in routes_skills
-    assert "skill_loader_for_user_workspace" in runtime_helpers
-    assert "user_data_dir_for_settings" in runtime_helpers
+    assert "runtime_paths.skill_loader_for_user_workspace" in runtime_helpers
+    assert "runtime_paths.user_data_dir_for" in runtime_helpers
+    assert "def skill_loader_for_user_workspace" in runtime_paths
 
 
 def test_cli_display_uses_runtime_settings_boundary():
@@ -1631,6 +1636,7 @@ def test_cli_display_uses_runtime_settings_boundary():
     display_text = (repo / "src/mini_ai/cli/display.py").read_text()
     commands_text = (repo / "src/mini_ai/cli/commands.py").read_text()
     helper_text = (repo / "src/mini_ai/cli/runtime_helpers.py").read_text()
+    model_use_cases = (repo / "src/mini_ai/application/model_use_cases.py").read_text()
 
     assert "from ..config import" not in display_text
     assert "_raw" not in display_text
@@ -1644,6 +1650,8 @@ def test_cli_display_uses_runtime_settings_boundary():
     assert "switch_model" not in commands_text
     assert "_config_path" not in commands_text
     assert "build_settings_snapshot" in helper_text
+    assert "model_use_cases.model_completion_items" in helper_text
+    assert "def model_completion_items" in model_use_cases
     assert "model_completion_items" in display_text
     assert "skill_loader_for_settings" in display_text
     assert "switch_active_model" in commands_text
@@ -1654,6 +1662,7 @@ def test_cli_main_uses_runtime_bootstrap_helpers():
     repo = Path(__file__).resolve().parents[1]
     main_text = (repo / "src/mini_ai/main.py").read_text()
     helper_text = (repo / "src/mini_ai/cli/runtime_helpers.py").read_text()
+    runtime_paths = (repo / "src/mini_ai/application/runtime_paths.py").read_text()
 
     assert "from .config import" not in main_text
     assert "DATA_DIR" not in main_text
@@ -1664,6 +1673,10 @@ def test_cli_main_uses_runtime_bootstrap_helpers():
     assert "user_data_dir_for_settings" in main_text
     assert "subagent_loader_for_settings" in main_text
     assert "active_workspace_name" in main_text
+    assert "runtime_paths.user_data_dir_for" in helper_text
+    assert "runtime_paths.subagent_loader_for" in helper_text
+    assert "runtime_paths.memory_roots_for" in helper_text
+    assert "def memory_roots_for" in runtime_paths
     assert "start_config_watcher" in helper_text
     assert "stop_config_watcher" in helper_text
 

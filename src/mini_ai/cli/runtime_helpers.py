@@ -11,6 +11,7 @@ import importlib
 
 import yaml
 
+from ..application import model_use_cases, runtime_paths
 from ..core.runtime_factory import build_settings_snapshot
 from ..core.settings import SettingsSnapshot
 from ..skills import SkillLoader
@@ -36,36 +37,25 @@ class WorkspaceSwitchResult:
 def user_data_dir_for_settings(username: str, settings: SettingsSnapshot | None = None) -> Path:
     """Return a CLI user data directory from runtime path settings."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    data_dir = runtime_settings.paths.data_dir or Path.home() / ".mini_ai"
-    user = username or "default"
-    user_dir = data_dir / "users" / user
-    user_dir.mkdir(parents=True, exist_ok=True)
-    return user_dir
+    return runtime_paths.user_data_dir_for(settings or current_settings_snapshot(), username)
 
 
 def subagent_loader_for_settings(settings: SettingsSnapshot | None = None) -> SubagentLoader:
     """Build the CLI subagent loader from runtime package settings."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    package_dir = runtime_settings.paths.package_dir or Path(__file__).resolve().parents[1]
-    return SubagentLoader(package_dir / "subagents")
+    return runtime_paths.subagent_loader_for(settings or current_settings_snapshot())
 
 
 def context_builder_root(settings: SettingsSnapshot | None = None) -> Path:
     """Return the configured data root for context construction."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    return runtime_settings.paths.data_dir or Path.home() / ".mini_ai"
+    return runtime_paths.context_builder_root_for(settings or current_settings_snapshot())
 
 
 def memory_roots_for_settings(username: str, ws_dir: Path, settings: SettingsSnapshot | None = None) -> tuple[Path, Path, Path]:
     """Return global, user and workspace memory roots from runtime settings."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    data_dir = runtime_settings.paths.data_dir or Path.home() / ".mini_ai"
-    user_dir = user_data_dir_for_settings(username, runtime_settings)
-    return data_dir / "memory", user_dir / "memory", Path(ws_dir) / "memory_data"
+    return runtime_paths.memory_roots_for(settings or current_settings_snapshot(), username, ws_dir)
 
 
 def _config_module():
@@ -81,27 +71,19 @@ def current_settings_snapshot() -> SettingsSnapshot:
 def available_model_names(settings: SettingsSnapshot | None = None) -> list[str]:
     """Return configured model names in config order."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    return list(runtime_settings.model_configs.keys())
+    return model_use_cases.available_model_names(settings or current_settings_snapshot())
 
 
 def active_model_label(settings: SettingsSnapshot | None = None) -> str:
     """Return the active provider model id for display."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    return runtime_settings.model.model or "?"
+    return model_use_cases.active_model_label(settings or current_settings_snapshot())
 
 
 def model_completion_items(settings: SettingsSnapshot | None = None) -> list[tuple[str, str]]:
     """Return slash-command completion entries for configured models."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    active_name = runtime_settings.active_model_name
-    items: list[tuple[str, str]] = []
-    for name, config in runtime_settings.model_configs.items():
-        model_id = runtime_settings.model.model if name == active_name else str(config.get("model", ""))
-        items.append((f"/model {name}", model_id or ""))
-    return items
+    return model_use_cases.model_completion_items(settings or current_settings_snapshot())
 
 
 def switch_active_model(name: str) -> ModelSwitchResult:
@@ -155,6 +137,4 @@ def stop_config_watcher() -> None:
 def skill_loader_for_settings(settings: SettingsSnapshot | None = None) -> SkillLoader:
     """Build the CLI skill loader from runtime path settings."""
 
-    runtime_settings = settings or current_settings_snapshot()
-    data_dir = runtime_settings.paths.data_dir or Path.home() / ".mini_ai"
-    return SkillLoader(data_dir / "skills", runtime_settings.paths.skill_paths)
+    return runtime_paths.skill_loader_for(settings or current_settings_snapshot())
