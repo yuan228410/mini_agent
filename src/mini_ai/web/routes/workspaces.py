@@ -3,9 +3,10 @@ from fastapi import APIRouter, Query
 
 import time
 
-from ...config import DATA_DIR, user_data_dir
+from ...application import workspace_service
 from ...logger import logger
 from ...workspace import WorkspaceManager
+from ..runtime_helpers import workspace_manager_for_user
 from ..route_types import (
     RemovedWorkspacesResponse,
     RouteErrorResponse,
@@ -25,25 +26,16 @@ _ws_managers: dict[str, WorkspaceManager] = {}
 
 def _get_mgr(username: str) -> WorkspaceManager:
     if username not in _ws_managers:
-        _ws_managers[username] = WorkspaceManager(user_data_dir(username), ensure_default=False)
+        _ws_managers[username] = workspace_manager_for_user(username)
     return _ws_managers[username]
 
 
 @router.get("/workspaces")
 async def list_workspaces(username: str = Query(...)) -> WorkspaceListResponse:
     _t0 = time.time()
-    import os
-    mgr = _get_mgr(username)
-    ws = mgr.get("default")
-    if ws and not ws.project_path:
-        user_dir = os.path.join(os.getcwd(), username)
-        os.makedirs(user_dir, exist_ok=True)
-        ws.update_project_path(user_dir)
-    elif not ws:
-        mgr.create("default", os.path.join(os.getcwd(), username))
-    workspaces = mgr.list_all()
-    logger.debug(f"[perf] list_workspaces user={username} count={len(workspaces)} time={time.time()-_t0:.3f}s")
-    return {"workspaces": workspaces, "active": "default"}
+    result = workspace_service.list_workspaces(_get_mgr(username), username)
+    logger.debug(f"[perf] list_workspaces user={username} count={len(result['workspaces'])} time={time.time()-_t0:.3f}s")
+    return result
 
 
 @router.post("/workspaces")
@@ -51,105 +43,47 @@ async def create_workspace(body: WorkspaceCreateRequest) -> WorkspaceActionRespo
     name = body.get("name", "").strip()
     project_path = body.get("project_path", "").strip()
     username = body.get("username", "")
-    if not name:
-        return {"error": "名称不能为空"}
-    if not username:
-        return {"error": "缺少 username"}
-    mgr = _get_mgr(username)
-    result = mgr.create(name, project_path)
-    if result.startswith("Error"):
-        return {"error": result}
-    return {"status": "ok", "message": result}
+    return workspace_service.create_workspace(_get_mgr(username), name, project_path, username)
 
 
 @router.post("/workspaces/add")
 async def add_workspace(body: WorkspaceAddRequest) -> WorkspaceActionResponse | RouteErrorResponse:
     path = body.get("path", "").strip()
     username = body.get("username", "")
-    if not path:
-        return {"error": "路径不能为空"}
-    if not username:
-        return {"error": "缺少 username"}
-    mgr = _get_mgr(username)
-    result = mgr.add(path)
-    if result.startswith("Error"):
-        return {"error": result}
-    return {"status": "ok", "message": result}
+    return workspace_service.add_workspace(_get_mgr(username), path, username)
 
 
 @router.post("/workspaces/switch")
 async def switch_workspace(body: WorkspaceSwitchRequest) -> WorkspaceSwitchResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     username = body.get("username", "")
-    if not name:
-        return {"error": "名称不能为空"}
-    if not username:
-        return {"error": "缺少 username"}
-    mgr = _get_mgr(username)
-    ws = mgr.get(name)
-    if not ws:
-        return {"error": f"工作空间 '{name}' 不存在"}
+    result = workspace_service.switch_workspace(_get_mgr(username), name, username)
+    if result.get("status") == "ok":
+        from ..session_manager import SessionManager
+        from ...tools.cache import clear_tool_cache
 
-    from ..session_manager import SessionManager
-    from ...context import ContextBuilder
-    from ...memory import MemoryStore
-    from ...skills import SkillLoader
-
-    # 清理目标工作空间的缓存
-    from ...tools.cache import clear_tool_cache
-    
-    # 清除工具缓存，避免跨工作空间缓存污染
-    clear_tool_cache()
-    
-    # 清除旧工作空间的缓存会话
-    SessionManager.instance().clear_workspace_prefix(f"{username}:{name}:")
-
-    store = MemoryStore(ws.ws_dir / "memory_data")
-    ctx = ContextBuilder(DATA_DIR)
-    skill_loader = SkillLoader(DATA_DIR / "skills", [], user_skills_dir=user_data_dir(username) / "skills", workspace_skills_dir=ws.ws_dir / "skills")
-    system_prompt = ctx.build(memory_store=store, skill_loader=skill_loader, project_path=ws.project_path)
-
-    return {"status": "ok", "message": f"已切换到 '{name}'", "project_path": ws.project_path}
+        clear_tool_cache()
+        SessionManager.instance().clear_workspace_prefix(f"{username}:{name}:")
+    return result
 
 
 @router.delete("/workspaces/{name}")
 async def remove_workspace(name: str, delete_data: bool = False, username: str = Query(...)) -> WorkspaceActionResponse | RouteErrorResponse:
-    mgr = _get_mgr(username)
-    if delete_data:
-        result = mgr.delete(name)
-    else:
-        result = mgr.remove(name)
-    if result.startswith("Error"):
-        return {"error": result}
-    return {"status": "ok", "message": result}
+    return workspace_service.remove_workspace(_get_mgr(username), name, delete_data)
 
 
 @router.get("/workspaces/removed")
 async def list_removed_workspaces(username: str = Query(...)) -> RemovedWorkspacesResponse:
-    mgr = _get_mgr(username)
-    removed = mgr.list_removed()
-    return {"removed": removed}
+    return workspace_service.list_removed_workspaces(_get_mgr(username))
 
 
 @router.post("/workspaces/restore")
 async def restore_workspace(body: WorkspaceRestoreRequest) -> WorkspaceActionResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     username = body.get("username", "")
-    if not name:
-        return {"error": "名称不能为空"}
-    if not username:
-        return {"error": "缺少 username"}
-    mgr = _get_mgr(username)
-    result = mgr.restore(name)
-    if result.startswith("Error"):
-        return {"error": result}
-    return {"status": "ok", "message": result}
+    return workspace_service.restore_workspace(_get_mgr(username), name, username)
 
 
 @router.delete("/workspaces/removed/{name}")
 async def delete_removed_workspace(name: str, username: str = Query(...)) -> WorkspaceActionResponse | RouteErrorResponse:
-    mgr = _get_mgr(username)
-    result = mgr.delete_removed(name)
-    if result.startswith("Error"):
-        return {"error": result}
-    return {"status": "ok", "message": result}
+    return workspace_service.delete_removed_workspace(_get_mgr(username), name)

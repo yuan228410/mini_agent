@@ -1642,6 +1642,29 @@ def test_web_skill_routes_use_runtime_settings_boundary():
     assert "install_skill_with_loader" in skill_service
 
 
+def test_web_workspace_routes_use_application_service_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_workspaces = (repo / "src/mini_ai/web/routes/workspaces.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    workspace_service = (repo / "src/mini_ai/application/workspace_service.py").read_text()
+
+    assert "from ...config import" not in routes_workspaces
+    assert "DATA_DIR" not in routes_workspaces
+    assert "user_data_dir" not in routes_workspaces
+    assert "ContextBuilder" not in routes_workspaces
+    assert "MemoryStore" not in routes_workspaces
+    assert "SkillLoader" not in routes_workspaces
+    assert "mgr.create" not in routes_workspaces
+    assert "mgr.add" not in routes_workspaces
+    assert "mgr.delete" not in routes_workspaces
+    assert "workspace_service.list_workspaces" in routes_workspaces
+    assert "workspace_service.switch_workspace" in routes_workspaces
+    assert "workspace_manager_for_user" in routes_workspaces
+    assert "def workspace_manager_for_user" in runtime_helpers
+    assert "def create_workspace" in workspace_service
+    assert "def switch_workspace" in workspace_service
+
+
 def test_cli_display_uses_runtime_settings_boundary():
     repo = Path(__file__).resolve().parents[1]
     display_text = (repo / "src/mini_ai/cli/display.py").read_text()

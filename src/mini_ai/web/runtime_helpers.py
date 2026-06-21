@@ -12,6 +12,7 @@ from ..core.runtime_factory import build_request_context, build_settings_snapsho
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
 from ..skills import SkillLoader
+from ..workspace import WorkspaceManager
 
 
 def current_settings_snapshot() -> SettingsSnapshot:
@@ -36,6 +37,12 @@ def user_data_dir_for_settings(username: str, settings: SettingsSnapshot | None 
     """Return a user data directory from runtime path settings."""
 
     return runtime_paths.user_data_dir_for(settings or current_settings_snapshot(), username)
+
+
+def workspace_manager_for_user(username: str, settings: SettingsSnapshot | None = None) -> WorkspaceManager:
+    """Build a workspace manager from runtime path settings."""
+
+    return WorkspaceManager(user_data_dir_for_settings(username, settings), ensure_default=False)
 
 
 def skill_loader_for_user_workspace(username: str = "", workspace: str = "", settings: SettingsSnapshot | None = None) -> SkillLoader:
