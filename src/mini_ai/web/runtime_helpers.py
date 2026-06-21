@@ -6,6 +6,7 @@ models and create request contexts at the adapter boundary.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from ..application import model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
@@ -100,6 +101,30 @@ def model_route_dependencies() -> ModelRouteDependencies:
         load_session_model=_load_session_model,
         save_session_model=_save_session_model,
     )
+
+
+def chat_session_dependencies() -> dict[str, Any]:
+    """Return Web chat session helpers behind the adapter boundary."""
+
+    from .session_manager import (
+        SessionManager,
+        cache_key,
+        get_or_create_components,
+        get_or_create_session,
+        resolve_base,
+        _load_session_name,
+        _update_meta_cache,
+    )
+
+    return {
+        "session_manager": SessionManager.instance(),
+        "cache_key": cache_key,
+        "resolve_base": resolve_base,
+        "get_or_create_session": get_or_create_session,
+        "get_or_create_components": get_or_create_components,
+        "load_session_name": _load_session_name,
+        "update_meta_cache": _update_meta_cache,
+    }
 
 
 def session_service_dependencies() -> SessionServiceDependencies:

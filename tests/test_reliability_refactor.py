@@ -408,14 +408,21 @@ def test_web_runtime_paths_do_not_import_model_config_global():
 def test_web_chat_route_does_not_import_stale_session_helpers():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     stale_imports = [
         "ws_key",
         "safe_queue_put",
         "build_system_prompt",
         "_save_session_name",
         "_build_meta",
+        "from ..session_manager import",
+        "SessionManager",
+        "_load_session_name",
+        "_update_meta_cache",
     ]
     assert [name for name in stale_imports if name in text] == []
+    assert "chat_session_dependencies" in text
+    assert "def chat_session_dependencies" in runtime_helpers
 
 
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():

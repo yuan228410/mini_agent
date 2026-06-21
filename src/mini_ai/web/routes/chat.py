@@ -26,17 +26,16 @@ from ..route_types import (
     ImageUpload,
     RouteErrorResponse,
 )
-from ..session_manager import (
-    SessionManager, cache_key,
-    resolve_base, get_or_create_session, get_or_create_components,
-    _load_session_name, _update_meta_cache,
-)
 from ..chat_runner import run_tool_loop_sync
-from ..runtime_helpers import request_context_for_settings, settings_for_model
+from ..runtime_helpers import chat_session_dependencies, request_context_for_settings, settings_for_model
 from ...plan.service import PlanService
 from ...plan.store import PlanStore
 
 router = APIRouter()
+
+
+def _chat_deps():
+    return chat_session_dependencies()
 
 
 # ── WebSocket endpoint ──
@@ -48,6 +47,13 @@ async def chat_ws_endpoint(ws: WebSocket):
     ws_closed = False
     _write_lock = asyncio.Lock()
     _ws_username: str | None = None
+    deps = _chat_deps()
+    sm = deps["session_manager"]
+    cache_key = deps["cache_key"]
+    resolve_base = deps["resolve_base"]
+    get_or_create_session = deps["get_or_create_session"]
+    get_or_create_components = deps["get_or_create_components"]
+    update_meta_cache = deps["update_meta_cache"]
 
     def _ws_event(event: DisplayEventType | str, **data) -> DisplayWireEvent:
         event_type = event if isinstance(event, DisplayEventType) else DisplayEventType(event)
@@ -101,7 +107,6 @@ async def chat_ws_endpoint(ws: WebSocket):
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
         loop = asyncio.get_event_loop()
 
-        sm = SessionManager.instance()
         abort_event = sm.get_abort_event(session_key)
         if abort_event is None:
             abort_event = threading.Event()
@@ -174,7 +179,7 @@ async def chat_ws_endpoint(ws: WebSocket):
 
         usage = complete_usage
         sm.set_last_usage(session_key, usage)
-        _update_meta_cache(username, sid, ws_name, messages)
+        update_meta_cache(username, sid, ws_name, messages)
 
         logger.info(f"[Web] WS loop exit: aborted={aborted} got_terminal={got_terminal} sid={sid}")
         if not aborted and not got_terminal:
@@ -228,7 +233,6 @@ async def chat_ws_endpoint(ws: WebSocket):
                         abort_username = _ws_username
                         abort_ws = data.get("workspace")
                         if abort_sid:
-                            sm = SessionManager.instance()
                             evt = sm.get_abort_event(cache_key(abort_username, abort_ws, abort_sid))
                             if evt:
                                 evt.set()
@@ -246,7 +250,6 @@ async def chat_ws_endpoint(ws: WebSocket):
                         sid, messages = get_or_create_session(username, session_id, base, ws_name)
                         comp = get_or_create_components(username, sid, base, ws_name)
                         session_key = cache_key(username, ws_name, sid)
-                        sm = SessionManager.instance()
                         store = PlanStore(comp["history_db"], ws_name or "default", sid)
                         plan_svc = PlanService()
 
@@ -333,7 +336,6 @@ async def chat_ws_endpoint(ws: WebSocket):
 
                         before = len(non_system)
                         session_key = cache_key(username, ws_name, sid)
-                        sm = SessionManager.instance()
                         model_name = sm.get_model(session_key)
                         settings = settings_for_model(comp["settings"], model_name)
                         ctx = request_context_for_settings(settings, display=None)
@@ -357,7 +359,6 @@ async def chat_ws_endpoint(ws: WebSocket):
                         sid, _ = get_or_create_session(username, session_id, base, ws_name)
                         comp = get_or_create_components(username, sid, base, ws_name)
                         session_key = cache_key(username, ws_name, sid)
-                        sm = SessionManager.instance()
                         store = PlanStore(comp["history_db"], ws_name or "default", sid)
                         artifact_dict = sm.get_plan_state(session_key).current_plan or store.current()
                         if not artifact_dict:
@@ -392,7 +393,6 @@ async def chat_ws_endpoint(ws: WebSocket):
 
                     # 同一会话只允许一个生成任务，避免多个 runner 同时改同一 messages 导致串流
                     session_key = cache_key(username, ws_name, sid)
-                    sm = SessionManager.instance()
                     task = asyncio.create_task(
                         _run_chat(sid, username, user_message, ws_name, images)
                     )
@@ -423,7 +423,6 @@ async def chat_ws_endpoint(ws: WebSocket):
     finally:
         ws_closed = True
         # 中止所有关联会话
-        sm = SessionManager.instance()
         for key in _ws_abort_keys:
             evt = sm.get_abort_event(key)
             if evt:
@@ -448,13 +447,17 @@ async def chat_history(session_id: str = Query(default=""), username: str = Quer
         return {"session_id": session_id, "history": []}
     if not session_id:
         return {"session_id": "", "history": []}
+    deps = _chat_deps()
+    resolve_base = deps["resolve_base"]
+    cache_key = deps["cache_key"]
+    get_or_create_components = deps["get_or_create_components"]
+    sm = deps["session_manager"]
     try:
         base = resolve_base(username, workspace or None)
     except Exception:
         return {"session_id": session_id, "history": []}
 
     key = cache_key(username, workspace or None, session_id)
-    sm = SessionManager.instance()
     mem_msgs = sm.get_messages(key)
 
     current_plan = None
@@ -518,6 +521,12 @@ async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse 
         return {"error": "缺少 username"}
     if not session_id:
         session_id = "default"
+    deps = _chat_deps()
+    resolve_base = deps["resolve_base"]
+    cache_key = deps["cache_key"]
+    get_or_create_session = deps["get_or_create_session"]
+    update_meta_cache = deps["update_meta_cache"]
+    sm = deps["session_manager"]
     ws = workspace or None
     base = resolve_base(username, ws)
     sid, messages = get_or_create_session(username, session_id, base, ws, create=False)
@@ -527,12 +536,11 @@ async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse 
     old_name = messages[0].get("name", "")
     key = cache_key(username, ws, sid)
 
-    sm = SessionManager.instance()
     sm.reset_session(key, system_content, old_name)
     msgs = sm.get_messages(key)
     if msgs:
         _inject_todos(msgs)
-    _update_meta_cache(username, sid, ws, msgs)
+    update_meta_cache(username, sid, ws, msgs)
 
     return {"status": "ok", "session_id": sid}
 
@@ -542,6 +550,10 @@ async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse 
 @router.get("/chat/export")
 async def chat_export(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default=""), limit: int = Query(default=0), include_thinking: bool = Query(default=False), include_tools: bool = Query(default=False)):
     from fastapi.responses import JSONResponse, Response
+    deps = _chat_deps()
+    resolve_base = deps["resolve_base"]
+    get_or_create_components = deps["get_or_create_components"]
+    load_session_name = deps["load_session_name"]
     if not username:
         return JSONResponse({"error": "缺少 username"}, status_code=400)
     if not session_id:
@@ -557,7 +569,7 @@ async def chat_export(session_id: str = Query(default=""), username: str = Query
     if not messages:
         return JSONResponse({"error": f"会话 '{session_id}' 不存在或无消息"}, status_code=404)
 
-    session_name = _load_session_name(base, session_id)
+    session_name = load_session_name(base, session_id)
     if not session_name:
         for m in messages:
             if m.get("role") == "user" and m.get("content"):
