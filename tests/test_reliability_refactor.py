@@ -1657,6 +1657,33 @@ def test_web_session_routes_use_application_service_boundary():
     assert "def rename_session" in session_service
 
 
+def test_web_config_preview_routes_use_application_service_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_config = (repo / "src/mini_ai/web/routes/config.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    config_service = (repo / "src/mini_ai/application/config_service.py").read_text()
+
+    preview_area = routes_config.split('@router.get("/settings")', 1)[0]
+    assert "get_model_config" not in preview_area
+    assert "MODEL_CONFIG" not in preview_area
+    assert "estimate_tokens" not in preview_area
+    assert "from ..session_manager import" not in preview_area
+    assert "SessionManager" not in preview_area
+    assert "ContextBuilder" not in preview_area
+    assert "SkillLoader" not in preview_area
+    assert "DATA_DIR" not in preview_area
+    assert "SKILL_PATHS" not in preview_area
+    assert "config_service.config_summary" in preview_area
+    assert "config_service.system_prompt_preview" in preview_area
+    assert "config_service.tools_preview" in preview_area
+    assert "config_preview_dependencies" in preview_area
+    assert "def config_preview_dependencies" in runtime_helpers
+    assert "class ConfigPreviewDependencies" in config_service
+    assert "def config_summary" in config_service
+    assert "def system_prompt_preview" in config_service
+    assert "def tools_preview" in config_service
+
+
 def test_web_command_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_commands = (repo / "src/mini_ai/web/routes/commands.py").read_text()

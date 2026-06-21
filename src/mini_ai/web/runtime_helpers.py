@@ -12,6 +12,7 @@ from ..application import model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
+from ..application.config_service import ConfigPreviewDependencies
 from ..application.model_use_cases import ModelRouteDependencies
 from ..application.session_service import SessionServiceDependencies
 from ..application.workspace_service import WorkspaceSwitchDependencies
@@ -87,6 +88,23 @@ def settings_for_model(base_settings: SettingsSnapshot, model_name: str | None) 
 
 def request_context_for_settings(settings: SettingsSnapshot, display=None) -> RequestContextProtocol:
     return build_request_context(settings, display=display)
+
+
+def config_preview_dependencies() -> ConfigPreviewDependencies:
+    """Build Web config preview use-case dependencies at the adapter boundary."""
+
+    from .session_manager import SessionManager, cache_key, get_or_create_components, get_or_create_session, resolve_base, _load_session_model
+    from ..llm.base import estimate_tokens
+
+    return ConfigPreviewDependencies(
+        session_manager=SessionManager.instance(),
+        cache_key=cache_key,
+        resolve_base=resolve_base,
+        get_or_create_session=get_or_create_session,
+        get_or_create_components=get_or_create_components,
+        load_session_model=_load_session_model,
+        estimate_tokens=estimate_tokens,
+    )
 
 
 def model_route_dependencies() -> ModelRouteDependencies:

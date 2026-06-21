@@ -5,8 +5,8 @@ import yaml
 from fastapi import APIRouter, Query
 
 from ... import __version__
-from ...config import MODEL_CONFIG, get_model_config, _raw, _config_path, AVAILABLE_MODELS, switch_model as _switch_model
-from ...llm.base import estimate_tokens
+from ...application import config_service
+from ...config import _raw, _config_path, AVAILABLE_MODELS, switch_model as _switch_model
 from ...logger import logger
 from ..route_types import (
     AddModelRequest,
@@ -24,7 +24,7 @@ from ..route_types import (
     SystemPromptResponse,
     ToolsResponse,
 )
-from ..session_manager import SessionManager, cache_key, resolve_base, get_or_create_session, get_or_create_components, _load_session_model
+from ..runtime_helpers import config_preview_dependencies, current_settings_snapshot
 
 router = APIRouter()
 
@@ -35,31 +35,16 @@ async def get_config(session_id: str = Query(default=""), username: str = Query(
         return {"error": "缺少 username"}
     if not session_id:
         session_id = "default"
-    ws = workspace or None
-    # already imported from session_manager
-    base = resolve_base(username, ws)
-    key = cache_key(username, ws, session_id)
-    _, messages = get_or_create_session(username, session_id, base, ws, create=False)
-    s = SessionManager.instance().get(key)
-    usage = s.last_usage if s and s.last_usage else {"prompt_tokens": 0, "completion_tokens": 0}
-    model_name = SessionManager.instance().get_model(key)
-    if not model_name:
-        # 从 meta.json 恢复会话专属模型
-        # already imported from session_manager
-        model_name = _load_session_model(base, session_id)
-    model_cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+    result = config_service.config_summary(
+        current_settings_snapshot(),
+        config_preview_dependencies(),
+        version=__version__,
+        username=username,
+        session_id=session_id,
+        workspace=workspace,
+    )
     logger.debug(f"[perf] get_config sid={session_id} ws={workspace} time={time.time()-_t0:.3f}s")
-    return {
-        "version": __version__,
-        "model": model_cfg.get("model", "?"),
-        "context_length": model_cfg.get("context_length", 256000),
-        "prompt_tokens": usage["prompt_tokens"],
-        "completion_tokens": usage["completion_tokens"],
-        "system_prompt_tokens": estimate_tokens(messages[0]["content"]) if messages else 0,
-        "history_count": len(messages) - 1 if messages else 0,
-        "session_id": session_id,
-        "username": username,
-    }
+    return result
 
 
 @router.get("/config/system-prompt")
@@ -68,82 +53,22 @@ async def get_system_prompt(username: str = Query(default=""), workspace: str = 
     if not username:
         return {"error": "缺少 username"}
     
-    from ..session_manager import resolve_base, get_or_create_components
-    from ...context import ContextBuilder
-    from ...skills import SkillLoader
-    from ...config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
-    from ...llm import estimate_tokens
-    
-    ws = workspace or None
-    base = resolve_base(username, ws)
-    
-    # 获取组件（MemoryStore, SkillLoader 等）
-    comp_key = "default"
-    comp = get_or_create_components(username, comp_key, base, ws)
-    
-    # 构建完整系统提示词
-    ctx_builder = ContextBuilder(DATA_DIR)
-    _sl = SkillLoader(DATA_DIR / "skills", _SP)
-    project_path = str(base) if base else ""
-    
-    system_prompt = ctx_builder.build(
-        memory_store=comp["store"],
-        skill_loader=_sl,
-        project_path=project_path
-    )
-    
-    chars = len(system_prompt)
-    tokens = estimate_tokens(system_prompt)
-    
-    return {
-        "system_prompt": system_prompt,
-        "chars": chars,
-        "tokens": tokens,
-    }
+    return config_service.system_prompt_preview(config_preview_dependencies(), username=username, workspace=workspace)
 
 
 @router.get("/config/tools")
 async def get_tools(username: str = Query(default=""), workspace: str = Query(default=""), session_id: str = Query(default="default")) -> ToolsResponse:
     """获取当前会话工具定义（含字符数和 token 估算）。"""
-    from ...core import build_session_runtime
-    from ...core.runtime_context import SessionIdentity
     from ..deps import SUBAGENT_LOADER, _MCP_LOADER
 
-    ws = workspace or None
-    base = resolve_base(username or "default", ws)
-    comp = get_or_create_components(username or "default", session_id or "default", base, ws)
-    runtime = build_session_runtime(
-        identity=SessionIdentity(
-            username=username or "default",
-            workspace=workspace or "default",
-            session_id=session_id or "default",
-            project_path=comp.get("project_path") or "",
-        ),
-        messages=[],
-        history_db=comp.get("history_db"),
-        memory_store=comp.get("store"),
-        skill_loader=comp.get("skill_loader"),
+    return config_service.tools_preview(
+        config_preview_dependencies(),
+        username=username,
+        workspace=workspace,
+        session_id=session_id,
         subagent_loader=SUBAGENT_LOADER,
-        bus=comp.get("bus"),
-        team_mgr=comp.get("team_mgr"),
-        blackboard=comp.get("blackboard"),
         mcp_loader=_MCP_LOADER,
-        compactor=comp.get("compactor"),
-        context_builder=comp.get("ctx_builder"),
     )
-    tools = [d for d in runtime.tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
-    import json
-    tools_json = json.dumps(tools, ensure_ascii=False)
-    chars = len(tools_json)
-    tokens = estimate_tokens(tools_json)
-    tool_names = [t.get("function", {}).get("name", "?") for t in tools]
-    return {
-        "tools": tools,
-        "count": len(tools),
-        "chars": chars,
-        "tokens": tokens,
-        "tool_names": tool_names,
-    }
 
 
 @router.get("/settings")
