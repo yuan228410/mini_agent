@@ -5,6 +5,7 @@ from ..logger import logger
 from ..utils import now_ts
 from ..plan.schema import PlanSessionState, PlanArtifact
 from ..plan.service import PlanService
+from .runtime_helpers import active_model_label, available_model_names, persist_active_workspace, switch_active_model
 
 
 class CommandHandler:
@@ -238,10 +239,8 @@ class CommandHandler:
             return "continue"
 
         if user_input == "/model":
-            from ..config import AVAILABLE_MODELS, MODEL_CONFIG
-            current_model = MODEL_CONFIG.get("model", "?")
-            self.disp.info(f"当前: {current_model}")
-            for name in AVAILABLE_MODELS:
+            self.disp.info(f"当前: {active_model_label()}")
+            for name in available_model_names():
                 self.disp.info(f"  {name}")
             return "continue"
 
@@ -250,15 +249,11 @@ class CommandHandler:
             if not model_name:
                 self.disp.error("用法: /model <模型名称>")
                 return "continue"
-            from ..config import AVAILABLE_MODELS, switch_model, MODEL_CONFIG
-            if model_name not in AVAILABLE_MODELS:
-                self.disp.error(f"未知模型: {model_name}，可选: {', '.join(AVAILABLE_MODELS)}")
+            result = switch_active_model(model_name)
+            if not result.ok:
+                self.disp.error(result.error)
                 return "continue"
-            err = switch_model(model_name)
-            if err:
-                self.disp.error(err)
-                return "continue"
-            self.disp.info(f"已切换到模型: {model_name} ({MODEL_CONFIG.get('model', '?')})")
+            self.disp.info(f"已切换到模型: {result.name} ({result.model})")
             return "continue"
 
         if user_input == "/purge":
@@ -630,10 +625,10 @@ tags: 标签1,标签2
                 if not ws:
                     self.disp.error(f"工作空间 '{sub}' 不存在")
                 else:
-                    from ..config import _raw, _config_path
-                    import yaml as _yaml
-                    _raw["active_workspace"] = sub
-                    _config_path.write_text(_yaml.dump(_raw, default_flow_style=False, allow_unicode=True), encoding="utf-8")
+                    result = persist_active_workspace(sub)
+                    if not result.ok:
+                        self.disp.error(result.error)
+                        return "continue"
                     self.disp.info(f"已切换到工作空间 '{sub}'，正在重新加载...")
                     return "reload_workspace"
             return "continue"
