@@ -531,6 +531,8 @@ def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
         "team/loop.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get"),
         "llm/openai.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get", "TIMEOUTS["),
         "llm/anthropic.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get", "TIMEOUTS["),
+        "tools/mcp_loader.py": ("from ..config import MCP", "MCP.get", "_MCP_SERVERS", "_CONNECT_TIMEOUT", "_EXECUTE_TIMEOUT", "_SSE_READ_TIMEOUT"),
+        "tools/base.py": ("from ..config import TOOL", "TOOL.get", "\n_MAX_RESULT_CHARS ="),
     }
 
     offenders = []
@@ -1243,7 +1245,7 @@ def test_runtime_protocols_use_structured_team_and_subagent_aliases():
 
 def test_tool_modules_use_explicit_argument_and_definition_aliases():
     import typing
-    from mini_ai.core.runtime_types import ToolArgs, ToolDefinition, ToolParameterSchema
+    from mini_ai.core.runtime_types import McpConfigDict, ToolArgs, ToolDefinition, ToolParameterSchema
     from mini_ai.tools import ToolRegistry, _BoundTool
     from mini_ai.tools.base import ToolBase
     from mini_ai.tools.cache import ToolCache
@@ -1256,6 +1258,8 @@ def test_tool_modules_use_explicit_argument_and_definition_aliases():
     registry_dispatch = typing.get_type_hints(ToolRegistry.dispatch)
     normalize_hints = typing.get_type_hints(normalize_tool_definition)
     cache_get = typing.get_type_hints(ToolCache.get)
+    mcp_conn_init = typing.get_type_hints(mcp_loader.MCPConnection.__init__)
+    mcp_loader_init = typing.get_type_hints(mcp_loader.MCPLoader.__init__)
     mcp_tool_init = typing.get_type_hints(mcp_loader._MCPToolModule.__init__)
     mcp_tool_execute = typing.get_type_hints(mcp_loader._MCPToolModule.execute)
     mcp_call = typing.get_type_hints(mcp_loader.MCPConnection.call_tool)
@@ -1269,6 +1273,8 @@ def test_tool_modules_use_explicit_argument_and_definition_aliases():
     assert normalize_hints["definition"] == ToolDefinition
     assert normalize_hints["return"] == ToolDefinition
     assert cache_get["args"] == ToolArgs
+    assert mcp_conn_init["settings"] is mcp_loader.McpSettings
+    assert mcp_loader_init["settings"] == mcp_loader.McpSettings | McpConfigDict | None
     assert mcp_tool_init["definition"] == ToolDefinition
     assert mcp_tool_execute["args"] == ToolArgs
     assert mcp_call["args"] == ToolArgs
@@ -1337,6 +1343,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
         RunnerConfigDict,
         TimeoutConfigDict,
         ToolConfigDict,
+        McpConfigDict,
     )
 
     config_hints = typing.get_type_hints(config)
@@ -1373,6 +1380,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert snapshot_hints["runner"] == RunnerConfigDict | None
     assert snapshot_hints["display"] == DisplayConfigDict | None
     assert snapshot_hints["tool"] == ToolConfigDict | None
+    assert snapshot_hints["mcp"] == McpConfigDict | None
     assert snapshot_hints["database"] == DatabaseConfigDict | None
 
     assert typing.get_type_hints(config.get_model_config)["return"] == ModelConfigDict | None

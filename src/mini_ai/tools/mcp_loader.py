@@ -1,24 +1,20 @@
 """MCP (Model Context Protocol) 客户端加载器"""
-from ..core.runtime_types import ToolArgs, ToolDefinition
+from ..core.runtime_types import McpConfigDict, ToolArgs, ToolDefinition
 import asyncio
+import copy
 import json
 import threading
 from typing import Any
 
-from ..config import MCP
+from ..core.settings import McpSettings
 from ..logger import logger
-
-_MCP_ENABLED = MCP.get("enabled", False)
-_MCP_SERVERS = MCP.get("servers", {})
-_CONNECT_TIMEOUT = MCP.get("connect_timeout", 10)
-_EXECUTE_TIMEOUT = MCP.get("execute_timeout", 60)
-_SSE_READ_TIMEOUT = MCP.get("sse_read_timeout", 120)
 
 
 class MCPConnection:
-    def __init__(self, server_name: str, cfg: dict):
+    def __init__(self, server_name: str, cfg: dict, settings: McpSettings):
         self.name = server_name
         self.cfg = cfg
+        self.settings = settings
         self.conn_type = cfg.get("type") or ("streamable_http" if cfg.get("url") else "stdio")
         self.session = None
         self.exit_stack = None
@@ -83,8 +79,8 @@ class MCPConnection:
         headers = self.cfg.get("headers")
         if headers:
             kwargs["headers"] = headers
-        kwargs["timeout"] = _CONNECT_TIMEOUT
-        kwargs["sse_read_timeout"] = _SSE_READ_TIMEOUT
+        kwargs["timeout"] = self.settings.connect_timeout
+        kwargs["sse_read_timeout"] = self.settings.sse_read_timeout
 
         read_stream, write_stream, _ = await self.exit_stack.enter_async_context(
             streamablehttp_client(**kwargs)
@@ -102,7 +98,7 @@ class MCPConnection:
         logger.info(f"[MCP] {self.name}: 发现 {len(self.tools)} 个工具")
 
     async def call_tool(self, tool_name: str, args: ToolArgs) -> str:
-        timeout = self.cfg.get("execute_timeout", _EXECUTE_TIMEOUT)
+        timeout = self.cfg.get("execute_timeout", self.settings.execute_timeout)
         async with asyncio.timeout(timeout):
             result = await self.session.call_tool(tool_name, arguments=args)
         parts = []
@@ -142,15 +138,25 @@ class _MCPToolModule:
 
 
 class MCPLoader:
-    def __init__(self):
+    def __init__(self, settings: McpSettings | McpConfigDict | None = None):
+        self.settings = settings if isinstance(settings, McpSettings) else McpSettings.from_dict(settings)
+        self._servers = copy.deepcopy(self.settings.servers)
         self._connections: dict[str, MCPConnection] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._started = threading.Event()
         self._tool_modules: list[_MCPToolModule] = []
 
+    @property
+    def enabled(self) -> bool:
+        return self.settings.enabled
+
+    @property
+    def servers(self) -> McpConfigDict:
+        return copy.deepcopy(self._servers)
+
     def start_sync(self) -> list[_MCPToolModule]:
-        if not _MCP_SERVERS:
+        if not self.enabled or not self._servers:
             return []
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
@@ -185,7 +191,7 @@ class MCPLoader:
         conn = self._connections.get(server_name)
         if not conn or not conn.session:
             return f"[MCP 错误] 服务器 {server_name} 未连接"
-        timeout = conn.cfg.get("execute_timeout", _EXECUTE_TIMEOUT)
+        timeout = conn.cfg.get("execute_timeout", self.settings.execute_timeout)
         future = asyncio.run_coroutine_threadsafe(
             conn.call_tool(tool_name, args), self._loop
         )
@@ -203,8 +209,8 @@ class MCPLoader:
         return self._tool_modules
 
     async def _start_all(self):
-        for server_name, cfg in _MCP_SERVERS.items():
-            conn = MCPConnection(server_name, cfg)
+        for server_name, cfg in self._servers.items():
+            conn = MCPConnection(server_name, cfg, self.settings)
             success = await conn.connect()
             if success and conn.tools:
                 self._connections[server_name] = conn

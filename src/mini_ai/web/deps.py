@@ -1,5 +1,6 @@
 """Web 模式共享依赖初始化（仅全局级组件）"""
 from ..config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS, MCP
+from ..core.settings import McpSettings
 from ..skills import SkillLoader
 from ..subagents import SubagentLoader
 
@@ -7,11 +8,14 @@ SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
 SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
 
 _MCP_LOADER = None
+MCP_SETTINGS = McpSettings.from_dict(MCP)
 
 
 def _init_mcp():
-    global _MCP_LOADER
-    if not MCP.get("enabled") or not MCP.get("servers"):
+    global _MCP_LOADER, MCP_SETTINGS
+    settings = McpSettings.from_dict(MCP)
+    MCP_SETTINGS = settings
+    if not settings.enabled or not settings.servers:
         return
     try:
         from ..tools.mcp_loader import MCPLoader
@@ -19,7 +23,7 @@ def _init_mcp():
         from ..logger import logger
         logger.warning("[MCP] mcp 包未安装，跳过 MCP 初始化 (pip install mcp)")
         return
-    _MCP_LOADER = MCPLoader()
+    _MCP_LOADER = MCPLoader(settings)
     modules = _MCP_LOADER.start_sync()
     if modules:
         from ..logger import logger

@@ -670,15 +670,16 @@ tags: 标签1,标签2
             return "approve_plan"
 
         if user_input == "/mcp":
-            from ..tools.mcp_loader import _MCP_ENABLED, _MCP_SERVERS
-            if not _MCP_ENABLED:
+            from ..main import get_app_context
+            app_ctx = get_app_context()
+            settings = app_ctx.settings.mcp if app_ctx.settings else None
+            if not settings or not settings.enabled:
                 self.disp.info("MCP 未启用 (config.yaml → mcp.enabled: true)")
                 return "continue"
-            if not _MCP_SERVERS:
+            if not settings.servers:
                 self.disp.info("MCP 已启用但未配置服务器 (config.yaml → mcp.servers)")
                 return "continue"
-            from ..main import get_app_context
-            mcp_loader = get_app_context().mcp_loader
+            mcp_loader = app_ctx.mcp_loader
             if not mcp_loader:
                 self.disp.info("MCP Loader 未初始化")
                 return "continue"

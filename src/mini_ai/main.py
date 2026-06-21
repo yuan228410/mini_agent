@@ -15,6 +15,7 @@ from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
 from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime
 from .core.runtime_context import SessionIdentity, SessionRuntimeContext
+from .core.settings import SettingsSnapshot
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
@@ -41,6 +42,7 @@ class AppContext:
     bus: MessageBus | None = None
     mcp_loader: object | None = None
     lead_tools_cache: list[dict] | None = None
+    settings: SettingsSnapshot | None = None
 
 
 _app_ctx = AppContext()
@@ -57,14 +59,15 @@ def get_app_context() -> AppContext:
 # ═══════════════════════════════════════════
 
 def _init_mcp(ctx: AppContext):
-    if not MCP.get("enabled") or not MCP.get("servers"):
+    settings = ctx.settings.mcp if ctx.settings else None
+    if not settings or not settings.enabled or not settings.servers:
         return
     try:
         from .tools.mcp_loader import MCPLoader
     except ImportError:
         logger.warning("[MCP] mcp 包未安装，跳过 MCP 初始化 (pip install mcp)")
         return
-    ctx.mcp_loader = MCPLoader()
+    ctx.mcp_loader = MCPLoader(settings)
     modules = ctx.mcp_loader.start_sync()
     if modules:
         ctx.lead_tools_cache = None
@@ -149,6 +152,13 @@ def _create_workspace_session(
     skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS,
                                user_skills_dir=user_skills_dir,
                                workspace_skills_dir=ws_skills_dir)
+
+    app_ctx.settings = SettingsSnapshot.from_config_dicts(
+        model_config=MODEL_CONFIG,
+        timeouts=None,
+        tool=None,
+        mcp=MCP,
+    )
 
     # ── Team + Bus ──
     bus = MessageBus(ws_dir / ".team" / "inbox")

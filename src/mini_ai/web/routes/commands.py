@@ -27,13 +27,13 @@ async def list_commands() -> CommandsResponse:
 
 @router.get("/mcp")
 async def mcp_status() -> McpStatusResponse:
-    from ...config import MCP
-    if not MCP.get("enabled"):
+    from ..deps import MCP_SETTINGS, _MCP_LOADER
+    if not MCP_SETTINGS.enabled:
         return {"enabled": False, "servers": []}
-    from ...tools.mcp_loader import _MCP_SERVERS
-    from ..deps import _MCP_LOADER
     servers = []
+    configured_servers = MCP_SETTINGS.servers
     if _MCP_LOADER:
+        configured_servers = _MCP_LOADER.servers
         for name, conn in _MCP_LOADER._connections.items():
             servers.append({
                 "name": name,
@@ -41,5 +41,5 @@ async def mcp_status() -> McpStatusResponse:
                 "tools": [{"name": t.name, "description": t.description} for t in conn.tools],
             })
     configured = [{"name": n, "type": c.get("type", "stdio"), "disabled": c.get("disabled", False)}
-                  for n, c in _MCP_SERVERS.items()]
+                  for n, c in configured_servers.items()]
     return {"enabled": True, "configured": configured, "connected": servers}

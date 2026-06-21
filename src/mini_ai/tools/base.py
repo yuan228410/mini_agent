@@ -16,11 +16,10 @@
 """
 from __future__ import annotations
 
-from ..config import TOOL
 from ..core.runtime_types import ToolArgs, ToolDefinition, ToolParameterSchema
 from .metadata import metadata_for, normalize_tool_definition
 
-_MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
+DEFAULT_MAX_RESULT_CHARS = 8000
 
 
 class ToolBase:
@@ -53,7 +52,7 @@ class ToolBase:
         raise NotImplementedError
 
     @staticmethod
-    def _truncate(output: str, max_chars: int = _MAX_RESULT_CHARS) -> str:
+    def _truncate(output: str, max_chars: int = DEFAULT_MAX_RESULT_CHARS) -> str:
         """截断过长输出"""
         if len(output) <= max_chars:
             return output
