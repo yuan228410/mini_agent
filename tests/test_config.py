@@ -73,6 +73,25 @@ def test_settings_snapshot_copies_config_dicts():
     assert snapshot.model.to_dict()["custom"] == "kept"
 
 
+def test_settings_snapshot_with_model_config_preserves_runtime_settings():
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "https://old.test", "api_key": "old", "model": "old", "context_length": 1000},
+        web={"max_turns": 4, "stream_chunk_flush_ms": 33},
+        tool={"max_parallel_tools": 2},
+        streaming=False,
+    )
+
+    changed = snapshot.with_model_config({"api_url": "https://new.test", "api_key": "new", "model": "new", "context_length": 2000})
+
+    assert changed is not snapshot
+    assert changed.model.api_url == "https://new.test"
+    assert changed.model.context_length == 2000
+    assert changed.web is snapshot.web
+    assert changed.web.max_turns == 4
+    assert changed.tool.max_parallel_tools == 2
+    assert changed.streaming is False
+
+
 def test_application_service_defaults_to_runtime_settings(monkeypatch):
     captured = {}
 

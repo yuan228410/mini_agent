@@ -5,7 +5,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..config import DATA_DIR, MODEL_CONFIG, PACKAGE_DIR, get_model_config
+from ..config import DATA_DIR, PACKAGE_DIR, get_model_config
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..core import ApplicationService, RunTurnOptions, build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -77,7 +77,9 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
 
                 disp = WebDisplay(queue, loop, session_id=comp_key, suppress_text=plan_turn)
                 from .deps import SUBAGENT_LOADER, _MCP_LOADER
-                cfg = get_model_config(model_name) if model_name else MODEL_CONFIG
+                base_settings = comp.get("settings")
+                cfg = get_model_config(model_name) if model_name else None
+                runtime_settings = base_settings.with_model_config(cfg) if (base_settings and cfg) else base_settings
                 runtime = build_session_runtime(
                     identity=SessionIdentity(
                         username=username or "default",
@@ -97,7 +99,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     workflow_dirs=[DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
                     abort_event=abort_event,
                     model_config=cfg,
-                    settings=comp.get("settings"),
+                    settings=runtime_settings,
                     mcp_loader=_MCP_LOADER,
                     compactor=comp.get("compactor"),
                     context_builder=comp.get("ctx_builder"),

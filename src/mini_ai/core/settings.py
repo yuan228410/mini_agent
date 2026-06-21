@@ -7,7 +7,7 @@ explicit settings shape instead of reaching through loosely-typed global dicts.
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from .runtime_types import (
     ConfigDict,
@@ -431,6 +431,11 @@ class SettingsSnapshot:
     image: ImageSettings = field(default_factory=ImageSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
     streaming: bool = True
+
+    def with_model_config(self, model_config: ModelConfigDict | None) -> "SettingsSnapshot":
+        """Return a session-equivalent snapshot with a different model config."""
+
+        return replace(self, model=ModelSettings.from_dict(model_config))
 
     @classmethod
     def from_config_dicts(

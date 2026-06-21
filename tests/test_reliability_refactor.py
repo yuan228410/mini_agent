@@ -392,6 +392,13 @@ def test_config_tool_lists_session_bound_registry_tools_only():
     assert "read_file" not in output
 
 
+def test_web_chat_runner_does_not_import_model_config_global():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    assert "MODEL_CONFIG" not in text
+    assert "with_model_config" in text
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}
