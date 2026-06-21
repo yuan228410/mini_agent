@@ -1612,6 +1612,22 @@ def test_web_model_routes_use_runtime_settings_boundary():
     assert "model_config_for_name" in runtime_helpers
 
 
+def test_cli_display_uses_runtime_settings_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    display_text = (repo / "src/mini_ai/cli/display.py").read_text()
+    helper_text = (repo / "src/mini_ai/cli/runtime_helpers.py").read_text()
+
+    assert "from ..config import" not in display_text
+    assert "_raw" not in display_text
+    assert "MODEL_CONFIG" not in display_text
+    assert "AVAILABLE_MODELS" not in display_text
+    assert "SKILL_PATHS" not in display_text
+    assert "DATA_DIR" not in display_text
+    assert "build_settings_snapshot" in helper_text
+    assert "model_completion_items" in display_text
+    assert "skill_loader_for_settings" in display_text
+
+
 def test_frontend_rest_boundaries_stay_in_api_module():
     repo = Path(__file__).resolve().parents[1]
     api_text = (repo / "web/src/api.ts").read_text()

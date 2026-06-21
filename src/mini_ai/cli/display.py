@@ -12,6 +12,7 @@ from ..core.events import DisplayEventType
 from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
 from ..core.runtime_types import TeamMemberStatus
 from ..logger import logger
+from .runtime_helpers import model_completion_items, skill_loader_for_settings
 
 _IS_TTY = sys.stdout.isatty()
 
@@ -46,21 +47,10 @@ def _build_completions():
     """构建补全列表（只包含命令模板，技能名在运行时动态补全）"""
     items = list(_SLASH_COMMANDS)
     try:
-        from ..config import AVAILABLE_MODELS, MODEL_CONFIG
-        for name in AVAILABLE_MODELS:
-            model_id = MODEL_CONFIG.get("model", "") if name == _raw_active() else _models_raw().get(name, {}).get("model", "")
-            items.append((f"/model {name}", model_id))
+        items.extend(model_completion_items())
     except Exception:
         pass
     return items
-
-def _raw_active():
-    from ..config import _raw
-    return _raw.get("active_model", "")
-
-def _models_raw():
-    from ..config import _raw
-    return _raw.get("models", {})
 
 _ALL_COMPLETIONS = _build_completions()
 
@@ -198,9 +188,7 @@ class Display:
                     # /skill <subcmd> <tab> → 补全技能名（仅 load/info/uninstall）
                     if len(parts) == 2 and parts[1] in ["load", "info", "uninstall"]:
                         try:
-                            from ..skills import SkillLoader
-                            from ..config import DATA_DIR, SKILL_PATHS
-                            loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
+                            loader = skill_loader_for_settings()
                             for name, skill in loader.skills.items():
                                 desc = skill["meta"].get("description", "")[:50]
                                 yield Completion(name, start_position=0, display_meta=desc)
