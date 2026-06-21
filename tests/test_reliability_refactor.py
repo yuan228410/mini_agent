@@ -1688,9 +1688,19 @@ def test_team_tools_do_not_keep_module_level_dependencies():
 def test_config_tool_does_not_keep_module_level_registry_state():
     repo = Path(__file__).resolve().parents[1]
     text = (repo / "src/mini_ai/tools/config_tool.py").read_text()
-    forbidden = ("import contextvars", "def configure", "_registry_ctx", "ContextVar")
+    forbidden = (
+        "import contextvars",
+        "def configure",
+        "_registry_ctx",
+        "ContextVar",
+        "from ..config import",
+        "from mini_ai.config import",
+        "cfg.cfg",
+        "open(_config_path",
+    )
     hits = [pattern for pattern in forbidden if pattern in text]
     assert hits == []
+    assert 'importlib.import_module("mini_ai.config")' in text
 
 
 def test_memory_history_tools_do_not_keep_module_level_runtime_state():

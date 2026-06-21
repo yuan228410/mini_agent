@@ -1,8 +1,8 @@
 """配置读取与修改工具"""
 from ..core.runtime_types import ToolArgs, ToolDefinition
+import importlib
 import json
 
-from ..config import _raw, _config_path, AVAILABLE_MODELS, MODEL_CONFIG, MCP
 from ..logger import logger
 
 definition: ToolDefinition = {
@@ -75,17 +75,21 @@ _CONFIG_STRUCTURE = """mini-ai 配置结构:
 修改 models/mcp/plan 后需重启生效。修改 active_model 可通过 /model 命令即时切换。"""
 
 
+def _config_module():
+    return importlib.import_module("mini_ai.config")
+
+
 def _build_self_overview(registry=None) -> str:
     try:
-        from ..config import _raw, AVAILABLE_MODELS, MODEL_CONFIG, MCP, STREAMING, THINKING, DISPLAY, PLAN, COMPACTOR, DATA_DIR, PACKAGE_DIR
+        cfg = _config_module()
         from .. import __version__
     except Exception:
         return ""
 
-    active = _raw.get("active_model", "?")
-    model_name = MODEL_CONFIG.get("model", "?")
-    ctx_len = MODEL_CONFIG.get("context_length", 256000)
-    api_mode = MODEL_CONFIG.get("api_mode", "openai")
+    active = cfg._raw.get("active_model", "?")
+    model_name = cfg.MODEL_CONFIG.get("model", "?")
+    ctx_len = cfg.MODEL_CONFIG.get("context_length", 256000)
+    api_mode = cfg.MODEL_CONFIG.get("api_mode", "openai")
 
     tools = registry.get_definitions() if registry is not None else []
     tool_names = [t["function"]["name"] for t in tools]
@@ -95,27 +99,28 @@ def _build_self_overview(registry=None) -> str:
     lines = [
         f"mini-ai v{__version__}，智能对话 Agent",
         f"当前模型: {active} ({model_name}, {api_mode}, context_length={ctx_len})",
-        f"可用模型: {', '.join(AVAILABLE_MODELS)}",
-        f"流式输出: {'是' if STREAMING else '否'}",
-        f"思考模式: {'启用' if THINKING.get('enabled') else '禁用'} (budget={THINKING.get('budget_tokens', 10000)})，显示: {DISPLAY.get('thinking_mode', 'collapsed')} (collapsed/expanded/hidden)",
-        f"计划模式审批: {'需要' if PLAN.get('approval', True) else '自动执行'}",
-        f"压缩: keep_recent={COMPACTOR.get('keep_recent', 50)} budget_ratio={COMPACTOR.get('keep_budget_ratio', 0.2)} early_ratio={COMPACTOR.get('early_compact_ratio', 0.85)} max_cache={COMPACTOR.get('max_cached_summaries', 200)}",
+        f"可用模型: {', '.join(cfg.AVAILABLE_MODELS)}",
+        f"流式输出: {'是' if cfg.STREAMING else '否'}",
+        f"思考模式: {'启用' if cfg.THINKING.get('enabled') else '禁用'} (budget={cfg.THINKING.get('budget_tokens', 10000)})，显示: {cfg.DISPLAY.get('thinking_mode', 'collapsed')} (collapsed/expanded/hidden)",
+        f"计划模式审批: {'需要' if cfg.PLAN.get('approval', True) else '自动执行'}",
+        f"压缩: keep_recent={cfg.COMPACTOR.get('keep_recent', 50)} budget_ratio={cfg.COMPACTOR.get('keep_budget_ratio', 0.2)} early_ratio={cfg.COMPACTOR.get('early_compact_ratio', 0.85)} max_cache={cfg.COMPACTOR.get('max_cached_summaries', 200)}",
     ]
-    if MCP.get("enabled"):
+    if cfg.MCP.get("enabled"):
         lines.append(f"MCP: 启用 ({len(mcp_tools)} 个工具)")
     else:
         lines.append("MCP: 禁用")
     lines.append(f"内置工具 ({len(builtin_tools)}): {', '.join(builtin_tools)}")
     if mcp_tools:
         lines.append(f"MCP 工具 ({len(mcp_tools)}): {', '.join(mcp_tools)}")
-    lines.append(f"配置文件: {DATA_DIR}/config.yaml")
-    lines.append(f"源码目录: {PACKAGE_DIR}")
-    lines.append(f"项目文档: {PACKAGE_DIR.parent.parent}/docs/")
-    lines.append(f"配置示例: {PACKAGE_DIR}/config.example.yaml（包含所有配置项及详细说明）")
+    lines.append(f"配置文件: {cfg.DATA_DIR}/config.yaml")
+    lines.append(f"源码目录: {cfg.PACKAGE_DIR}")
+    lines.append(f"项目文档: {cfg.PACKAGE_DIR.parent.parent}/docs/")
+    lines.append(f"配置示例: {cfg.PACKAGE_DIR}/config.example.yaml（包含所有配置项及详细说明）")
     lines.append("可用工具见上方当前会话工具列表；可用 config 工具读取/修改配置")
     return "\n".join(lines)
 
 def execute_with_registry(registry, args: ToolArgs) -> str:
+    cfg = _config_module()
     action = args.get("action", "read")
     path = args.get("path", "")
     value = args.get("value")
@@ -124,21 +129,20 @@ def execute_with_registry(registry, args: ToolArgs) -> str:
         return _build_self_overview(registry) + "\n\n" + _CONFIG_STRUCTURE
     
     if action == "reload":
-        from ..config import init_config, MODEL_CONFIG
         try:
-            init_config()
-            active_model = _raw.get("active_model", "?")
-            model_name = MODEL_CONFIG.get("model", "?")
+            cfg.init_config()
+            active_model = cfg._raw.get("active_model", "?")
+            model_name = cfg.MODEL_CONFIG.get("model", "?")
             return f"✓ 配置已重新加载\n当前模型: {active_model} ({model_name})"
         except Exception as e:
             return f"Error: 配置重载失败 - {e}"
 
     if action == "read":
         if not path:
-            keys = list(_raw.keys())
+            keys = list(cfg._raw.keys())
             return f"配置顶层键: {', '.join(keys)}"
         parts = path.split(".")
-        val, found = _resolve(_raw, parts)
+        val, found = _resolve(cfg._raw, parts)
         if not found:
             return f"配置路径 '{path}' 不存在"
         if isinstance(val, dict) and "api_key" in val:
@@ -154,10 +158,10 @@ def execute_with_registry(registry, args: ToolArgs) -> str:
         if value is None:
             return "write 需要指定 value"
         parts = path.split(".")
-        _set(_raw, parts, value)
+        _set(cfg._raw, parts, value)
         import yaml
-        with open(_config_path, "w", encoding="utf-8") as f:
-            yaml.dump(_raw, f, default_flow_style=False, allow_unicode=True)
+        with open(cfg._config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg._raw, f, default_flow_style=False, allow_unicode=True)
         logger.info(f"[配置] 已修改 {path} = {value}")
         needs_restart = any(parts[0] == k for k in ("models", "mcp", "plan", "compactor", "thinking", "timeouts", "tool", "runner", "web", "display", "skill_paths", "streaming"))
         hint = "（需重启 mini-ai 生效）" if needs_restart else "（即时生效）"
