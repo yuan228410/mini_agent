@@ -1672,6 +1672,30 @@ def test_web_command_routes_use_application_service_boundary():
     assert "def mcp_status" in command_service
 
 
+def test_web_team_routes_use_application_service_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_team = (repo / "src/mini_ai/web/routes/team.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    team_service = (repo / "src/mini_ai/application/team_service.py").read_text()
+
+    assert "from ..session_manager import" not in routes_team
+    assert "SessionManager" not in routes_team
+    assert "ws_key" not in routes_team
+    assert "comp.get" not in routes_team
+    assert ".snapshot(" not in routes_team
+    assert ".clear()" not in routes_team
+    assert ".send(" not in routes_team
+    assert "team_component_for_user_workspace" in routes_team
+    assert "team_service.team_status" in routes_team
+    assert "team_service.blackboard_snapshot" in routes_team
+    assert "team_service.dismiss_teammate" in routes_team
+    assert "team_service.clear_blackboard" in routes_team
+    assert "def team_component_for_user_workspace" in runtime_helpers
+    assert "def get_team_component" in team_service
+    assert "def dismiss_teammate" in team_service
+    assert "def clear_blackboard" in team_service
+
+
 def test_web_file_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_files = (repo / "src/mini_ai/web/routes/files.py").read_text()

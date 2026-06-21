@@ -127,6 +127,15 @@ def chat_session_dependencies() -> dict[str, Any]:
     }
 
 
+def team_component_for_user_workspace(username: str, workspace: str | None):
+    """Return Web team components through the session-manager boundary."""
+
+    from .session_manager import SessionManager, ws_key
+    from ..application import team_service
+
+    return team_service.get_team_component(SessionManager.instance(), ws_key, username, workspace)
+
+
 def session_service_dependencies() -> SessionServiceDependencies:
     """Build Web session use-case dependencies at the adapter boundary."""
 
