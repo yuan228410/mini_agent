@@ -1611,12 +1611,23 @@ def test_web_model_routes_use_runtime_settings_boundary():
 
     assert "from ...config import" not in routes_models
     assert "from ...config import" not in routes_sessions
+    assert "from ..session_manager import" not in routes_models
+    assert "SessionManager" not in routes_models
+    assert "cache_key" not in routes_models
+    assert "resolve_base" not in routes_models
+    assert "_save_session_model" not in routes_models
+    assert "_load_session_model" not in routes_models
     assert "get_model_config" not in runtime_helpers
     assert "build_settings_snapshot" in runtime_helpers
     assert "current_settings_snapshot" in runtime_helpers
-    assert "model_use_cases.model_config_for_name" in runtime_helpers
+    assert "model_route_dependencies" in routes_models
+    assert "def model_route_dependencies" in runtime_helpers
+    assert "model_use_cases.list_models" in routes_models
+    assert "model_use_cases.switch_session_model" in routes_models
     assert "def model_options" in model_use_cases
     assert "def settings_for_model" in model_use_cases
+    assert "class ModelRouteDependencies" in model_use_cases
+    assert "def switch_session_model" in model_use_cases
 
 
 def test_web_session_routes_use_application_service_boundary():

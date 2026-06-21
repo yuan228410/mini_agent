@@ -11,6 +11,7 @@ from ..application import model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
+from ..application.model_use_cases import ModelRouteDependencies
 from ..application.session_service import SessionServiceDependencies
 from ..skills import SkillLoader
 from ..workspace import WorkspaceManager
@@ -60,6 +61,20 @@ def settings_for_model(base_settings: SettingsSnapshot, model_name: str | None) 
 
 def request_context_for_settings(settings: SettingsSnapshot, display=None) -> RequestContextProtocol:
     return build_request_context(settings, display=display)
+
+
+def model_route_dependencies() -> ModelRouteDependencies:
+    """Build Web model route use-case dependencies at the adapter boundary."""
+
+    from .session_manager import SessionManager, cache_key, resolve_base, _load_session_model, _save_session_model
+
+    return ModelRouteDependencies(
+        session_models=SessionManager.instance(),
+        cache_key=cache_key,
+        resolve_base=resolve_base,
+        load_session_model=_load_session_model,
+        save_session_model=_save_session_model,
+    )
 
 
 def session_service_dependencies() -> SessionServiceDependencies:
