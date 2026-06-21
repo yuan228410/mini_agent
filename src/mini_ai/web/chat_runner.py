@@ -5,7 +5,6 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..config import DATA_DIR, PACKAGE_DIR
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..core import ApplicationService, RunTurnOptions, build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -97,7 +96,6 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     bus=comp.get("bus"),
                     team_mgr=comp.get("team_mgr"),
                     blackboard=comp.get("blackboard"),
-                    workflow_dirs=[DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
                     abort_event=abort_event,
                     model_config=cfg,
                     settings=runtime_settings,

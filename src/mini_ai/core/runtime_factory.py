@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
-from ..config import COMPACTOR, DATABASE, DISPLAY, IMAGE, MCP, MODEL_CONFIG, RUNNER, STREAMING, SUBAGENT_MODELS, TEAMMATE, TIMEOUTS, TOOL, WEB
+from ..config import COMPACTOR, DATABASE, DATA_DIR, DISPLAY, IMAGE, MCP, MODEL_CONFIG, PACKAGE_DIR, RUNNER, SKILL_PATHS, STREAMING, SUBAGENT_MODELS, TEAMMATE, TIMEOUTS, TOOL, WEB
 from .display_protocol import DisplayProtocol
 from .execution import CancellationToken, ExecutionBudget
 from .runtime_context import DerivedAgentResources, SessionIdentity, SessionRuntimeContext, ToolContext
@@ -53,6 +53,12 @@ def build_settings_snapshot(model_config: ModelConfigDict | None = None) -> Sett
         mcp=MCP,
         image=IMAGE,
         database=DATABASE,
+        paths={
+            "data_dir": DATA_DIR,
+            "package_dir": PACKAGE_DIR,
+            "skill_paths": SKILL_PATHS,
+            "workflow_dirs": [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
+        },
         subagent_models=SUBAGENT_MODELS,
         streaming=STREAMING,
     )
@@ -112,6 +118,7 @@ def build_session_runtime(
     """
 
     snapshot = settings or build_settings_snapshot(model_config)
+    workflow_dirs = workflow_dirs or list(snapshot.paths.workflow_dirs)
     budget = execution_budget or ExecutionBudget(
         max_parallel_tools=snapshot.tool.max_parallel_tools,
         max_web_turns=snapshot.web.max_turns,

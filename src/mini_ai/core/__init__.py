@@ -33,12 +33,12 @@ def __getattr__(name):
     if name in (
         "SettingsSnapshot", "ModelSettings", "TimeoutSettings", "RunnerSettings",
         "CompactorSettings", "DisplaySettings", "ToolSettings", "TeamSettings", "WorkflowSettings",
-        "WebSettings", "McpSettings", "ImageSettings", "DatabaseSettings", "DatabaseHistorySettings",
+        "WebSettings", "McpSettings", "ImageSettings", "DatabaseSettings", "DatabaseHistorySettings", "PathSettings",
     ):
         from .settings import (
             SettingsSnapshot, ModelSettings, TimeoutSettings, RunnerSettings,
             CompactorSettings, DisplaySettings, ToolSettings, TeamSettings, WorkflowSettings,
-            WebSettings, McpSettings, ImageSettings, DatabaseSettings, DatabaseHistorySettings,
+            WebSettings, McpSettings, ImageSettings, DatabaseSettings, DatabaseHistorySettings, PathSettings,
         )
         return {
             "SettingsSnapshot": SettingsSnapshot,
@@ -55,6 +55,7 @@ def __getattr__(name):
             "ImageSettings": ImageSettings,
             "DatabaseSettings": DatabaseSettings,
             "DatabaseHistorySettings": DatabaseHistorySettings,
+            "PathSettings": PathSettings,
         }[name]
     if name in ("ExecutionBudget", "CancellationToken"):
         from .execution import ExecutionBudget, CancellationToken
@@ -73,6 +74,6 @@ __all__ = [
     "DisplayEvent", "DisplayEventType", "TERMINAL_EVENT_TYPES",
     "SettingsSnapshot", "ModelSettings", "TimeoutSettings", "RunnerSettings",
     "CompactorSettings", "DisplaySettings", "ToolSettings", "TeamSettings", "WorkflowSettings",
-    "WebSettings", "McpSettings", "ImageSettings", "DatabaseSettings", "DatabaseHistorySettings",
+    "WebSettings", "McpSettings", "ImageSettings", "DatabaseSettings", "DatabaseHistorySettings", "PathSettings",
     "ExecutionBudget", "CancellationToken", "UsageCollector", "UsageSnapshot",
 ]

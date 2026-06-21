@@ -36,6 +36,7 @@ McpConfigDict = ConfigDict
 ImageConfigDict = ConfigDict
 DatabaseHistoryConfigDict = ConfigDict
 DatabaseConfigDict = ConfigDict
+PathConfigDict = ConfigDict
 DisplayEventPayload = dict[str, Any]
 DisplayWireEvent = dict[str, Any]
 HistoryContent = str | list[Any]

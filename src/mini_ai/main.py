@@ -164,7 +164,6 @@ def _create_workspace_session(
 
     # ── Blackboard + Workflow ──
     bb = Blackboard(persist_path=ws_dir / ".team" / "blackboard.json")
-    workflow_dirs = [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
 
     lead_event = threading.Event()
     bus.register_wake("lead", lead_event)
@@ -257,7 +256,6 @@ def _create_workspace_session(
         bus=bus,
         team_mgr=team_mgr,
         blackboard=bb,
-        workflow_dirs=workflow_dirs,
         mcp_loader=app_ctx.mcp_loader,
         compactor=compactor,
         context_builder=ctx_builder,

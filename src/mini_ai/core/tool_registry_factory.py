@@ -6,7 +6,6 @@ module-level compatibility registry in ``mini_ai.tools``.
 from __future__ import annotations
 
 from .runtime_context import ToolContext
-from ..config import DATA_DIR, PACKAGE_DIR
 from ..tools import (
     ToolRegistry,
     read_file,
@@ -64,7 +63,7 @@ def build_tool_registry(tool_context: ToolContext, *, mcp_loader=None, base_tool
     if tool_context.bus is not None and tool_context.team_mgr is not None:
         registry.register_team(tool_context.bus, tool_context.team_mgr)
     if tool_context.blackboard is not None:
-        workflow_dirs = tool_context.workflow_dirs or [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"]
+        workflow_dirs = tool_context.workflow_dirs or (list(settings.paths.workflow_dirs) if settings else [])
         registry.register_blackboard(
             tool_context.blackboard,
             workflow_dirs=workflow_dirs,

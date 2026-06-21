@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 
 from .runtime_types import (
     ConfigDict,
@@ -17,6 +18,7 @@ from .runtime_types import (
     ImageConfigDict,
     McpConfigDict,
     ModelConfigDict,
+    PathConfigDict,
     RunnerConfigDict,
     CompactorConfigDict,
     TeamConfigSettingsDict,
@@ -463,6 +465,41 @@ class DatabaseSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class PathSettings:
+    data_dir: Path | None = None
+    package_dir: Path | None = None
+    skill_paths: tuple[Path, ...] = ()
+    workflow_dirs: tuple[Path, ...] = ()
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: PathConfigDict | None) -> "PathSettings":
+        raw = copy.deepcopy(data or {})
+        data_dir = Path(raw["data_dir"]) if raw.get("data_dir") is not None else None
+        package_dir = Path(raw["package_dir"]) if raw.get("package_dir") is not None else None
+        skill_paths = tuple(Path(item) for item in raw.get("skill_paths") or ())
+        workflow_dirs = tuple(Path(item) for item in raw.get("workflow_dirs") or ())
+        known = {"data_dir", "package_dir", "skill_paths", "workflow_dirs"}
+        return cls(
+            data_dir=data_dir,
+            package_dir=package_dir,
+            skill_paths=skill_paths,
+            workflow_dirs=workflow_dirs,
+            extra={k: v for k, v in raw.items() if k not in known},
+        )
+
+    def to_dict(self) -> PathConfigDict:
+        data = {
+            "data_dir": str(self.data_dir) if self.data_dir is not None else None,
+            "package_dir": str(self.package_dir) if self.package_dir is not None else None,
+            "skill_paths": [str(path) for path in self.skill_paths],
+            "workflow_dirs": [str(path) for path in self.workflow_dirs],
+        }
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
 class SettingsSnapshot:
     model: ModelSettings
     timeouts: TimeoutSettings = field(default_factory=TimeoutSettings)
@@ -476,6 +513,7 @@ class SettingsSnapshot:
     mcp: McpSettings = field(default_factory=McpSettings)
     image: ImageSettings = field(default_factory=ImageSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
+    paths: PathSettings = field(default_factory=PathSettings)
     subagent_models: ConfigDict = field(default_factory=dict)
     streaming: bool = True
 
@@ -500,6 +538,7 @@ class SettingsSnapshot:
         mcp: McpConfigDict | None = None,
         image: ImageConfigDict | None = None,
         database: DatabaseConfigDict | None = None,
+        paths: PathConfigDict | None = None,
         subagent_models: ConfigDict | None = None,
         streaming: bool = True,
     ) -> "SettingsSnapshot":
@@ -516,6 +555,7 @@ class SettingsSnapshot:
             mcp=McpSettings.from_dict(mcp),
             image=ImageSettings.from_dict(image),
             database=DatabaseSettings.from_dict(database),
+            paths=PathSettings.from_dict(paths),
             subagent_models=copy.deepcopy(subagent_models or {}),
             streaming=bool(streaming),
         )

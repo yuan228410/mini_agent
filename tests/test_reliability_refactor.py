@@ -551,6 +551,22 @@ def test_derived_agent_tools_use_runtime_settings_boundaries():
 
 
 
+def test_tool_registry_workflow_paths_use_runtime_settings_boundary():
+    root = Path(__file__).resolve().parents[1] / "src/mini_ai"
+    factory_text = (root / "core/tool_registry_factory.py").read_text(encoding="utf-8")
+    runtime_factory_text = (root / "core/runtime_factory.py").read_text(encoding="utf-8")
+    web_runner_text = (root / "web/chat_runner.py").read_text(encoding="utf-8")
+
+    assert "from ..config import DATA_DIR" not in factory_text
+    assert "from ..config import PACKAGE_DIR" not in factory_text
+    assert "DATA_DIR / \"workflows\"" not in factory_text
+    assert "PACKAGE_DIR / \"workflows\"" not in factory_text
+    assert "settings.paths.workflow_dirs" in factory_text
+    assert "workflow_dirs = workflow_dirs or list(snapshot.paths.workflow_dirs)" in runtime_factory_text
+    assert "workflow_dirs=[DATA_DIR / \"workflows\", PACKAGE_DIR / \"workflows\"]" not in web_runner_text
+
+
+
 def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
     root = Path(__file__).resolve().parents[1] / "src/mini_ai"
     checked = {
@@ -1368,6 +1384,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
         DatabaseHistoryConfigDict,
         DisplayConfigDict,
         ModelConfigDict,
+        PathConfigDict,
         RawConfigDict,
         RequestContextProtocol,
         RunnerConfigDict,
@@ -1403,6 +1420,8 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert typing.get_type_hints(settings_mod.DatabaseHistorySettings.to_dict)["return"] == DatabaseHistoryConfigDict
     assert typing.get_type_hints(settings_mod.DatabaseSettings.from_dict)["data"] == DatabaseConfigDict | None
     assert typing.get_type_hints(settings_mod.DatabaseSettings.to_dict)["return"] == DatabaseConfigDict
+    assert typing.get_type_hints(settings_mod.PathSettings.from_dict)["data"] == PathConfigDict | None
+    assert typing.get_type_hints(settings_mod.PathSettings.to_dict)["return"] == PathConfigDict
 
     snapshot_hints = typing.get_type_hints(settings_mod.SettingsSnapshot.from_config_dicts)
     assert snapshot_hints["model_config"] == ModelConfigDict | None
@@ -1412,6 +1431,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert snapshot_hints["tool"] == ToolConfigDict | None
     assert snapshot_hints["mcp"] == McpConfigDict | None
     assert snapshot_hints["database"] == DatabaseConfigDict | None
+    assert snapshot_hints["paths"] == PathConfigDict | None
     assert snapshot_hints["subagent_models"] == ConfigDict | None
 
     assert typing.get_type_hints(config.get_model_config)["return"] == ModelConfigDict | None
@@ -1427,7 +1447,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert typing.get_type_hints(build_session_runtime)["model_config"] == ModelConfigDict | None
 
 
-def test_settings_snapshot_preserves_config_extras_and_deep_copies():
+def test_settings_snapshot_preserves_config_extras_and_deep_copies(tmp_path):
     from mini_ai.core.settings import SettingsSnapshot
 
     raw_model = {
@@ -1440,10 +1460,12 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies():
     }
 
     raw_subagent_models = {"reviewer": "fast-model"}
+    raw_paths = {"data_dir": tmp_path / "data", "workflow_dirs": [tmp_path / "wf"]}
     snapshot = SettingsSnapshot.from_config_dicts(
         model_config=raw_model,
         timeouts={"llm": 9, "custom_timeout": {"x": 1}},
         database={"history": {"on_full": "drop", "custom_history": 2}},
+        paths=raw_paths,
         subagent_models=raw_subagent_models,
     )
 
@@ -1459,6 +1481,8 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies():
     assert snapshot.model.headers == {"X-Test": "1"}
     assert snapshot.timeouts.to_dict()["custom_timeout"] == {"x": 1}
     assert snapshot.database.to_dict()["history"]["custom_history"] == 2
+    assert snapshot.paths.workflow_dirs == (tmp_path / "wf",)
+    assert snapshot.paths.to_dict()["data_dir"] == str(tmp_path / "data")
     assert snapshot.subagent_models == {"reviewer": "fast-model"}
 
 
