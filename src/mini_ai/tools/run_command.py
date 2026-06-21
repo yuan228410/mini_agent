@@ -32,10 +32,9 @@ def execute_with_cwd(default_cwd: str | None, args: ToolArgs) -> str | ToolExecu
 
     verdict = enforce_command_policy(command)
     if not verdict.allowed:
-        return ToolExecutionResult(
-            content=f"Error: 命令被策略拒绝：{verdict.reason}",
-            ok=False,
-            metadata={"policy_denied": True, "policy": verdict.to_metadata()},
+        return ToolExecutionResult.policy_denied(
+            f"Error: 命令被策略拒绝：{verdict.reason}",
+            policy=verdict.to_metadata(),
         )
 
     cwd = args.get("cwd") or default_cwd or None

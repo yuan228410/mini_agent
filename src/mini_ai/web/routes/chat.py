@@ -9,8 +9,6 @@ import asyncio
 import json
 import threading
 import time
-from datetime import datetime
-from pathlib import Path
 
 from fastapi import APIRouter, Query, WebSocket
 
@@ -29,11 +27,9 @@ from ..route_types import (
     RouteErrorResponse,
 )
 from ..session_manager import (
-    SessionManager, cache_key, ws_key, safe_queue_put,
+    SessionManager, cache_key,
     resolve_base, get_or_create_session, get_or_create_components,
-    build_system_prompt,
-    _load_session_name, _save_session_name,
-    _update_meta_cache, _build_meta,
+    _load_session_name, _update_meta_cache,
 )
 from ..chat_runner import run_tool_loop_sync
 from ..runtime_helpers import request_context_for_settings, settings_for_model

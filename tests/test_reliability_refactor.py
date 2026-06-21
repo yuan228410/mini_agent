@@ -401,6 +401,19 @@ def test_web_runtime_paths_do_not_import_model_config_global():
     assert "request_context_for_settings" in (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
 
 
+def test_web_chat_route_does_not_import_stale_session_helpers():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    stale_imports = [
+        "ws_key",
+        "safe_queue_put",
+        "build_system_prompt",
+        "_save_session_name",
+        "_build_meta",
+    ]
+    assert [name for name in stale_imports if name in text] == []
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}
@@ -471,6 +484,25 @@ def test_tool_registry_executes_mixed_calls_in_order_with_bounded_parallelism():
     assert [m["tool_call_id"] for m in tool_messages] == ["a", "b", "c"]
     assert [m["content"] for m in tool_messages] == ["A", "B", "C"]
     assert events == ["read_file", "write_file", "list_dir"]
+
+
+def test_tool_call_scheduler_preserves_barriers_and_parallel_segments():
+    from mini_ai.core.tool_models import ToolCall
+    from mini_ai.tools.scheduler import plan_tool_call_segments
+
+    def call(call_id, name):
+        return ToolCall.from_dict({"id": call_id, "function": {"name": name, "arguments": "{}"}})
+
+    segments = plan_tool_call_segments(
+        [call("a", "read_file"), call("b", "list_dir"), call("c", "write_file"), call("d", "search_files")],
+        lambda name: name in {"read_file", "list_dir", "search_files"},
+    )
+
+    assert [(segment.parallel, [tc.id for tc in segment.calls]) for segment in segments] == [
+        (True, ["a", "b"]),
+        (False, ["c"]),
+        (False, ["d"]),
+    ]
 
 
 def test_tool_registry_scoped_allowlist_filters_definitions_and_dispatch():

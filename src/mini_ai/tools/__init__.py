@@ -11,6 +11,7 @@ from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir,
 from .cache import ToolCache, get_tool_cache
 from .metadata import metadata_for, normalize_tool_definition
 from .results import ToolExecutionResult
+from .scheduler import plan_tool_call_segments
 from ..core.execution import ExecutionBudget
 from ..core.runtime_types import MessageDict, ToolArgs, ToolDefinition, ToolWirePayload
 from ..core.tool_models import ToolCall, ToolResult
@@ -170,10 +171,9 @@ class ToolRegistry:
 
     def dispatch_result(self, name: str, args: ToolArgs) -> ToolExecutionResult | None:
         if not self._is_allowed(name):
-            return ToolExecutionResult(
-                content=f"Error: 工具 '{name}' 不在当前执行策略允许范围内",
-                ok=False,
-                metadata={"policy_denied": True, "reason": "tool_not_allowed"},
+            return ToolExecutionResult.policy_denied(
+                f"Error: 工具 '{name}' 不在当前执行策略允许范围内",
+                reason="tool_not_allowed",
             )
         mod = self._by_name.get(name)
         if not mod:
@@ -194,31 +194,14 @@ class ToolRegistry:
         _disp = display if display is not None else self._display
         spawned = False
 
-        # 按原始顺序分段执行：连续 parallel-safe 工具组成一个并行段，
-        # 串行工具作为 barrier。这样既保留并发收益，也避免 A/C 跑到 B 前面。
-        parallel_segment: list[ToolCall] = []
-
-        def flush_parallel_segment() -> None:
-            if not parallel_segment:
-                return
-            segment = list(parallel_segment)
-            parallel_segment.clear()
-            if len(segment) > 1:
-                self._execute_parallel(segment, messages, _disp, persist_fn)
+        segments = plan_tool_call_segments(calls, self._is_parallel_safe)
+        spawned = any(tc.function.name == "spawn_teammate" for segment in segments for tc in segment.calls)
+        for segment in segments:
+            if segment.parallel:
+                self._execute_parallel(list(segment.calls), messages, _disp, persist_fn)
             else:
-                self._execute_one(segment[0], messages, _disp, persist_fn)
-
-        for tc in calls:
-            name = tc.function.name
-            if name == "spawn_teammate":
-                spawned = True
-            if self._is_parallel_safe(name):
-                parallel_segment.append(tc)
-                continue
-            flush_parallel_segment()
-            self._execute_one(tc, messages, _disp, persist_fn)
-
-        flush_parallel_segment()
+                for tc in segment.calls:
+                    self._execute_one(tc, messages, _disp, persist_fn)
         return spawned
 
     def _as_tool_call(self, tc: ToolCall | ToolWirePayload) -> ToolCall:

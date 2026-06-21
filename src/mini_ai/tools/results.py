@@ -19,7 +19,19 @@ class ToolExecutionResult:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
+    def success(cls, content: object = "", **metadata: Any) -> "ToolExecutionResult":
+        return cls(content="" if content is None else str(content), ok=True, metadata=metadata)
+
+    @classmethod
+    def error(cls, content: object = "", **metadata: Any) -> "ToolExecutionResult":
+        return cls(content="" if content is None else str(content), ok=False, metadata=metadata)
+
+    @classmethod
+    def policy_denied(cls, content: object, **metadata: Any) -> "ToolExecutionResult":
+        return cls.error(content, policy_denied=True, **metadata)
+
+    @classmethod
     def from_value(cls, value: object) -> "ToolExecutionResult":
         if isinstance(value, cls):
             return value
-        return cls(content="" if value is None else str(value))
+        return cls.success(value)
