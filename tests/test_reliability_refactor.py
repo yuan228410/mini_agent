@@ -1548,9 +1548,6 @@ def test_web_route_boundaries_use_explicit_dtos():
     assert typing.get_type_hints(chat.chat_reset)["body"] == route_types.ChatResetRequest | None
     assert typing.get_type_hints(chat.chat_reset)["return"] == route_types.ChatResetResponse | route_types.RouteErrorResponse
 
-    assert typing.get_type_hints(files._list_files_sync)["return"] == route_types.FileListResponse | route_types.RouteErrorResponse
-    assert typing.get_type_hints(files._search_files_sync)["return"] == route_types.FileSearchResponse
-    assert typing.get_type_hints(files._browse_dirs_sync)["return"] == route_types.BrowseDirsResponse | route_types.RouteErrorResponse
     assert typing.get_type_hints(files.list_files)["return"] == route_types.FileListResponse | route_types.RouteErrorResponse
     assert typing.get_type_hints(files.read_file)["return"] == route_types.FileReadTextResponse | route_types.FileReadBinaryResponse | route_types.RouteErrorResponse
     assert typing.get_type_hints(files.search_files)["return"] == route_types.FileSearchResponse | route_types.RouteErrorResponse
@@ -1666,6 +1663,34 @@ def test_web_command_routes_use_application_service_boundary():
     assert "command_service.mcp_status" in routes_commands
     assert "WEB_COMMANDS" in command_service
     assert "def mcp_status" in command_service
+
+
+def test_web_file_routes_use_application_service_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_files = (repo / "src/mini_ai/web/routes/files.py").read_text()
+    file_service = (repo / "src/mini_ai/application/file_service.py").read_text()
+
+    assert "from ...config import" not in routes_files
+    assert "DATA_DIR" not in routes_files
+    assert "user_data_dir" not in routes_files
+    assert "WorkspaceManager" not in routes_files
+    assert "_EXT_LANG" not in routes_files
+    assert "_BINARY_EXTENSIONS" not in routes_files
+    assert "def _safe_resolve" not in routes_files
+    assert "def _list_files_sync" not in routes_files
+    assert "def _search_files_sync" not in routes_files
+    assert "def _browse_dirs_sync" not in routes_files
+    assert "workspace_manager_for_user" in routes_files
+    assert "file_service.list_files" in routes_files
+    assert "file_service.read_file" in routes_files
+    assert "file_service.raw_file" in routes_files
+    assert "file_service.search_files" in routes_files
+    assert "file_service.browse_dirs" in routes_files
+    assert "def safe_resolve" in file_service
+    assert "def list_files_at" in file_service
+    assert "def read_text_window" in file_service
+    assert "def search_files_at" in file_service
+    assert "def browse_dirs_at" in file_service
 
 
 def test_web_skill_routes_use_runtime_settings_boundary():
