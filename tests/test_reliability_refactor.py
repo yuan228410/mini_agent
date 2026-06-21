@@ -1619,6 +1619,30 @@ def test_web_model_routes_use_runtime_settings_boundary():
     assert "def settings_for_model" in model_use_cases
 
 
+def test_web_session_routes_use_application_service_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_sessions = (repo / "src/mini_ai/web/routes/sessions.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    session_service = (repo / "src/mini_ai/application/session_service.py").read_text()
+
+    assert "from ...config import" not in routes_sessions
+    assert "from ..session_manager import" not in routes_sessions
+    assert "SessionManager" not in routes_sessions
+    assert "cache_key" not in routes_sessions
+    assert "resolve_base" not in routes_sessions
+    assert "get_or_create_components" not in routes_sessions
+    assert "build_system_prompt" not in routes_sessions
+    assert "_save_session_name" not in routes_sessions
+    assert "_update_meta_cache" not in routes_sessions
+    assert "session_service.create_session" in routes_sessions
+    assert "session_service_dependencies" in routes_sessions
+    assert "def session_service_dependencies" in runtime_helpers
+    assert "SessionServiceDependencies" in runtime_helpers
+    assert "class SessionServiceDependencies" in session_service
+    assert "def list_sessions" in session_service
+    assert "def rename_session" in session_service
+
+
 def test_web_skill_routes_use_runtime_settings_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_skills = (repo / "src/mini_ai/web/routes/skills.py").read_text()

@@ -11,6 +11,7 @@ from ..application import model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
+from ..application.session_service import SessionServiceDependencies
 from ..skills import SkillLoader
 from ..workspace import WorkspaceManager
 
@@ -59,3 +60,39 @@ def settings_for_model(base_settings: SettingsSnapshot, model_name: str | None) 
 
 def request_context_for_settings(settings: SettingsSnapshot, display=None) -> RequestContextProtocol:
     return build_request_context(settings, display=display)
+
+
+def session_service_dependencies() -> SessionServiceDependencies:
+    """Build Web session use-case dependencies at the adapter boundary."""
+
+    from .session_manager import (
+        SessionManager,
+        build_system_prompt,
+        cache_key,
+        get_or_create_components,
+        get_or_create_session,
+        resolve_base,
+        ws_key,
+        _build_meta,
+        _load_from_db,
+        _save_session_name,
+        _update_meta_cache,
+    )
+    from ..tools.update_todos import cleanup_session, get_todos, set_session
+
+    return SessionServiceDependencies(
+        session_manager=SessionManager.instance(),
+        cache_key=cache_key,
+        ws_key=ws_key,
+        resolve_base=resolve_base,
+        get_or_create_session=get_or_create_session,
+        get_or_create_components=get_or_create_components,
+        build_system_prompt=build_system_prompt,
+        load_from_db=_load_from_db,
+        build_meta=_build_meta,
+        update_meta_cache=_update_meta_cache,
+        save_session_name=_save_session_name,
+        set_todo_session=set_session,
+        cleanup_todo_session=cleanup_session,
+        get_session_todos=get_todos,
+    )
