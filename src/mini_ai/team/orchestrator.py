@@ -4,6 +4,7 @@ import threading
 import time
 
 from ..core.display_protocol import DisplayProtocol
+from ..core.runtime_factory import build_child_request_context
 from ..core.settings import ModelSettings, TeamSettings, WorkflowSettings
 from ..core.runtime_types import BlackboardProtocol, MessageBusProtocol, TeamManagerProtocol
 from ..logger import logger
@@ -252,9 +253,6 @@ class Orchestrator:
 
     def _run_oneoff_agent(self, agent_name: str, prompt: str, abort_event: threading.Event | None = None) -> str | None:
         from ..runner import run_agent
-        from ..config import DATA_DIR, SKILL_PATHS as _SP
-        from ..context import ContextBuilder
-        from ..skills import SkillLoader
 
         tool_names = list(self._team_settings.base_tools) + [
             "send_message", "list_teammates",
@@ -271,10 +269,10 @@ class Orchestrator:
         )
 
         resources = self._derived_agent_resources
-        ctx_builder = getattr(resources, "context_builder", None) or ContextBuilder(DATA_DIR)
-        # 加载 workspace 级技能（通过 manager 获取 workspace 技能目录）
-        ws_skills = self.manager.workspace_skills_dir() if self.manager else None
-        _sl = getattr(resources, "skill_loader", None) or SkillLoader(DATA_DIR / "skills", _SP, workspace_skills_dir=ws_skills)
+        ctx_builder = getattr(resources, "context_builder", None)
+        _sl = getattr(resources, "skill_loader", None)
+        if ctx_builder is None or _sl is None:
+            return "⚠ Agent 执行失败: 缺少 context builder 或 skill loader runtime resources"
         identity = getattr(resources, "identity", None)
         project_path = getattr(identity, "project_path", "") if identity else ""
         base_prompt = ctx_builder.build(skill_loader=_sl, project_path=project_path, exclude_character=True)
@@ -293,10 +291,8 @@ class Orchestrator:
             except Exception as exc:
                 logger.debug(f"[Orchestrator] 创建队友 display 失败: {exc}")
 
-        ctx = None
-        if sub_display:
-            from ..config import RequestContext
-            ctx = RequestContext(model_config=self._model_settings.to_dict(), display=sub_display)
+        settings = getattr(resources, "settings", None)
+        ctx = build_child_request_context(settings, model_config=self._model_settings.to_dict(), display=sub_display) if settings else None
 
         try:
             tool_registry = getattr(resources, "tool_registry", None)

@@ -5,7 +5,9 @@ models and create request contexts at the adapter boundary.
 """
 from __future__ import annotations
 
-from ..config import RequestContext, get_model_config
+from ..config import get_model_config
+from ..core.runtime_factory import build_request_context
+from ..core.runtime_types import RequestContextProtocol
 from ..core.settings import SettingsSnapshot
 
 
@@ -16,5 +18,5 @@ def settings_for_model(base_settings: SettingsSnapshot, model_name: str | None) 
     return base_settings.with_model_config(cfg) if cfg else base_settings
 
 
-def request_context_for_settings(settings: SettingsSnapshot, display=None) -> RequestContext:
-    return RequestContext(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
+def request_context_for_settings(settings: SettingsSnapshot, display=None) -> RequestContextProtocol:
+    return build_request_context(settings, display=display)

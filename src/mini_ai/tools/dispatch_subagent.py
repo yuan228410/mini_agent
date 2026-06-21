@@ -291,7 +291,9 @@ def execute_with_context(
     settings=None,
 ) -> str:
     from ..runner import run_agent
-    from ..config import RequestContext, SUBAGENT_MODELS, get_model_config
+    from ..config import get_model_config
+    from ..core.runtime_factory import build_child_request_context
+    from ..core.settings import SettingsSnapshot
 
     subagent_type = args.get("type", "")
     spec = loader.get(subagent_type) if loader else None
@@ -349,22 +351,19 @@ def execute_with_context(
             sub_display = None
 
     # 获取子代理专属模型配置；默认继承当前 session 的不可变运行时快照。
-    base_model_settings = getattr(settings, "model", None) or ModelSettings.from_dict(None)
+    runtime_settings = settings if isinstance(settings, SettingsSnapshot) else SettingsSnapshot(model=ModelSettings.from_dict(None))
+    base_model_settings = runtime_settings.model
     model_config = base_model_settings.to_dict()
-    model_name = SUBAGENT_MODELS.get(subagent_type)
+    model_name = runtime_settings.subagent_models.get(subagent_type)
     if model_name:
-        custom_config = get_model_config(model_name)
+        custom_config = get_model_config(str(model_name))
         if custom_config:
             model_config = custom_config
             logger.info(f"[派遣→] {spec['name']} 使用模型: {model_name}")
         else:
             logger.warning(f"[派遣→] 模型 '{model_name}' 未找到，继承当前会话模型")
 
-    ctx = None
-    if sub_display:
-        ctx = RequestContext(model_config=model_config, display=sub_display)
-    else:
-        ctx = RequestContext(model_config=model_config)
+    ctx = build_child_request_context(runtime_settings, model_config=model_config, display=sub_display)
 
     try:
         result = run_agent(

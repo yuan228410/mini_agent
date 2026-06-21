@@ -497,6 +497,33 @@ def test_application_service_uses_injected_runtime_settings_not_config_globals()
     assert "STREAMING" not in text
     assert "settings.model.context_length" in text
     assert "settings.streaming" in text
+    assert "from ..config import RequestContext" not in text
+    assert "build_request_context" in text
+
+
+
+def test_request_context_construction_uses_runtime_factory_boundary():
+    root = Path(__file__).resolve().parents[1] / "src/mini_ai"
+    checked = {
+        "core/application_service.py",
+        "web/runtime_helpers.py",
+        "tools/dispatch_subagent.py",
+        "team/manager.py",
+        "team/orchestrator.py",
+    }
+
+    offenders = []
+    for rel in checked:
+        text = (root / rel).read_text(encoding="utf-8")
+        hits = [pattern for pattern in ("from ..config import RequestContext", "RequestContext(model_config") if pattern in text]
+        if hits:
+            offenders.append({"path": rel, "hits": hits})
+
+    runtime_factory = (root / "core/runtime_factory.py").read_text(encoding="utf-8")
+    assert offenders == []
+    assert "def build_request_context" in runtime_factory
+    assert "def build_child_request_context" in runtime_factory
+    assert runtime_factory.count("RequestContext(model_config") == 2
 
 
 
@@ -514,6 +541,9 @@ def test_derived_agent_tools_use_runtime_settings_boundaries():
     assert "from ..config import MODEL_CONFIG" not in workflow_text
     assert "from ..config import TEAMMATE" not in manager_text
     assert "from ..config import TEAMMATE" not in orchestrator_text
+    assert "from ..config import DATA_DIR" not in manager_text
+    assert "from ..config import DATA_DIR" not in orchestrator_text
+    assert "SUBAGENT_MODELS" not in dispatch_text
     assert "settings.model.context_length" in workflow_text
     assert "base_model_settings.context_length" in dispatch_text
     assert "team_settings.max_turns" in manager_text
@@ -1382,6 +1412,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert snapshot_hints["tool"] == ToolConfigDict | None
     assert snapshot_hints["mcp"] == McpConfigDict | None
     assert snapshot_hints["database"] == DatabaseConfigDict | None
+    assert snapshot_hints["subagent_models"] == ConfigDict | None
 
     assert typing.get_type_hints(config.get_model_config)["return"] == ModelConfigDict | None
     assert typing.get_type_hints(config.RequestContext.__init__)["model_config"] == ModelConfigDict
@@ -1408,13 +1439,16 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies():
         "vendor_extra": {"nested": ["a"]},
     }
 
+    raw_subagent_models = {"reviewer": "fast-model"}
     snapshot = SettingsSnapshot.from_config_dicts(
         model_config=raw_model,
         timeouts={"llm": 9, "custom_timeout": {"x": 1}},
         database={"history": {"on_full": "drop", "custom_history": 2}},
+        subagent_models=raw_subagent_models,
     )
 
     raw_model["headers"]["X-Test"] = "mutated"
+    raw_subagent_models["reviewer"] = "mutated-model"
 
     model_out = snapshot.model.to_dict()
     assert model_out["headers"] == {"X-Test": "1"}
@@ -1425,6 +1459,7 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies():
     assert snapshot.model.headers == {"X-Test": "1"}
     assert snapshot.timeouts.to_dict()["custom_timeout"] == {"x": 1}
     assert snapshot.database.to_dict()["history"]["custom_history"] == 2
+    assert snapshot.subagent_models == {"reviewer": "fast-model"}
 
 
 def test_web_route_boundaries_use_explicit_dtos():

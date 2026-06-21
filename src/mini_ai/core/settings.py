@@ -476,6 +476,7 @@ class SettingsSnapshot:
     mcp: McpSettings = field(default_factory=McpSettings)
     image: ImageSettings = field(default_factory=ImageSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
+    subagent_models: ConfigDict = field(default_factory=dict)
     streaming: bool = True
 
     def with_model_config(self, model_config: ModelConfigDict | None) -> "SettingsSnapshot":
@@ -499,6 +500,7 @@ class SettingsSnapshot:
         mcp: McpConfigDict | None = None,
         image: ImageConfigDict | None = None,
         database: DatabaseConfigDict | None = None,
+        subagent_models: ConfigDict | None = None,
         streaming: bool = True,
     ) -> "SettingsSnapshot":
         return cls(
@@ -514,5 +516,6 @@ class SettingsSnapshot:
             mcp=McpSettings.from_dict(mcp),
             image=ImageSettings.from_dict(image),
             database=DatabaseSettings.from_dict(database),
+            subagent_models=copy.deepcopy(subagent_models or {}),
             streaming=bool(streaming),
         )

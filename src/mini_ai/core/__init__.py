@@ -13,9 +13,14 @@ def __getattr__(name):
     if name == "build_tool_registry":
         from .tool_registry_factory import build_tool_registry
         return build_tool_registry
-    if name in ("build_session_runtime", "build_settings_snapshot"):
-        from .runtime_factory import build_session_runtime, build_settings_snapshot
-        return {"build_session_runtime": build_session_runtime, "build_settings_snapshot": build_settings_snapshot}[name]
+    if name in ("build_session_runtime", "build_settings_snapshot", "build_request_context", "build_child_request_context"):
+        from .runtime_factory import build_child_request_context, build_request_context, build_session_runtime, build_settings_snapshot
+        return {
+            "build_session_runtime": build_session_runtime,
+            "build_settings_snapshot": build_settings_snapshot,
+            "build_request_context": build_request_context,
+            "build_child_request_context": build_child_request_context,
+        }[name]
     if name in ("ChatMessage", "MessageRole", "normalize_messages", "to_provider_messages"):
         from .messages import ChatMessage, MessageRole, normalize_messages, to_provider_messages
         return {"ChatMessage": ChatMessage, "MessageRole": MessageRole, "normalize_messages": normalize_messages, "to_provider_messages": to_provider_messages}[name]
@@ -62,7 +67,7 @@ def __getattr__(name):
 __all__ = [
     "DisplayProtocol", "HistoryPersister", "ChatSession",
     "ApplicationService", "RunTurnOptions", "RunTurnResult",
-    "build_tool_registry", "build_session_runtime", "build_settings_snapshot",
+    "build_tool_registry", "build_session_runtime", "build_settings_snapshot", "build_request_context", "build_child_request_context",
     "ChatMessage", "MessageRole", "normalize_messages", "to_provider_messages",
     "ToolCall", "ToolFunctionCall", "ToolResult",
     "DisplayEvent", "DisplayEventType", "TERMINAL_EVENT_TYPES",

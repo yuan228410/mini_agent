@@ -7,8 +7,8 @@ import threading
 import time
 from pathlib import Path
 
-from ..config import DATA_DIR
-from ..core.settings import ModelSettings, TeamSettings, TimeoutSettings
+from ..core.runtime_factory import build_child_request_context
+from ..core.settings import ModelSettings, SettingsSnapshot, TeamSettings, TimeoutSettings
 from ..logger import logger
 from .prompts import build_team_prompt
 from ..utils import now_ts
@@ -168,12 +168,12 @@ class TeammateManager:
         
 
         settings = getattr(derived_agent_resources, "settings", None)
+        runtime_settings = settings if isinstance(settings, SettingsSnapshot) else SettingsSnapshot(model=ModelSettings.from_dict(None))
         team_settings = settings.team if settings else self.team_settings
         timeout_settings = settings.timeouts if settings else self.timeout_settings
-        model_settings = settings.model if settings else ModelSettings.from_dict(None)
+        model_settings = runtime_settings.model
         model_config = model_settings.to_dict()
         tm_display = None
-        ctx = None
         if lead_display:
             try:
                 tm_display = lead_display.child(teammate=name)
@@ -185,15 +185,17 @@ class TeammateManager:
             except Exception as exc:
                 logger.debug(f"[队友] 创建 display 失败: {exc}")
                 tm_display = None
-            from ..config import RequestContext
-            ctx = RequestContext(model_config=model_config, display=tm_display)
+        ctx = build_child_request_context(runtime_settings, model_config=model_config, display=tm_display)
 
-        from ..context import ContextBuilder
-        from ..skills import SkillLoader
-        from ..config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS as _SP
-
-        ctx_builder = getattr(derived_agent_resources, "context_builder", None) or ContextBuilder(DATA_DIR)
-        _sl = getattr(derived_agent_resources, "skill_loader", None) or SkillLoader(DATA_DIR / "skills", _SP)
+        ctx_builder = getattr(derived_agent_resources, "context_builder", None)
+        _sl = getattr(derived_agent_resources, "skill_loader", None)
+        if ctx_builder is None or _sl is None:
+            self.bus.send(name, "lead", "⚠ 队友执行失败: 缺少 context builder 或 skill loader runtime resources")
+            self._set_status(name, "offline")
+            with self.lock:
+                self.threads.pop(name, None)
+                self._wake_events.pop(name, None)
+            return
         base_prompt = ctx_builder.build(skill_loader=_sl, project_path=str(self.project_dir), exclude_character=True)
         tool_names = list(team_settings.base_tools) + [
             "send_message", "list_teammates",

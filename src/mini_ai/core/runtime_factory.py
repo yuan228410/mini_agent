@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
-from ..config import COMPACTOR, DATABASE, DISPLAY, IMAGE, MCP, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TEAMMATE, TIMEOUTS, TOOL, WEB
+from ..config import COMPACTOR, DATABASE, DISPLAY, IMAGE, MCP, MODEL_CONFIG, RUNNER, STREAMING, SUBAGENT_MODELS, TEAMMATE, TIMEOUTS, TOOL, WEB
 from .display_protocol import DisplayProtocol
 from .execution import CancellationToken, ExecutionBudget
 from .runtime_context import DerivedAgentResources, SessionIdentity, SessionRuntimeContext, ToolContext
@@ -53,8 +53,30 @@ def build_settings_snapshot(model_config: ModelConfigDict | None = None) -> Sett
         mcp=MCP,
         image=IMAGE,
         database=DATABASE,
+        subagent_models=SUBAGENT_MODELS,
         streaming=STREAMING,
     )
+
+
+def build_request_context(settings: SettingsSnapshot, display: DisplayProtocol | None = None) -> RequestContextProtocol:
+    """Build the concrete LLM request context at the runtime adapter boundary."""
+
+    from ..config import RequestContext
+
+    return RequestContext(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
+
+
+def build_child_request_context(
+    settings: SettingsSnapshot,
+    *,
+    model_config: ModelConfigDict | None = None,
+    display: DisplayProtocol | None = None,
+) -> RequestContextProtocol:
+    """Build a request context for subagents while preserving session timeout settings."""
+
+    from ..config import RequestContext
+
+    return RequestContext(model_config=model_config or settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
 
 
 def build_session_runtime(
@@ -139,7 +161,7 @@ def build_session_runtime(
     bind_resources = getattr(registry, "bind_derived_agent_resources", None)
     if callable(bind_resources):
         bind_resources(resources)
-    req_ctx = request_context or RequestContext(model_config=snapshot.model.to_dict(), display=display, timeout_settings=snapshot.timeouts)
+    req_ctx = request_context or build_request_context(snapshot, display=display)
 
     return SessionRuntimeContext(
         identity=identity,

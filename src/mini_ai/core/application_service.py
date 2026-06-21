@@ -16,6 +16,7 @@ from ..utils import now_ts
 from .display_protocol import DisplayProtocol
 from .persister import HistoryPersister
 from .runtime_context import SessionRuntimeContext
+from .runtime_factory import build_request_context
 from .runtime_types import HistoryDBProtocol, MessageBusProtocol, MessageDict, PlanStateStoreProtocol, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol, UsageDict
 from .settings import ModelSettings, SettingsSnapshot
 
@@ -59,9 +60,7 @@ class ApplicationService:
 
     def _new_request_context(self, settings: SettingsSnapshot, display: DisplayProtocol | None) -> RequestContextProtocol:
         if self._request_context_factory is None:
-            from ..config import RequestContext
-
-            return RequestContext(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
+            return build_request_context(settings, display=display)
         return self._request_context_factory(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
 
     def run_turn(
