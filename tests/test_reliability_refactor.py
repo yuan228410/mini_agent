@@ -76,15 +76,19 @@ def test_async_db_writer_flush_waits_for_inflight_commit(tmp_path):
 
 
 def test_request_context_closes_owned_session():
+    from mini_ai.core.settings import TimeoutSettings
+
     class FakeSession:
         closed = False
         def close(self):
             self.closed = True
 
+    timeouts = TimeoutSettings(llm=7, llm_connect=3, llm_retries=1, llm_retry_delay=0.5)
     session = FakeSession()
-    ctx = RequestContext({"api_key": "k"}, http_session=session)
+    ctx = RequestContext({"api_key": "k"}, http_session=session, timeout_settings=timeouts)
     ctx.close()
     assert session.closed is False
+    assert ctx.timeout_settings is timeouts
 
     owned = RequestContext({"api_key": "k"})
     owned.close()
@@ -525,6 +529,8 @@ def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
         "tools/web_fetch.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get"),
         "tools/install_skill.py": ("from ..config import TIMEOUTS", "TIMEOUTS["),
         "team/loop.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get"),
+        "llm/openai.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get", "TIMEOUTS["),
+        "llm/anthropic.py": ("from ..config import TIMEOUTS", "TIMEOUTS.get", "TIMEOUTS["),
     }
 
     offenders = []
@@ -534,6 +540,18 @@ def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
         if hits:
             offenders.append({"path": rel, "hits": hits})
     assert offenders == []
+
+
+def test_llm_model_config_boundary_does_not_fall_back_to_config_global():
+    root = Path(__file__).resolve().parents[1] / "src/mini_ai"
+    base_text = (root / "llm/base.py").read_text()
+    anthropic_text = (root / "llm/anthropic.py").read_text()
+
+    assert "from ..config import MODEL_CONFIG" not in base_text
+    assert "return ctx.model_config if ctx else MODEL_CONFIG" not in base_text
+    assert "from ..config import TIMEOUTS" not in base_text
+    assert "from ..config import THINKING" not in anthropic_text
+    assert "get_timeout_settings" in base_text
 
 
 
@@ -1305,6 +1323,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     import mini_ai.config as config
     from mini_ai.core import settings as settings_mod
     from mini_ai.core import runtime_types
+    from mini_ai.llm import base as llm_base
     from mini_ai.core.display_protocol import DisplayProtocol
     from mini_ai.core.runtime_factory import build_session_runtime
     from mini_ai.core.runtime_types import (
@@ -1336,6 +1355,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert typing.get_type_hints(settings_mod.ModelSettings.to_dict)["return"] == ModelConfigDict
     assert typing.get_type_hints(settings_mod.TimeoutSettings.from_dict)["data"] == TimeoutConfigDict | None
     assert typing.get_type_hints(settings_mod.TimeoutSettings.to_dict)["return"] == TimeoutConfigDict
+    assert typing.get_type_hints(llm_base.get_timeout_settings)["return"] is settings_mod.TimeoutSettings
     assert typing.get_type_hints(settings_mod.RunnerSettings.from_dict)["data"] == RunnerConfigDict | None
     assert typing.get_type_hints(settings_mod.RunnerSettings.to_dict)["return"] == RunnerConfigDict
     assert typing.get_type_hints(settings_mod.DisplaySettings.from_dict)["data"] == DisplayConfigDict | None
@@ -1358,6 +1378,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert typing.get_type_hints(config.get_model_config)["return"] == ModelConfigDict | None
     assert typing.get_type_hints(config.RequestContext.__init__)["model_config"] == ModelConfigDict
     assert typing.get_type_hints(config.AppConfig.model_config.fget)["return"] == ModelConfigDict
+    assert typing.get_type_hints(llm_base.get_config)["return"] == ModelConfigDict
     assert typing.get_type_hints(config.AppConfig.timeouts.fget)["return"] == TimeoutConfigDict
     assert typing.get_type_hints(config.AppConfig.runner.fget)["return"] == RunnerConfigDict
     assert typing.get_type_hints(config.AppConfig.display.fget)["return"] == DisplayConfigDict

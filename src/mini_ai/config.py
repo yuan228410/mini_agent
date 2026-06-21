@@ -377,12 +377,13 @@ import requests as _requests
 
 
 class RequestContext:
-    __slots__ = ("model_config", "display", "http_session", "_owns_http_session")
+    __slots__ = ("model_config", "display", "http_session", "timeout_settings", "_owns_http_session")
 
-    def __init__(self, model_config: ModelConfigDict, display=None, http_session: _requests.Session | None = None):
+    def __init__(self, model_config: ModelConfigDict, display=None, http_session: _requests.Session | None = None, timeout_settings=None):
         self.model_config = model_config
         self.display = display
         self.http_session = http_session or _requests.Session()
+        self.timeout_settings = timeout_settings
         self._owns_http_session = http_session is None
 
     def close(self):

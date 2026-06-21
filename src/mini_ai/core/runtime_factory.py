@@ -129,7 +129,7 @@ def build_session_runtime(
     bind_resources = getattr(registry, "bind_derived_agent_resources", None)
     if callable(bind_resources):
         bind_resources(resources)
-    req_ctx = request_context or RequestContext(model_config=snapshot.model.to_dict(), display=display)
+    req_ctx = request_context or RequestContext(model_config=snapshot.model.to_dict(), display=display, timeout_settings=snapshot.timeouts)
 
     return SessionRuntimeContext(
         identity=identity,

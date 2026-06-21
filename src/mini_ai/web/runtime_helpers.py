@@ -17,4 +17,4 @@ def settings_for_model(base_settings: SettingsSnapshot, model_name: str | None) 
 
 
 def request_context_for_settings(settings: SettingsSnapshot, display=None) -> RequestContext:
-    return RequestContext(model_config=settings.model.to_dict(), display=display)
+    return RequestContext(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)

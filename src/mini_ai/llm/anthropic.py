@@ -5,11 +5,10 @@ import time
 
 import requests
 
-from ..config import TIMEOUTS, THINKING as _GLOBAL_THINKING
 from .base import (
     get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
-    get_usage, get_session, ensure_session_anthropic,
+    get_usage, get_session, get_timeout_settings, ensure_session_anthropic,
     estimate_tokens, estimate_messages_tokens, detect_context_overflow,
     _strip_internal_fields, commit_usage,
 )
@@ -22,9 +21,9 @@ from .retry import RetryStrategy
 
 
 def _get_thinking(ctx: RequestContextProtocol | None = None):
-    if ctx and ctx.model_config and 'thinking' in ctx.model_config:
-        return {**_GLOBAL_THINKING, **ctx.model_config['thinking']}
-    return _GLOBAL_THINKING
+    if ctx and ctx.model_config and "thinking" in ctx.model_config:
+        return ctx.model_config["thinking"]
+    return {"enabled": False, "budget_tokens": 10000, "type": "enabled"}
 
 
 def _openai_to_anthropic(messages: list[MessageDict]) -> tuple[str, list[ProviderMessage]]:
@@ -210,8 +209,9 @@ def chat(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool
 
     logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} thinking={thinking_type if _get_thinking(ctx).get('enabled') else 'off'}")
 
-    max_retries = TIMEOUTS.get("llm_retries", 3)
-    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    timeouts = get_timeout_settings(ctx)
+    max_retries = timeouts.llm_retries
+    retry_delay = timeouts.llm_retry_delay
     strategy = RetryStrategy(max_retries=max_retries, base_delay=retry_delay, max_delay=60.0)
 
     t0 = time.monotonic()
@@ -221,8 +221,8 @@ def chat(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool
             try:
                 ensure_session_anthropic(ctx)
                 sess = get_session(ctx)
-                connect_timeout = TIMEOUTS.get("llm_connect", 30)
-                read_timeout = TIMEOUTS.get("llm", 120)
+                connect_timeout = timeouts.llm_connect
+                read_timeout = timeouts.llm
                 response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
 
                 if response.status_code >= 400:
@@ -345,8 +345,9 @@ def chat_stream(messages: list[MessageDict], tools: list[ProviderToolDefinition]
     logger.info(f"[Anth→] model={get_model(ctx)} msgs={len(ant_msgs)} tools={len(payload.get('tools', []))} thinking={thinking_type if _get_thinking(ctx).get('enabled') else 'off'} [stream]")
 
     t0 = time.monotonic()
-    max_retries = TIMEOUTS.get("llm_retries", 3)
-    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    timeouts = get_timeout_settings(ctx)
+    max_retries = timeouts.llm_retries
+    retry_delay = timeouts.llm_retry_delay
     
     # 使用智能重试策略
     strategy = RetryStrategy(
@@ -362,8 +363,8 @@ def chat_stream(messages: list[MessageDict], tools: list[ProviderToolDefinition]
             ensure_session_anthropic(ctx)
             sess = get_session(ctx)
             # 流式请求：timeout=(连接超时, 读取超时)
-            connect_timeout = TIMEOUTS.get("llm_connect", 30)
-            read_timeout = TIMEOUTS.get("llm", 120)
+            connect_timeout = timeouts.llm_connect
+            read_timeout = timeouts.llm
             response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout), stream=True)
             response.raise_for_status()
             break

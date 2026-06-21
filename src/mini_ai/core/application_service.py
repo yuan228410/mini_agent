@@ -61,8 +61,8 @@ class ApplicationService:
         if self._request_context_factory is None:
             from ..config import RequestContext
 
-            return RequestContext(model_config=settings.model.to_dict(), display=display)
-        return self._request_context_factory(model_config=settings.model.to_dict(), display=display)
+            return RequestContext(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
+        return self._request_context_factory(model_config=settings.model.to_dict(), display=display, timeout_settings=settings.timeouts)
 
     def run_turn(
         self,

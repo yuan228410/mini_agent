@@ -4,11 +4,10 @@ import time
 
 import requests
 
-from ..config import TIMEOUTS
 from .base import (
     get_config, get_api_url, get_api_key, get_model,
     get_temperature, get_max_tokens, get_top_p, get_reasoning_effort,
-    get_usage, get_session, ensure_session_openai, detect_context_overflow,
+    get_usage, get_session, get_timeout_settings, ensure_session_openai, detect_context_overflow,
     estimate_tokens, estimate_messages_tokens,
     _strip_internal_fields, commit_usage,
 )
@@ -88,8 +87,9 @@ def chat(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool
     if tool_names:
         logger.debug(f"  tool_list={tool_names}")
 
-    max_retries = TIMEOUTS.get("llm_retries", 3)
-    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    timeouts = get_timeout_settings(ctx)
+    max_retries = timeouts.llm_retries
+    retry_delay = timeouts.llm_retry_delay
     
     # 使用智能重试策略
     strategy = RetryStrategy(
@@ -105,8 +105,8 @@ def chat(messages: list[MessageDict], tools: list[ProviderToolDefinition] | bool
     try:
         for attempt in range(max_retries + 1):
             try:
-                connect_timeout = TIMEOUTS.get("llm_connect", 30)
-                read_timeout = TIMEOUTS.get("llm", 120)
+                connect_timeout = timeouts.llm_connect
+                read_timeout = timeouts.llm
                 response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout))
                 if response.status_code >= 400:
                     err_msg = f"HTTP {response.status_code}: {response.text[:200]}"
@@ -233,8 +233,9 @@ def chat_stream(messages: list[MessageDict], tools: list[ProviderToolDefinition]
 
     sess = get_session(ctx)
     t0 = time.monotonic()
-    max_retries = TIMEOUTS.get("llm_retries", 3)
-    retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+    timeouts = get_timeout_settings(ctx)
+    max_retries = timeouts.llm_retries
+    retry_delay = timeouts.llm_retry_delay
     
     # 使用智能重试策略
     strategy = RetryStrategy(
@@ -247,8 +248,8 @@ def chat_stream(messages: list[MessageDict], tools: list[ProviderToolDefinition]
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            connect_timeout = TIMEOUTS.get("llm_connect", 30)
-            read_timeout = TIMEOUTS.get("llm", 120)
+            connect_timeout = timeouts.llm_connect
+            read_timeout = timeouts.llm
             response = sess.post(get_api_url(ctx), json=payload, timeout=(connect_timeout, read_timeout), stream=True)
             
             # 检查 HTTP 状态码

@@ -3,25 +3,30 @@ import threading
 
 import requests
 
-from ..config import MODEL_CONFIG
 from ..core.messages import to_provider_messages
-from ..core.runtime_types import MessageDict, UsageDict
+from ..core.runtime_types import MessageDict, ModelConfigDict, UsageDict
+from ..core.settings import TimeoutSettings
 
 
-def get_config(ctx=None):
-    return ctx.model_config if ctx else MODEL_CONFIG
+def get_config(ctx=None) -> ModelConfigDict:
+    return ctx.model_config if ctx else {}
+
+
+def get_timeout_settings(ctx=None) -> TimeoutSettings:
+    settings = getattr(ctx, "timeout_settings", None) if ctx else None
+    return settings or TimeoutSettings()
 
 
 def get_api_url(ctx=None):
-    return get_config(ctx)["api_url"]
+    return get_config(ctx).get("api_url", "")
 
 
 def get_api_key(ctx=None):
-    return get_config(ctx)["api_key"]
+    return get_config(ctx).get("api_key", "")
 
 
 def get_model(ctx=None):
-    return get_config(ctx)["model"]
+    return get_config(ctx).get("model", "")
 
 
 def get_api_mode(ctx=None):
@@ -216,7 +221,7 @@ def close_thread_session():
 def ensure_session_openai(ctx=None):
     cfg = get_config(ctx)
     sess = get_session(ctx)
-    key = cfg["api_key"]
+    key = cfg.get("api_key", "")
 
     auth_value = f"Bearer {key}"
     sess.headers.pop("x-api-key", None)
@@ -234,7 +239,7 @@ def ensure_session_openai(ctx=None):
 def ensure_session_anthropic(ctx=None):
     cfg = get_config(ctx)
     sess = get_session(ctx)
-    key = cfg["api_key"]
+    key = cfg.get("api_key", "")
     sess.headers.pop("Authorization", None)
     if sess.headers.get("x-api-key") != key:
         sess.headers.update({

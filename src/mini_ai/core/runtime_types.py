@@ -159,6 +159,7 @@ class Closable(Protocol):
 class RequestContextProtocol(Closable, Protocol):
     model_config: ModelConfigDict
     display: DisplayProtocol | None
+    timeout_settings: Any
 
 
 class ToolRegistryProtocol(Protocol):
