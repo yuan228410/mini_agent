@@ -1657,7 +1657,7 @@ def test_web_session_routes_use_application_service_boundary():
     assert "def rename_session" in session_service
 
 
-def test_web_config_preview_routes_use_application_service_boundary():
+def test_web_config_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_config = (repo / "src/mini_ai/web/routes/config.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
@@ -1677,11 +1677,35 @@ def test_web_config_preview_routes_use_application_service_boundary():
     assert "config_service.system_prompt_preview" in preview_area
     assert "config_service.tools_preview" in preview_area
     assert "config_preview_dependencies" in preview_area
+
+    settings_area = routes_config.split('@router.get("/settings")', 1)[1]
+    assert "yaml" not in routes_config
+    assert "_raw" not in routes_config
+    assert "_config_path" not in routes_config
+    assert "AVAILABLE_MODELS" not in routes_config
+    assert "_switch_model" not in routes_config
+    assert "from ...config import" not in routes_config
+    assert "config_service.settings_payload" in settings_area
+    assert "config_service.update_settings" in settings_area
+    assert "config_service.add_model" in settings_area
+    assert "config_service.remove_model" in settings_area
+    assert "config_service.add_mcp_server" in settings_area
+    assert "config_service.remove_mcp_server" in settings_area
+    assert "config_mutation_dependencies" in settings_area
+
     assert "def config_preview_dependencies" in runtime_helpers
+    assert "def config_mutation_dependencies" in runtime_helpers
     assert "class ConfigPreviewDependencies" in config_service
+    assert "class ConfigMutationDependencies" in config_service
     assert "def config_summary" in config_service
     assert "def system_prompt_preview" in config_service
     assert "def tools_preview" in config_service
+    assert "def settings_payload" in config_service
+    assert "def update_settings" in config_service
+    assert "def add_model" in config_service
+    assert "def remove_model" in config_service
+    assert "def add_mcp_server" in config_service
+    assert "def remove_mcp_server" in config_service
 
 
 def test_web_command_routes_use_application_service_boundary():

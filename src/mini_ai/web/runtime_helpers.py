@@ -12,7 +12,7 @@ from ..application import model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
-from ..application.config_service import ConfigPreviewDependencies
+from ..application.config_service import ConfigMutationDependencies, ConfigPreviewDependencies
 from ..application.model_use_cases import ModelRouteDependencies
 from ..application.session_service import SessionServiceDependencies
 from ..application.workspace_service import WorkspaceSwitchDependencies
@@ -104,6 +104,35 @@ def config_preview_dependencies() -> ConfigPreviewDependencies:
         get_or_create_components=get_or_create_components,
         load_session_model=_load_session_model,
         estimate_tokens=estimate_tokens,
+    )
+
+
+def config_mutation_dependencies() -> ConfigMutationDependencies:
+    """Build Web config mutation dependencies at the adapter boundary."""
+
+    import mini_ai.config as cfg
+    from ..config import _config_path, _raw, AVAILABLE_MODELS, switch_model
+    from ..config import COMPACTOR, DISPLAY, LOGGING, PLAN, RUNNER, THINKING, TIMEOUTS, TOOL, WEB
+    from .deps import _init_mcp
+
+    return ConfigMutationDependencies(
+        raw=_raw,
+        config_path=_config_path,
+        available_models=AVAILABLE_MODELS,
+        switch_model=switch_model,
+        reload_mcp=_init_mcp,
+        section_globals={
+            "thinking": THINKING,
+            "display": DISPLAY,
+            "compactor": COMPACTOR,
+            "tool": TOOL,
+            "runner": RUNNER,
+            "plan": PLAN,
+            "logging": LOGGING,
+            "timeouts": TIMEOUTS,
+            "web": WEB,
+        },
+        set_streaming=lambda value: setattr(cfg, "STREAMING", value),
     )
 
 
