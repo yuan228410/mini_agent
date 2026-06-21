@@ -116,10 +116,12 @@ async def chat_ws_endpoint(ws: WebSocket):
         _ws_abort_keys.append(session_key)
 
         s_lock = sm.get_lock(session_key)
-        from ...config import RUNNER
-        max_turns_web = RUNNER.get("max_turns", 20)
+        comp = get_or_create_components(username, sid, base, ws_name)
+        settings = comp.get("settings")
+        max_turns_web = settings.web.max_turns if settings else 10
+        from ..chat_runner import _executor
         future = loop.run_in_executor(
-            None, run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name, plan_turn, approved_plan
+            _executor, run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name, plan_turn, approved_plan
         )
 
         complete_usage = {"prompt_tokens": 0, "completion_tokens": 0}

@@ -61,6 +61,12 @@ def test_settings_snapshot_copies_config_dicts():
     assert snapshot.runner.max_turns == 7
     assert snapshot.display.thinking_mode == "hidden"
     assert snapshot.tool.max_result_chars == 123
+    assert snapshot.tool.max_parallel_tools == 8
+    assert snapshot.team.max_teammates == 10
+    assert snapshot.workflow.max_concurrency == 8
+    assert snapshot.web.stream_chunk_flush_ms == 40
+    assert snapshot.mcp.enabled is False
+    assert snapshot.image.compress_max_dimension == 800
     assert snapshot.database.history.async_write is True
     assert snapshot.database.history.batch_size == 9
     assert snapshot.streaming is False
@@ -111,6 +117,42 @@ def test_runtime_factory_attaches_settings_snapshot():
 
     assert runtime.settings is snapshot
     assert runtime.request_context.model_config["context_length"] == 42
+    runtime.close()
+
+
+def test_runtime_factory_attaches_execution_primitives():
+    from mini_ai.core.execution import CancellationToken, ExecutionBudget
+    from mini_ai.core.usage import UsageCollector
+
+    snapshot = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 42},
+        tool={"max_parallel_tools": 3},
+        web={"max_turns": 5, "stream_chunk_flush_ms": 25, "stream_chunk_max_chars": 128},
+        streaming=True,
+    )
+    registry = FakeToolRegistry()
+    abort_event = threading.Event()
+
+    runtime = build_session_runtime(
+        identity=SessionIdentity(username="u", workspace="w", session_id="s", project_path="/tmp/project"),
+        messages=[],
+        settings=snapshot,
+        tool_registry=registry,
+        abort_event=abort_event,
+    )
+
+    assert isinstance(runtime.cancellation_token, CancellationToken)
+    assert runtime.cancellation_token.event is abort_event
+    assert isinstance(runtime.execution_budget, ExecutionBudget)
+    assert runtime.execution_budget.max_parallel_tools == 3
+    assert runtime.execution_budget.max_web_turns == 5
+    assert runtime.execution_budget.stream_chunk_flush_ms == 25
+    assert runtime.execution_budget.stream_chunk_max_chars == 128
+    assert isinstance(runtime.usage_collector, UsageCollector)
+    assert runtime.tool_context.execution_budget is runtime.execution_budget
+    assert runtime.tool_context.usage_collector is runtime.usage_collector
+    assert runtime.derived_agent_resources.execution_budget is runtime.execution_budget
+    assert runtime.derived_agent_resources.usage_collector is runtime.usage_collector
     runtime.close()
 
 

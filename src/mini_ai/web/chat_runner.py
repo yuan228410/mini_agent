@@ -101,6 +101,10 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     compactor=comp.get("compactor"),
                     context_builder=comp.get("ctx_builder"),
                 )
+                disp._usage_provider = runtime.usage_collector.snapshot if runtime.usage_collector else None
+                if runtime.execution_budget:
+                    disp._stream_flush_ms = runtime.execution_budget.stream_chunk_flush_ms
+                    disp._stream_max_chars = runtime.execution_budget.stream_chunk_max_chars
                 tool_registry = runtime.tool_registry
                 ctx = runtime.request_context
                 settings = runtime.settings

@@ -415,6 +415,82 @@ def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     assert offenders == []
 
 
+def test_tool_registry_executes_mixed_calls_in_order_with_bounded_parallelism():
+    from mini_ai.core.execution import ExecutionBudget
+
+    events = []
+
+    def tool_def(name):
+        return {
+            "type": "function",
+            "function": {"name": name, "description": "", "parameters": {"type": "object", "properties": {}}},
+        }
+
+    class ParallelA:
+        definition = tool_def("read_file")
+        @staticmethod
+        def execute(args):
+            events.append("read_file")
+            return "A"
+
+    class SerialB:
+        definition = tool_def("write_file")
+        @staticmethod
+        def execute(args):
+            events.append("write_file")
+            return "B"
+
+    class ParallelC:
+        definition = tool_def("list_dir")
+        @staticmethod
+        def execute(args):
+            events.append("list_dir")
+            return "C"
+
+    registry = ToolRegistry(execution_budget=ExecutionBudget(max_parallel_tools=1))
+    registry.add_tools(ParallelA, SerialB, ParallelC)
+    messages = []
+    registry.handle_tool_calls({
+        "tool_calls": [
+            {"id": "a", "function": {"name": "read_file", "arguments": "{}"}},
+            {"id": "b", "function": {"name": "write_file", "arguments": "{}"}},
+            {"id": "c", "function": {"name": "list_dir", "arguments": "{}"}},
+        ]
+    }, messages)
+
+    tool_messages = [m for m in messages if m["role"] == "tool"]
+    assert [m["tool_call_id"] for m in tool_messages] == ["a", "b", "c"]
+    assert [m["content"] for m in tool_messages] == ["A", "B", "C"]
+    assert events == ["read_file", "write_file", "list_dir"]
+
+
+def test_tool_registry_scoped_allowlist_filters_definitions_and_dispatch():
+    def tool_def(name):
+        return {
+            "type": "function",
+            "function": {"name": name, "description": "", "parameters": {"type": "object", "properties": {}}},
+        }
+
+    class Allowed:
+        definition = tool_def("read_file")
+        @staticmethod
+        def execute(args):
+            return "allowed"
+
+    class Denied:
+        definition = tool_def("write_file")
+        @staticmethod
+        def execute(args):
+            return "denied"
+
+    registry = ToolRegistry(allowed_tools={"read_file"})
+    registry.add_tools(Allowed, Denied)
+
+    assert [d["function"]["name"] for d in registry.get_definitions()] == ["read_file"]
+    assert registry.dispatch("read_file", {}) == "allowed"
+    assert "不在当前执行策略" in registry.dispatch("write_file", {})
+
+
 def test_module_level_tool_registry_apis_fail_fast():
     from mini_ai import tools
 

@@ -4,23 +4,21 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from ..config import TOOL
 from datetime import datetime, timezone, timedelta
 from ..logger import logger
 
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 from .cache import ToolCache, get_tool_cache
 from .metadata import metadata_for, normalize_tool_definition
+from ..core.execution import ExecutionBudget
 from ..core.runtime_types import MessageDict, ToolArgs, ToolDefinition, ToolWirePayload
 from ..core.tool_models import ToolCall, ToolResult
 from ..utils import now_ts
 
-_MAX_RESULT_CHARS = TOOL.get("max_result_chars", 8000)
-
-def _truncate(output: str) -> str:
-    if len(output) <= _MAX_RESULT_CHARS:
+def _truncate(output: str, max_chars: int = 8000) -> str:
+    if len(output) <= max_chars:
         return output
-    return output[:_MAX_RESULT_CHARS] + f"\n[已截断，原长 {len(output)} 字符]"
+    return output[:max_chars] + f"\n[已截断，原长 {len(output)} 字符]"
 
 
 class _BoundTool:
@@ -34,7 +32,7 @@ class _BoundTool:
 
 class ToolRegistry:
 
-    def __init__(self, *, project_path: str = "", display=None):
+    def __init__(self, *, project_path: str = "", display=None, max_result_chars: int = 8000, execution_budget: ExecutionBudget | None = None, allowed_tools: set[str] | None = None):
         self._tools: list = []
         self._by_name: dict[str, object] = {}
         self._display = display
@@ -42,6 +40,9 @@ class ToolRegistry:
         self._tool_metadata: dict[str, object] = {}
         self._derived_agent_resources = None
         self._cache = ToolCache(cacheable_resolver=self._is_cacheable)
+        self._max_result_chars = int(max_result_chars or 8000)
+        self._execution_budget = execution_budget or ExecutionBudget()
+        self._allowed_tools = set(allowed_tools) if allowed_tools is not None else None
         # 兼容测试/外部扩展；新代码优先通过 ToolMetadata.parallel_safe 声明。
         self._parallel_tools: set[str] = set()
 
@@ -149,7 +150,13 @@ class ToolRegistry:
         # workflow/subagent 工具通过 session-local bound closure 动态读取 self._display。
 
     def get_definitions(self) -> list[ToolDefinition]:
-        return [json.loads(json.dumps(m.definition, ensure_ascii=False)) for m in self._tools]
+        definitions = []
+        for m in self._tools:
+            name = m.definition["function"]["name"]
+            if self._allowed_tools is not None and name not in self._allowed_tools:
+                continue
+            definitions.append(json.loads(json.dumps(m.definition, ensure_ascii=False)))
+        return definitions
 
     def _is_parallel_safe(self, name: str) -> bool:
         return name in self._parallel_tools or bool(metadata_for(name, self._tool_metadata.get(name)).parallel_safe)
@@ -157,7 +164,12 @@ class ToolRegistry:
     def _is_cacheable(self, name: str) -> bool:
         return bool(metadata_for(name, self._tool_metadata.get(name)).cacheable)
 
+    def _is_allowed(self, name: str) -> bool:
+        return self._allowed_tools is None or name in self._allowed_tools
+
     def dispatch(self, name: str, args: ToolArgs) -> str | None:
+        if not self._is_allowed(name):
+            return f"Error: 工具 '{name}' 不在当前执行策略允许范围内"
         mod = self._by_name.get(name)
         if not mod:
             return None
@@ -173,30 +185,31 @@ class ToolRegistry:
         _disp = display if display is not None else self._display
         spawned = False
 
-        # 优化：先收集所有并行工具，再一次性执行
-        # 避免连续并行工具被串行工具打断
-        parallel_calls = []
-        serial_calls = []
-        
+        # 按原始顺序分段执行：连续 parallel-safe 工具组成一个并行段，
+        # 串行工具作为 barrier。这样既保留并发收益，也避免 A/C 跑到 B 前面。
+        parallel_segment: list[ToolCall] = []
+
+        def flush_parallel_segment() -> None:
+            if not parallel_segment:
+                return
+            segment = list(parallel_segment)
+            parallel_segment.clear()
+            if len(segment) > 1:
+                self._execute_parallel(segment, messages, _disp, persist_fn)
+            else:
+                self._execute_one(segment[0], messages, _disp, persist_fn)
+
         for tc in calls:
             name = tc.function.name
             if name == "spawn_teammate":
                 spawned = True
             if self._is_parallel_safe(name):
-                parallel_calls.append(tc)
-            else:
-                serial_calls.append(tc)
-
-        # 先执行所有并行工具
-        if len(parallel_calls) > 1:
-            self._execute_parallel(parallel_calls, messages, _disp, persist_fn)
-        elif len(parallel_calls) == 1:
-            self._execute_one(parallel_calls[0], messages, _disp, persist_fn)
-        
-        # 再执行串行工具
-        for tc in serial_calls:
+                parallel_segment.append(tc)
+                continue
+            flush_parallel_segment()
             self._execute_one(tc, messages, _disp, persist_fn)
 
+        flush_parallel_segment()
         return spawned
 
     def _as_tool_call(self, tc: ToolCall | ToolWirePayload) -> ToolCall:
@@ -237,7 +250,7 @@ class ToolRegistry:
             # assistant.tool_calls 未被一一响应而返回 HTTP 400
             full_output = output if output is not None else ""
             logger.debug(f"[工具←] {name} (cached) len={len(full_output)}")
-            truncated = _truncate(full_output)
+            truncated = _truncate(full_output, self._max_result_chars)
             tool_msg = self._tool_message(tc.id, name, truncated)
             self._persist_tool_message(persist_fn, tc.id, name, full_output)
             messages.append(tool_msg)
@@ -287,7 +300,7 @@ class ToolRegistry:
         # 也必须写入一条占位 tool 消息，否则下次 LLM 调用会 HTTP 400
         full_output = output if output is not None else ""
         logger.debug(f"[工具←] {name} len={len(full_output)}")
-        truncated = _truncate(full_output)
+        truncated = _truncate(full_output, self._max_result_chars)
         tool_msg = self._tool_message(tc.id, name, truncated)
         self._persist_tool_message(persist_fn, tc.id, name, full_output)
         messages.append(tool_msg)
@@ -365,7 +378,8 @@ class ToolRegistry:
                 
                 return tc.id, error_msg
 
-        with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+        max_workers = min(len(calls), max(1, self._execution_budget.max_parallel_tools))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {pool.submit(_run, tc, _ctx_copies[i]): i for i, tc in enumerate(calls)}
             for future in as_completed(futures):
                 try:
@@ -381,7 +395,7 @@ class ToolRegistry:
             tc_id = tc.id
             full_output = results.get(tc_id, "")
             name = tc.function.name
-            truncated = _truncate(full_output)
+            truncated = _truncate(full_output, self._max_result_chars)
             tool_msg = self._tool_message(tc_id, name, truncated)
             self._persist_tool_message(persist_fn, tc_id, name, full_output)
             messages.append(tool_msg)

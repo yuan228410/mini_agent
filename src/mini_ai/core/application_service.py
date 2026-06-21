@@ -149,11 +149,16 @@ class ApplicationService:
             elif options.approved_plan and plan_store:
                 PlanService().mark_completed(session_key=plan_session_key, sm=plan_state, store=plan_store, display=options.display)
 
+            usage = dict(get_usage())
+            if runtime is not None and runtime.usage_collector is not None:
+                runtime.usage_collector.set(
+                    prompt_tokens=int(usage.get("prompt_tokens") or 0),
+                    completion_tokens=int(usage.get("completion_tokens") or 0),
+                )
             if compactor:
-                usage = get_usage()
                 compactor.maybe_compact(messages, usage["prompt_tokens"], llm_chat, ctx, options.context_length)
 
-            return RunTurnResult(message=msg, usage=dict(get_usage()), raw_plan_text=raw_plan_text)
+            return RunTurnResult(message=msg, usage=usage, raw_plan_text=raw_plan_text)
         finally:
             if owns_ctx:
                 ctx.close()

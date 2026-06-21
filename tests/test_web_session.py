@@ -165,6 +165,52 @@ class TestWebSocketConcurrency:
 
 
 # 集成测试（需要实际 WebSocket 连接，标记为慢测试）
+class TestWebDisplayStreaming:
+    def test_text_chunks_are_coalesced_and_flushed_on_end(self):
+        from mini_ai.web.display import WebDisplay
+
+        loop = asyncio.new_event_loop()
+        queue = asyncio.Queue(maxsize=10)
+        display = WebDisplay(queue, loop, session_id="sid", stream_flush_ms=1000, stream_max_chars=100)
+
+        display.text_chunk("hel")
+        display.text_chunk("lo")
+        assert queue.empty()
+
+        saved = display.text_end()
+        display._flush_pending()
+        assert saved == "hello"
+        assert queue.get_nowait()["data"]["content"] == "hello"
+        loop.close()
+
+    def test_terminal_event_flushes_pending_text_and_usage_provider(self):
+        from mini_ai.web.display import WebDisplay
+
+        loop = asyncio.new_event_loop()
+        queue = asyncio.Queue(maxsize=10)
+        display = WebDisplay(
+            queue,
+            loop,
+            session_id="sid",
+            stream_flush_ms=1000,
+            stream_max_chars=100,
+            usage_provider=lambda: {"prompt_tokens": 7, "completion_tokens": 3},
+        )
+
+        display.text_chunk("pending")
+        display.error("boom")
+        display._flush_pending()
+
+        first = queue.get_nowait()
+        second = queue.get_nowait()
+        assert first["event"] == "text"
+        assert first["data"]["content"] == "pending"
+        assert second["event"] == "error"
+        assert second["data"]["prompt_tokens"] == 7
+        assert second["data"]["completion_tokens"] == 3
+        loop.close()
+
+
 class TestWebIntegration:
     """Web 端集成测试"""
     

@@ -14,10 +14,15 @@ from .runtime_types import (
     DatabaseConfigDict,
     DatabaseHistoryConfigDict,
     DisplayConfigDict,
+    ImageConfigDict,
+    McpConfigDict,
     ModelConfigDict,
     RunnerConfigDict,
+    TeamConfigSettingsDict,
     TimeoutConfigDict,
     ToolConfigDict,
+    WebConfigDict,
+    WorkflowConfigDict,
 )
 
 
@@ -173,18 +178,177 @@ class DisplaySettings:
 @dataclass(frozen=True, slots=True)
 class ToolSettings:
     max_result_chars: int = 8000
+    max_parallel_tools: int = 8
     extra: ConfigDict = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: ToolConfigDict | None) -> "ToolSettings":
         raw = copy.deepcopy(data or {})
+        known = {"max_result_chars", "max_parallel_tools"}
         return cls(
             max_result_chars=int(raw.get("max_result_chars", 8000)),
-            extra={k: v for k, v in raw.items() if k != "max_result_chars"},
+            max_parallel_tools=max(1, int(raw.get("max_parallel_tools", 8))),
+            extra={k: v for k, v in raw.items() if k not in known},
         )
 
     def to_dict(self) -> ToolConfigDict:
-        data = {"max_result_chars": self.max_result_chars}
+        data = {"max_result_chars": self.max_result_chars, "max_parallel_tools": self.max_parallel_tools}
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class TeamSettings:
+    max_teammates: int = 10
+    max_turns: int = 20
+    idle_timeout: int = 300
+    max_history: int = 20
+    task_timeout: int = 600
+    base_tools: list[str] = field(default_factory=lambda: [
+        "run_command", "web_fetch", "load_skill", "read_file", "write_file", "edit_file", "search_files", "list_dir",
+    ])
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: TeamConfigSettingsDict | None) -> "TeamSettings":
+        raw = copy.deepcopy(data or {})
+        known = {"max_teammates", "max_turns", "idle_timeout", "max_history", "task_timeout", "base_tools"}
+        return cls(
+            max_teammates=int(raw.get("max_teammates", 10)),
+            max_turns=int(raw.get("max_turns", 20)),
+            idle_timeout=int(raw.get("idle_timeout", 300)),
+            max_history=int(raw.get("max_history", 20)),
+            task_timeout=int(raw.get("task_timeout", 600)),
+            base_tools=[str(item) for item in raw.get("base_tools", cls().base_tools)],
+            extra={k: v for k, v in raw.items() if k not in known},
+        )
+
+    def to_dict(self) -> TeamConfigSettingsDict:
+        data = {
+            "max_teammates": self.max_teammates,
+            "max_turns": self.max_turns,
+            "idle_timeout": self.idle_timeout,
+            "max_history": self.max_history,
+            "task_timeout": self.task_timeout,
+            "base_tools": list(self.base_tools),
+        }
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class WorkflowSettings:
+    max_concurrency: int = 8
+    task_timeout: int = 600
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: WorkflowConfigDict | None) -> "WorkflowSettings":
+        raw = copy.deepcopy(data or {})
+        return cls(
+            max_concurrency=max(1, int(raw.get("max_concurrency", 8))),
+            task_timeout=int(raw.get("task_timeout", 600)),
+            extra={k: v for k, v in raw.items() if k not in {"max_concurrency", "task_timeout"}},
+        )
+
+    def to_dict(self) -> WorkflowConfigDict:
+        data = {"max_concurrency": self.max_concurrency, "task_timeout": self.task_timeout}
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class WebSettings:
+    history_limit: int = 200
+    max_turns: int = 10
+    stream_chunk_flush_ms: int = 40
+    stream_chunk_max_chars: int = 512
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: WebConfigDict | None) -> "WebSettings":
+        raw = copy.deepcopy(data or {})
+        known = {"history_limit", "max_turns", "stream_chunk_flush_ms", "stream_chunk_max_chars"}
+        return cls(
+            history_limit=int(raw.get("history_limit", 200)),
+            max_turns=max(1, int(raw.get("max_turns", 10))),
+            stream_chunk_flush_ms=max(0, int(raw.get("stream_chunk_flush_ms", 40))),
+            stream_chunk_max_chars=max(1, int(raw.get("stream_chunk_max_chars", 512))),
+            extra={k: v for k, v in raw.items() if k not in known},
+        )
+
+    def to_dict(self) -> WebConfigDict:
+        data = {
+            "history_limit": self.history_limit,
+            "max_turns": self.max_turns,
+            "stream_chunk_flush_ms": self.stream_chunk_flush_ms,
+            "stream_chunk_max_chars": self.stream_chunk_max_chars,
+        }
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class McpSettings:
+    enabled: bool = False
+    connect_timeout: float = 10
+    execute_timeout: float = 60
+    sse_read_timeout: float = 120
+    servers: ConfigDict = field(default_factory=dict)
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: McpConfigDict | None) -> "McpSettings":
+        raw = copy.deepcopy(data or {})
+        known = {"enabled", "connect_timeout", "execute_timeout", "sse_read_timeout", "servers"}
+        return cls(
+            enabled=bool(raw.get("enabled", False)),
+            connect_timeout=float(raw.get("connect_timeout", 10)),
+            execute_timeout=float(raw.get("execute_timeout", 60)),
+            sse_read_timeout=float(raw.get("sse_read_timeout", 120)),
+            servers=copy.deepcopy(raw.get("servers") or {}),
+            extra={k: v for k, v in raw.items() if k not in known},
+        )
+
+    def to_dict(self) -> McpConfigDict:
+        data = {
+            "enabled": self.enabled,
+            "connect_timeout": self.connect_timeout,
+            "execute_timeout": self.execute_timeout,
+            "sse_read_timeout": self.sse_read_timeout,
+            "servers": copy.deepcopy(self.servers),
+        }
+        data.update(copy.deepcopy(self.extra))
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class ImageSettings:
+    max_size: int = 10 * 1024 * 1024
+    compress_threshold: int = 500 * 1024
+    compress_max_dimension: int = 800
+    compress_quality: int = 85
+    extra: ConfigDict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: ImageConfigDict | None) -> "ImageSettings":
+        raw = copy.deepcopy(data or {})
+        known = {"max_size", "compress_threshold", "compress_max_dimension", "compress_quality"}
+        return cls(
+            max_size=int(raw.get("max_size", 10 * 1024 * 1024)),
+            compress_threshold=int(raw.get("compress_threshold", 500 * 1024)),
+            compress_max_dimension=int(raw.get("compress_max_dimension", 800)),
+            compress_quality=int(raw.get("compress_quality", 85)),
+            extra={k: v for k, v in raw.items() if k not in known},
+        )
+
+    def to_dict(self) -> ImageConfigDict:
+        data = {
+            "max_size": self.max_size,
+            "compress_threshold": self.compress_threshold,
+            "compress_max_dimension": self.compress_max_dimension,
+            "compress_quality": self.compress_quality,
+        }
         data.update(copy.deepcopy(self.extra))
         return data
 
@@ -260,6 +424,11 @@ class SettingsSnapshot:
     runner: RunnerSettings = field(default_factory=RunnerSettings)
     display: DisplaySettings = field(default_factory=DisplaySettings)
     tool: ToolSettings = field(default_factory=ToolSettings)
+    team: TeamSettings = field(default_factory=TeamSettings)
+    workflow: WorkflowSettings = field(default_factory=WorkflowSettings)
+    web: WebSettings = field(default_factory=WebSettings)
+    mcp: McpSettings = field(default_factory=McpSettings)
+    image: ImageSettings = field(default_factory=ImageSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
     streaming: bool = True
 
@@ -272,6 +441,11 @@ class SettingsSnapshot:
         runner: RunnerConfigDict | None = None,
         display: DisplayConfigDict | None = None,
         tool: ToolConfigDict | None = None,
+        team: TeamConfigSettingsDict | None = None,
+        workflow: WorkflowConfigDict | None = None,
+        web: WebConfigDict | None = None,
+        mcp: McpConfigDict | None = None,
+        image: ImageConfigDict | None = None,
         database: DatabaseConfigDict | None = None,
         streaming: bool = True,
     ) -> "SettingsSnapshot":
@@ -281,6 +455,11 @@ class SettingsSnapshot:
             runner=RunnerSettings.from_dict(runner),
             display=DisplaySettings.from_dict(display),
             tool=ToolSettings.from_dict(tool),
+            team=TeamSettings.from_dict(team),
+            workflow=WorkflowSettings.from_dict(workflow),
+            web=WebSettings.from_dict(web),
+            mcp=McpSettings.from_dict(mcp),
+            image=ImageSettings.from_dict(image),
             database=DatabaseSettings.from_dict(database),
             streaming=bool(streaming),
         )

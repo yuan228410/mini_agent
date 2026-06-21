@@ -9,8 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
-from ..config import DATABASE, DISPLAY, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TIMEOUTS, TOOL
+from ..config import DATABASE, DISPLAY, IMAGE, MCP, MODEL_CONFIG, RequestContext, RUNNER, STREAMING, TEAMMATE, TIMEOUTS, TOOL, WEB
 from .display_protocol import DisplayProtocol
+from .execution import CancellationToken, ExecutionBudget
 from .runtime_context import DerivedAgentResources, SessionIdentity, SessionRuntimeContext, ToolContext
 from .runtime_types import (
     BlackboardProtocol,
@@ -30,6 +31,7 @@ from .runtime_types import (
 )
 from .settings import SettingsSnapshot
 from .tool_registry_factory import build_tool_registry
+from .usage import UsageCollector
 
 
 def build_session_runtime(
@@ -53,6 +55,9 @@ def build_session_runtime(
     compactor: CompactorProtocol | None = None,
     context_builder: ContextBuilderProtocol | None = None,
     settings: SettingsSnapshot | None = None,
+    cancellation_token: CancellationToken | None = None,
+    execution_budget: ExecutionBudget | None = None,
+    usage_collector: UsageCollector | None = None,
 ) -> SessionRuntimeContext:
     """Build a fully-bound runtime for one CLI/Web session.
 
@@ -67,9 +72,25 @@ def build_session_runtime(
         runner=RUNNER,
         display=DISPLAY,
         tool=TOOL,
+        team=TEAMMATE,
+        workflow={"max_concurrency": TEAMMATE.get("max_workflow_concurrency", TEAMMATE.get("max_concurrency", 8)), "task_timeout": TEAMMATE.get("task_timeout", 600)},
+        web=WEB,
+        mcp=MCP,
+        image=IMAGE,
         database=DATABASE,
         streaming=STREAMING,
     )
+    budget = execution_budget or ExecutionBudget(
+        max_parallel_tools=snapshot.tool.max_parallel_tools,
+        max_web_turns=snapshot.web.max_turns,
+        max_workflow_concurrency=snapshot.workflow.max_concurrency,
+        max_subagents=int(snapshot.runner.extra.get("max_subagents", 4)),
+        stream_chunk_flush_ms=snapshot.web.stream_chunk_flush_ms,
+        stream_chunk_max_chars=snapshot.web.stream_chunk_max_chars,
+    )
+    token = cancellation_token or CancellationToken(abort_event)
+    usage = usage_collector or UsageCollector()
+
     tool_context = ToolContext(
         identity=identity,
         display=display,
@@ -82,6 +103,9 @@ def build_session_runtime(
         blackboard=blackboard,
         workflow_dirs=workflow_dirs,
         abort_event=abort_event,
+        cancellation_token=token,
+        execution_budget=budget,
+        usage_collector=usage,
         compactor=compactor,
         context_builder=context_builder,
         mcp_loader=mcp_loader,
@@ -96,6 +120,9 @@ def build_session_runtime(
         context_builder=context_builder,
         compactor=compactor,
         abort_event=abort_event,
+        cancellation_token=token,
+        execution_budget=budget,
+        usage_collector=usage,
         mcp_loader=mcp_loader,
         settings=snapshot,
     )
@@ -121,4 +148,7 @@ def build_session_runtime(
         blackboard=blackboard,
         mcp_loader=mcp_loader,
         derived_agent_resources=resources,
+        cancellation_token=token,
+        execution_budget=budget,
+        usage_collector=usage,
     )

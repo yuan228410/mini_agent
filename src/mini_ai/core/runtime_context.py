@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Event
 
 from .display_protocol import DisplayProtocol
+from .execution import CancellationToken, ExecutionBudget
 from .runtime_types import (
     BlackboardProtocol,
     CompactorProtocol,
@@ -22,6 +23,7 @@ from .runtime_types import (
     ToolRegistryProtocol,
 )
 from .settings import SettingsSnapshot
+from .usage import UsageCollector
 
 
 @dataclass
@@ -45,6 +47,9 @@ class ToolContext:
     blackboard: BlackboardProtocol | None = None
     workflow_dirs: list[Path] | None = None
     abort_event: Event | None = None
+    cancellation_token: CancellationToken | None = None
+    execution_budget: ExecutionBudget | None = None
+    usage_collector: UsageCollector | None = None
     compactor: CompactorProtocol | None = None
     context_builder: ContextBuilderProtocol | None = None
     mcp_loader: McpLoaderProtocol | None = None
@@ -60,6 +65,9 @@ class DerivedAgentResources:
     context_builder: ContextBuilderProtocol | None = None
     compactor: CompactorProtocol | None = None
     abort_event: Event | None = None
+    cancellation_token: CancellationToken | None = None
+    execution_budget: ExecutionBudget | None = None
+    usage_collector: UsageCollector | None = None
     mcp_loader: McpLoaderProtocol | None = None
     settings: SettingsSnapshot | None = None
 
@@ -82,6 +90,9 @@ class SessionRuntimeContext:
     blackboard: BlackboardProtocol | None = None
     mcp_loader: McpLoaderProtocol | None = None
     derived_agent_resources: DerivedAgentResources | None = None
+    cancellation_token: CancellationToken | None = None
+    execution_budget: ExecutionBudget | None = None
+    usage_collector: UsageCollector | None = None
 
     def close(self) -> None:
         self.request_context.close()
