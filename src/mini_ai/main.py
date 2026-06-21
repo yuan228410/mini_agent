@@ -7,18 +7,27 @@ from datetime import datetime
 
 from . import __version__
 from .cli import CommandHandler, Display
+from .cli.runtime_helpers import (
+    active_workspace_name,
+    context_builder_root,
+    current_settings_snapshot,
+    memory_roots_for_settings,
+    skill_loader_for_settings,
+    start_config_watcher,
+    stop_config_watcher,
+    subagent_loader_for_settings,
+    user_data_dir_for_settings,
+)
 from .memory import MemoryStore, Compactor, HistoryDB, HistoryDBPool
-from .config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS, _raw, user_data_dir
 from .llm import get_usage, reset_usage, estimate_tokens, chat as llm_chat
 from .llm.base import rebuild_tool_messages
 from .context import ContextBuilder
-from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime, build_settings_snapshot
+from .core import ChatSession, HistoryPersister, ApplicationService, RunTurnOptions, build_session_runtime
 from .core.runtime_context import SessionIdentity, SessionRuntimeContext
 from .core.settings import SettingsSnapshot
 from .logger import logger
 from .runner import run_tool_loop
 from .skills import SkillLoader
-from .subagents import SubagentLoader
 from .team import MessageBus, TeammateManager, Blackboard
 from .team.loop import wait_for_teammates, shutdown_teammates, cleanup_inbox
 from .tools import inject_todos as _inject_todos
@@ -45,7 +54,7 @@ class AppContext:
 
 
 _app_ctx = AppContext()
-_subagent_loader = SubagentLoader(PACKAGE_DIR / "subagents")
+_subagent_loader = subagent_loader_for_settings()
 
 
 def get_app_context() -> AppContext:
@@ -145,14 +154,18 @@ def _create_workspace_session(
 
     project_path = ws.project_path or str(Path.cwd())
 
-    # ── 技能 ──
-    user_skills_dir = user_data_dir(username) / "skills"
-    ws_skills_dir = ws_dir / "skills"
-    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS,
-                               user_skills_dir=user_skills_dir,
-                               workspace_skills_dir=ws_skills_dir)
+    app_ctx.settings = app_ctx.settings or current_settings_snapshot()
 
-    app_ctx.settings = app_ctx.settings or build_settings_snapshot()
+    # ── 技能 ──
+    user_skills_dir = user_data_dir_for_settings(username, app_ctx.settings) / "skills"
+    ws_skills_dir = ws_dir / "skills"
+    skill_loader = skill_loader_for_settings(app_ctx.settings)
+    skill_loader = SkillLoader(
+        skill_loader.skills_dir,
+        skill_loader.extra_paths,
+        user_skills_dir=user_skills_dir,
+        workspace_skills_dir=ws_skills_dir,
+    )
 
     # ── Team + Bus ──
     bus = MessageBus(ws_dir / ".team" / "inbox")
@@ -169,9 +182,7 @@ def _create_workspace_session(
     bus.register_wake("lead", lead_event)
 
     # ── 记忆 + 历史 ──
-    global_memory_dir = DATA_DIR / "memory"
-    user_memory_dir = user_data_dir(username) / "memory"
-    ws_memory_dir = ws_dir / "memory_data"
+    global_memory_dir, user_memory_dir, ws_memory_dir = memory_roots_for_settings(username, ws_dir, app_ctx.settings)
     
     # 先创建 history_db（用于检查会话是否存在）
     history_db = HistoryDBPool.get(
@@ -229,7 +240,7 @@ def _create_workspace_session(
     identity = SessionIdentity(username=username, workspace=ws_name, session_id=session_id, project_path=project_path)
 
     # ── Context ──
-    ctx_builder = ContextBuilder(DATA_DIR)
+    ctx_builder = ContextBuilder(context_builder_root(app_ctx.settings))
 
     # ── Compactor ──
     compactor_settings = app_ctx.settings.compactor
@@ -369,10 +380,8 @@ def main():
     args = parser.parse_args()
 
     # 启动配置热加载
-    from .config import start_config_watcher
     start_config_watcher()
     import atexit
-    from .config import stop_config_watcher
     atexit.register(stop_config_watcher)
 
     # ── Web 模式 ──
@@ -401,12 +410,10 @@ def main():
         os._exit(0)
 
     # ── CLI 模式 ──
+    settings = current_settings_snapshot()
     # 使用用户数据目录（与 Web 模式一致）
-    from .config import user_data_dir
-    user_root = user_data_dir(args.user)
+    user_root = user_data_dir_for_settings(args.user, settings)
     ws_mgr = WorkspaceManager(user_root, ensure_default=False)
-
-    settings = build_settings_snapshot()
 
     # 显示
     disp = Display(
@@ -527,7 +534,7 @@ def main():
             bus.close()
 
             # 重新加载
-            ws_name = _raw.get("active_workspace", "default")
+            ws_name = active_workspace_name()
             ws = ws_mgr.get(ws_name)
             if ws:
                 session, messages = _create_workspace_session(

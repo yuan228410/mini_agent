@@ -1650,6 +1650,24 @@ def test_cli_display_uses_runtime_settings_boundary():
     assert "persist_active_workspace" in commands_text
 
 
+def test_cli_main_uses_runtime_bootstrap_helpers():
+    repo = Path(__file__).resolve().parents[1]
+    main_text = (repo / "src/mini_ai/main.py").read_text()
+    helper_text = (repo / "src/mini_ai/cli/runtime_helpers.py").read_text()
+
+    assert "from .config import" not in main_text
+    assert "DATA_DIR" not in main_text
+    assert "PACKAGE_DIR" not in main_text
+    assert "SKILL_PATHS" not in main_text
+    assert "_raw" not in main_text
+    assert "build_settings_snapshot" not in main_text
+    assert "user_data_dir_for_settings" in main_text
+    assert "subagent_loader_for_settings" in main_text
+    assert "active_workspace_name" in main_text
+    assert "start_config_watcher" in helper_text
+    assert "stop_config_watcher" in helper_text
+
+
 def test_frontend_rest_boundaries_stay_in_api_module():
     repo = Path(__file__).resolve().parents[1]
     api_text = (repo / "web/src/api.ts").read_text()
