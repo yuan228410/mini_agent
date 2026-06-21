@@ -291,7 +291,6 @@ def execute_with_context(
     settings=None,
 ) -> str:
     from ..runner import run_agent
-    from ..config import get_model_config
     from ..core.runtime_factory import build_child_request_context
     from ..core.settings import SettingsSnapshot
 
@@ -356,7 +355,7 @@ def execute_with_context(
     model_config = base_model_settings.to_dict()
     model_name = runtime_settings.subagent_models.get(subagent_type)
     if model_name:
-        custom_config = get_model_config(str(model_name))
+        custom_config = runtime_settings.model_config_for(str(model_name))
         if custom_config:
             model_config = custom_config
             logger.info(f"[派遣→] {spec['name']} 使用模型: {model_name}")

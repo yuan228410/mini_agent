@@ -514,6 +514,7 @@ class SettingsSnapshot:
     image: ImageSettings = field(default_factory=ImageSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
     paths: PathSettings = field(default_factory=PathSettings)
+    model_configs: dict[str, ModelConfigDict] = field(default_factory=dict)
     subagent_models: ConfigDict = field(default_factory=dict)
     streaming: bool = True
 
@@ -521,6 +522,14 @@ class SettingsSnapshot:
         """Return a session-equivalent snapshot with a different model config."""
 
         return replace(self, model=ModelSettings.from_dict(model_config))
+
+    def model_config_for(self, name: str | None) -> ModelConfigDict | None:
+        """Return a deep-copied named model config from the runtime snapshot."""
+
+        if not name:
+            return None
+        config = self.model_configs.get(name)
+        return copy.deepcopy(config) if config else None
 
     @classmethod
     def from_config_dicts(
@@ -539,6 +548,7 @@ class SettingsSnapshot:
         image: ImageConfigDict | None = None,
         database: DatabaseConfigDict | None = None,
         paths: PathConfigDict | None = None,
+        model_configs: dict[str, ModelConfigDict] | None = None,
         subagent_models: ConfigDict | None = None,
         streaming: bool = True,
     ) -> "SettingsSnapshot":
@@ -556,6 +566,7 @@ class SettingsSnapshot:
             image=ImageSettings.from_dict(image),
             database=DatabaseSettings.from_dict(database),
             paths=PathSettings.from_dict(paths),
+            model_configs=copy.deepcopy(model_configs or {}),
             subagent_models=copy.deepcopy(subagent_models or {}),
             streaming=bool(streaming),
         )

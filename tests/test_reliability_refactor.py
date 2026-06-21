@@ -537,7 +537,9 @@ def test_derived_agent_tools_use_runtime_settings_boundaries():
 
     for text in (dispatch_text, workflow_text, manager_text, orchestrator_text):
         assert "MODEL_CONFIG" not in text
-    assert "from ..config import MODEL_CONFIG" not in dispatch_text
+    assert "from ..config import" not in dispatch_text
+    assert "get_model_config" not in dispatch_text
+    assert "runtime_settings.model_config_for" in dispatch_text
     assert "from ..config import MODEL_CONFIG" not in workflow_text
     assert "from ..config import TEAMMATE" not in manager_text
     assert "from ..config import TEAMMATE" not in orchestrator_text
@@ -1449,7 +1451,9 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert snapshot_hints["mcp"] == McpConfigDict | None
     assert snapshot_hints["database"] == DatabaseConfigDict | None
     assert snapshot_hints["paths"] == PathConfigDict | None
+    assert snapshot_hints["model_configs"] == dict[str, ModelConfigDict] | None
     assert snapshot_hints["subagent_models"] == ConfigDict | None
+    assert typing.get_type_hints(settings_mod.SettingsSnapshot.model_config_for)["return"] == ModelConfigDict | None
 
     assert typing.get_type_hints(config.get_model_config)["return"] == ModelConfigDict | None
     assert typing.get_type_hints(config.RequestContext.__init__)["model_config"] == ModelConfigDict
@@ -1476,6 +1480,7 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies(tmp_path):
         "vendor_extra": {"nested": ["a"]},
     }
 
+    raw_named_models = {"fast-model": {"api_url": "u", "api_key": "k", "model": "fast"}}
     raw_subagent_models = {"reviewer": "fast-model"}
     raw_paths = {"data_dir": tmp_path / "data", "workflow_dirs": [tmp_path / "wf"]}
     snapshot = SettingsSnapshot.from_config_dicts(
@@ -1483,10 +1488,12 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies(tmp_path):
         timeouts={"llm": 9, "custom_timeout": {"x": 1}},
         database={"history": {"on_full": "drop", "custom_history": 2}},
         paths=raw_paths,
+        model_configs=raw_named_models,
         subagent_models=raw_subagent_models,
     )
 
     raw_model["headers"]["X-Test"] = "mutated"
+    raw_named_models["fast-model"]["model"] = "mutated-fast"
     raw_subagent_models["reviewer"] = "mutated-model"
 
     model_out = snapshot.model.to_dict()
@@ -1500,6 +1507,10 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies(tmp_path):
     assert snapshot.database.to_dict()["history"]["custom_history"] == 2
     assert snapshot.paths.workflow_dirs == (tmp_path / "wf",)
     assert snapshot.paths.to_dict()["data_dir"] == str(tmp_path / "data")
+    assert snapshot.model_configs["fast-model"]["model"] == "fast"
+    named_model = snapshot.model_config_for("fast-model")
+    named_model["model"] = "mutated-copy"
+    assert snapshot.model_config_for("fast-model")["model"] == "fast"
     assert snapshot.subagent_models == {"reviewer": "fast-model"}
 
 
@@ -1820,6 +1831,8 @@ def test_dispatch_subagent_passes_runtime_resources(monkeypatch):
     compactor = object()
     settings = SettingsSnapshot.from_config_dicts(
         model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 12345},
+        model_configs={"worker-model": {"api_url": "u", "api_key": "k", "model": "wm", "context_length": 54321}},
+        subagent_models={"worker": "worker-model"},
         streaming=True,
     )
     monkeypatch.setattr("mini_ai.runner.run_agent", fake_run_agent)
@@ -1839,7 +1852,8 @@ def test_dispatch_subagent_passes_runtime_resources(monkeypatch):
     assert captured["abort_event"] is abort_event
     assert captured["compactor"] is compactor
     assert captured["tool_names"] == ["read_file"]
-    assert captured["context_length"] == 12345
+    assert captured["ctx"].model_config["model"] == "wm"
+    assert captured["context_length"] == 54321
 
 
 def test_tool_registry_dispatch_subagent_uses_bound_runtime_resources(monkeypatch):

@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from threading import Event
 
-from ..config import COMPACTOR, DATABASE, DATA_DIR, DISPLAY, IMAGE, MCP, MODEL_CONFIG, PACKAGE_DIR, RUNNER, SKILL_PATHS, STREAMING, SUBAGENT_MODELS, TEAMMATE, TIMEOUTS, TOOL, WEB
+from ..config import COMPACTOR, DATABASE, DATA_DIR, DISPLAY, IMAGE, MCP, MODEL_CONFIG, PACKAGE_DIR, RUNNER, SKILL_PATHS, STREAMING, SUBAGENT_MODELS, TEAMMATE, TIMEOUTS, TOOL, WEB, _raw
 from .display_protocol import DisplayProtocol
 from .execution import CancellationToken, ExecutionBudget
 from .runtime_context import DerivedAgentResources, SessionIdentity, SessionRuntimeContext, ToolContext
@@ -59,6 +59,7 @@ def build_settings_snapshot(model_config: ModelConfigDict | None = None) -> Sett
             "skill_paths": SKILL_PATHS,
             "workflow_dirs": [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
         },
+        model_configs=_raw.get("models") or {},
         subagent_models=SUBAGENT_MODELS,
         streaming=STREAMING,
     )
