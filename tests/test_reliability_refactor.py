@@ -556,6 +556,7 @@ def test_tool_registry_workflow_paths_use_runtime_settings_boundary():
     factory_text = (root / "core/tool_registry_factory.py").read_text(encoding="utf-8")
     runtime_factory_text = (root / "core/runtime_factory.py").read_text(encoding="utf-8")
     web_runner_text = (root / "web/chat_runner.py").read_text(encoding="utf-8")
+    web_session_text = (root / "web/session_manager.py").read_text(encoding="utf-8")
 
     assert "from ..config import DATA_DIR" not in factory_text
     assert "from ..config import PACKAGE_DIR" not in factory_text
@@ -564,11 +565,16 @@ def test_tool_registry_workflow_paths_use_runtime_settings_boundary():
     assert "settings.paths.workflow_dirs" in factory_text
     assert "workflow_dirs = workflow_dirs or list(snapshot.paths.workflow_dirs)" in runtime_factory_text
     assert "workflow_dirs=[DATA_DIR / \"workflows\", PACKAGE_DIR / \"workflows\"]" not in web_runner_text
+    assert "from ..config import DATA_DIR" not in web_session_text
+    assert "from .deps import SKILL_PATHS" not in web_session_text
+    assert "settings.paths.skill_paths" in web_session_text
 
 
 
 def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
     root = Path(__file__).resolve().parents[1] / "src/mini_ai"
+    history_text = (root / "memory/history_db.py").read_text(encoding="utf-8")
+    web_app_text = (root / "web/app.py").read_text(encoding="utf-8")
     checked = {
         "tools/read_image.py": ("from ..config import IMAGE", "IMAGE.get"),
         "tools/dispatch_subagent.py": ("from ..config import IMAGE", "IMAGE.get"),
@@ -588,6 +594,10 @@ def test_tool_runtime_settings_boundaries_do_not_use_config_globals():
         if hits:
             offenders.append({"path": rel, "hits": hits})
     assert offenders == []
+    assert "from ..config import DATABASE" not in history_text
+    assert "from ..config import user_data_dir" not in history_text
+    assert "HistoryDBPool.configure_defaults" in web_app_text
+    assert "from ..config import DATABASE" not in web_app_text
 
 
 def test_llm_model_config_boundary_does_not_fall_back_to_config_global():
@@ -1092,6 +1102,7 @@ def test_history_persistence_uses_explicit_boundary_types():
     import typing
     from mini_ai.core.messages import ChatMessage
     from mini_ai.core.runtime_types import HistoryContent, MessageDict
+    from mini_ai.core.settings import DatabaseHistorySettings
     from mini_ai.memory import history_db
     from mini_ai.memory.async_db_writer import AsyncDBWriter
     from mini_ai.memory.history_db import HistoryDB, HistoryDBPool
@@ -1110,6 +1121,9 @@ def test_history_persistence_uses_explicit_boundary_types():
     metadata_hints = typing.get_type_hints(history_db._metadata_to_dict)
     row_hints = typing.get_type_hints(history_db._history_row_from_message)
     message_hints = typing.get_type_hints(history_db._message_from_history_row)
+    init_hints = typing.get_type_hints(HistoryDB.__init__)
+    pool_config_hints = typing.get_type_hints(HistoryDBPool.configure_defaults)
+    pool_get_hints = typing.get_type_hints(HistoryDBPool.get)
     append_hints = typing.get_type_hints(HistoryDB.append)
     batch_hints = typing.get_type_hints(HistoryDB.append_batch)
     load_hints = typing.get_type_hints(HistoryDB.load_session)
@@ -1127,6 +1141,9 @@ def test_history_persistence_uses_explicit_boundary_types():
     assert row_hints["message"] == ChatMessage | HistoryRuntimeMessage | HistoryStorageRow
     assert row_hints["return"] == HistoryStorageRow
     assert message_hints["return"] == HistoryRuntimeMessage
+    assert init_hints["history_settings"] == DatabaseHistorySettings | None
+    assert pool_config_hints["history_settings"] is DatabaseHistorySettings
+    assert pool_get_hints["history_settings"] == DatabaseHistorySettings | None
     assert append_hints["content"] == HistoryContent
     assert batch_hints["messages"] == list[ChatMessage | HistoryRuntimeMessage]
     assert load_hints["return"] == list[HistoryRuntimeMessage]

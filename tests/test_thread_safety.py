@@ -144,48 +144,45 @@ class TestHistoryDBConcurrency:
     def test_history_db_pool_thread_safety(self):
         """测试数据库连接池的线程安全性"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # 临时修改 user_data_dir 返回值
-            import mini_ai.config
-            original_user_data_dir = mini_ai.config.user_data_dir
-            
-            def mock_user_data_dir(username: str):
-                return Path(tmpdir) / username
-            
-            mini_ai.config.user_data_dir = mock_user_data_dir
-            
             # 清空连接池
             original_pool = HistoryDBPool._pools.copy()
+            original_data_dir = HistoryDBPool._data_dir
+            original_settings = HistoryDBPool._history_settings_default
+            original_async_default = HistoryDBPool._async_write_default
             HistoryDBPool._pools.clear()
-            
+
             try:
                 errors = []
                 connections = []
-                
+
                 def get_connection():
                     try:
-                        db = HistoryDBPool.get("test_user")
+                        db = HistoryDBPool.get("test_user", data_dir=Path(tmpdir))
                         connections.append(id(db))
                         # 执行简单查询
                         db.list_sessions("test_ws")
                     except Exception as e:
                         errors.append(e)
-                
+
                 # 10 个线程并发获取连接
                 threads = [threading.Thread(target=get_connection) for _ in range(10)]
                 for t in threads:
                     t.start()
                 for t in threads:
                     t.join()
-                
+
                 # 应该只有一个连接实例（共享）
                 assert len(set(connections)) == 1, "所有线程应共享同一个连接实例"
                 assert len(errors) == 0, f"发生错误: {errors}"
-                
+                assert (Path(tmpdir) / "users" / "test_user" / "history.db").exists()
+
             finally:
                 # 恢复原始状态
-                mini_ai.config.user_data_dir = original_user_data_dir
                 HistoryDBPool._pools.clear()
                 HistoryDBPool._pools.update(original_pool)
+                HistoryDBPool._data_dir = original_data_dir
+                HistoryDBPool._history_settings_default = original_settings
+                HistoryDBPool._async_write_default = original_async_default
 
 
 class TestSessionEviction:

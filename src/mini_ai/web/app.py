@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .routes import chat, models, skills, config, commands, workspaces, files, team, sessions
 from .deps import init_components, shutdown_mcp
+from ..core.runtime_factory import build_settings_snapshot
 from ..logger import logger
 
 
@@ -17,12 +18,17 @@ async def lifespan(app: FastAPI):
     
     # Web 端默认启用异步写入优化（可通过配置覆盖）
     from ..memory.history_db import HistoryDBPool
-    from ..config import DATABASE
-    
+
+    settings = build_settings_snapshot()
+
     # 如果配置中 async_write 为 None，Web 端默认启用
-    async_write = DATABASE.get("history", {}).get("async_write", None)
+    async_write = settings.database.history.async_write
+    HistoryDBPool.configure_defaults(
+        data_dir=settings.paths.data_dir,
+        history_settings=settings.database.history,
+        async_write_default=True if async_write is None else async_write,
+    )
     if async_write is None:
-        HistoryDBPool.set_async_write_default(True)
         logger.info("[Web] 已启用 HistoryDB 异步写入优化（默认）")
     elif async_write:
         logger.info("[Web] 已启用 HistoryDB 异步写入优化（配置）")

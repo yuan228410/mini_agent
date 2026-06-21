@@ -174,7 +174,11 @@ def _create_workspace_session(
     ws_memory_dir = ws_dir / "memory_data"
     
     # 先创建 history_db（用于检查会话是否存在）
-    history_db = HistoryDBPool.get(username)  # 使用指定用户
+    history_db = HistoryDBPool.get(
+        username,
+        data_dir=app_ctx.settings.paths.data_dir,
+        history_settings=app_ctx.settings.database.history,
+    )  # 使用指定用户
     
     # 会话 ID 决策逻辑
     if session_id:

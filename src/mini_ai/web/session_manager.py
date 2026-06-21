@@ -12,7 +12,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..config import DATA_DIR, user_data_dir
+from ..config import user_data_dir
 from ..core.runtime_factory import build_settings_snapshot
 from ..core.events import TERMINAL_EVENT_TYPES
 from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
@@ -484,7 +484,6 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
     from ..memory import MemoryStore, Compactor, HistoryDBPool
     from ..context import ContextBuilder
     from ..skills import SkillLoader
-    from .deps import SKILL_PATHS
 
     project_path = ""
     ws_dir = None
@@ -499,7 +498,8 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
 
     settings = build_settings_snapshot()
 
-    user_memory_dir = user_data_dir(username) / "memory"
+    user_dir = user_data_dir(username)
+    user_memory_dir = user_dir / "memory"
 
     if base is None:
         base = resolve_base(username, workspace or "default")
@@ -508,19 +508,24 @@ def _create_components_locked(username: str, sid: str, base: Path | None, worksp
     session_memory_dir = session_dir / "memory_data"
     session_memory_dir.mkdir(parents=True, exist_ok=True)
 
-    global_memory_dir = DATA_DIR / "memory"
+    data_dir = settings.paths.data_dir or (user_dir.parent.parent if user_dir.parent.name == "users" else user_dir.parent)
+    global_memory_dir = data_dir / "memory"
     ws_memory_dir = ws_dir / "memory_data" if ws_dir else None
     user_store = MemoryStore(user_memory_dir, episode_dir=session_memory_dir,
                              global_memory_dir=global_memory_dir,
                              workspace_memory_dir=ws_memory_dir)
 
-    history_db = HistoryDBPool.get(username)
+    history_db = HistoryDBPool.get(
+        username,
+        data_dir=data_dir,
+        history_settings=settings.database.history,
+    )
 
     user_skills_dir = user_data_dir(username) / "skills"
     ws_skills_dir = ws_dir / "skills" if ws_dir else None
-    skill_loader = SkillLoader(DATA_DIR / "skills", SKILL_PATHS, user_skills_dir=user_skills_dir, workspace_skills_dir=ws_skills_dir)
+    skill_loader = SkillLoader(data_dir / "skills", settings.paths.skill_paths, user_skills_dir=user_skills_dir, workspace_skills_dir=ws_skills_dir)
 
-    ctx_builder = ContextBuilder(DATA_DIR)
+    ctx_builder = ContextBuilder(data_dir)
 
     compactor_settings = settings.compactor
     compactor = Compactor(

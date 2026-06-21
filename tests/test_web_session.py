@@ -26,7 +26,7 @@ class TestWebRuntimeSettings:
 
         class FakeHistoryDBPool:
             @staticmethod
-            def get(username):
+            def get(username, **kwargs):
                 return object()
 
         class FakeSkillLoader:

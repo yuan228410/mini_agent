@@ -23,6 +23,7 @@ from .history_types import (
     HistoryStorageRow,
 )
 from ..core.runtime_types import PlanStateValue
+from ..core.settings import DatabaseHistorySettings
 
 
 def _process_multimodal_content(content: str | list[Any], metadata: str = "") -> tuple[str, str]:
@@ -120,53 +121,56 @@ class HistoryDB:
     - 持久化保证（atexit + 信号处理）
     """
     
-    def __init__(self, db_path: Path, async_write: bool | None = None):
+    def __init__(
+        self,
+        db_path: Path,
+        async_write: bool | None = None,
+        history_settings: DatabaseHistorySettings | None = None,
+    ):
         """初始化数据库
-        
+
         Args:
             db_path: 数据库路径
             async_write: 是否启用异步写入模式
-                         None: 从配置读取（Web 端默认 true，CLI 端默认 false）
+                         None: 使用 history_settings.async_write，再默认关闭
                          True: 强制启用异步写入
                          False: 强制使用同步写入
+            history_settings: 显式注入的历史数据库运行时设置
         """
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()  # P0#4: RLock 防止 search_fts→search 递归死锁
         self._fts_available = True
         self._closed = False
-        
+        history_settings = history_settings or DatabaseHistorySettings()
+
         # 确定是否启用异步写入
         if async_write is None:
-            # 从配置读取
-            from ..config import DATABASE
-            async_write = DATABASE.get("history", {}).get("async_write", None)
-            # 如果配置也是 None，默认关闭（CLI 模式）
+            async_write = history_settings.async_write
+            # 如果运行时设置也是 None，默认关闭（CLI 模式）
             if async_write is None:
                 async_write = False
-        
+
         self._async_write = async_write
         self._async_writer: Optional[AsyncDBWriter] = None
-        
+
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         # 启用 WAL 模式和多线程优化
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA busy_timeout=5000")  # 5秒超时
         self._conn.execute("PRAGMA synchronous=NORMAL")  # 平衡性能和安全
         self._init_schema()
-        
+
         # 初始化异步写入器
         if self._async_write:
-            from ..config import DATABASE
-            db_config = DATABASE.get("history", {})
             self._async_writer = AsyncDBWriter(
                 self.db_path,
-                batch_size_threshold=db_config.get("batch_size"),
-                batch_time_window=db_config.get("batch_timeout"),
-                queue_max_size=db_config.get("queue_size"),
-                max_retry_count=db_config.get("retry_count"),
-                submit_timeout=db_config.get("submit_timeout", 1.0),
-                on_full=db_config.get("on_full", "block"),
+                batch_size_threshold=history_settings.batch_size,
+                batch_time_window=history_settings.batch_timeout,
+                queue_max_size=history_settings.queue_size,
+                max_retry_count=history_settings.retry_count,
+                submit_timeout=history_settings.submit_timeout,
+                on_full=history_settings.on_full,
             )
 
             self._async_writer.start()
@@ -1071,16 +1075,35 @@ class HistoryDBPool:
     _pools: dict[str, HistoryDB] = {}  # username -> HistoryDB
     _access_time: dict[str, float] = {}  # username -> last access time
     _async_write_default = False  # 默认关闭异步写入
+    _history_settings_default = DatabaseHistorySettings(async_write=False)
+    _data_dir = Path.home() / ".mini_ai"
     _max_connections = 100  # 最大连接数上限
     
     @classmethod
+    def configure_defaults(
+        cls,
+        *,
+        data_dir: Path,
+        history_settings: DatabaseHistorySettings,
+        async_write_default: bool | None = None,
+    ):
+        """配置连接池运行时默认值，避免连接创建路径读取配置全局。"""
+
+        cls._data_dir = Path(data_dir)
+        cls._history_settings_default = history_settings
+        if async_write_default is not None:
+            cls._async_write_default = async_write_default
+        elif history_settings.async_write is not None:
+            cls._async_write_default = history_settings.async_write
+        logger.info(f"[HistoryDBPool] 默认设置: data_dir={cls._data_dir}, async_write={cls._async_write_default}")
+
+    @classmethod
     def set_async_write_default(cls, enabled: bool):
-        """设置默认是否启用异步写入
-        
-        Args:
-            enabled: 是否启用
-        """
+        """设置默认是否启用异步写入。"""
         cls._async_write_default = enabled
+        cls._history_settings_default = DatabaseHistorySettings.from_dict(
+            {**cls._history_settings_default.to_dict(), "async_write": enabled}
+        )
         logger.info(f"[HistoryDBPool] 异步写入默认设置: {enabled}")
     
     @classmethod
@@ -1100,35 +1123,45 @@ class HistoryDBPool:
                     logger.warning(f"[HistoryDBPool] 淘汰连接失败: username={username}, error={e}")
     
     @classmethod
-    def get(cls, username: str, async_write: bool | None = None) -> HistoryDB:
+    def get(
+        cls,
+        username: str,
+        async_write: bool | None = None,
+        *,
+        data_dir: Path | None = None,
+        history_settings: DatabaseHistorySettings | None = None,
+    ) -> HistoryDB:
         """获取用户的数据库连接（复用）
-        
+
         Args:
             username: 用户名
             async_write: 是否启用异步写入
-                         None: 从配置读取（Web 端默认 true，CLI 端默认 false）
+                         None: 使用连接池运行时默认值
                          True: 强制启用异步写入
                          False: 强制使用同步写入
-        
+            data_dir: 显式注入的数据根目录
+            history_settings: 显式注入的历史数据库运行时设置
+
         Returns:
             HistoryDB 实例
         """
+        history_settings = history_settings or cls._history_settings_default
         if async_write is None:
-            # 从全局默认设置读取（Web 端会在启动时设置为 True）
+            # 从连接池运行时默认设置读取（Web 端会在启动时设置为 True）
             async_write = cls._async_write_default
-        
+
         with cls._lock:
             # 更新访问时间
             import time
             cls._access_time[username] = time.time()
-            
+
             if username not in cls._pools:
                 # 检查是否需要淘汰
                 cls._evict_if_needed()
-                
-                from ..config import user_data_dir
-                db_path = user_data_dir(username) / "history.db"
-                cls._pools[username] = HistoryDB(db_path, async_write=async_write)
+
+                root = Path(data_dir) if data_dir is not None else cls._data_dir
+                db_path = root / "users" / (username or "default") / "history.db"
+                cls._pools[username] = HistoryDB(db_path, async_write=async_write, history_settings=history_settings)
                 logger.debug(f"[HistoryDBPool] 创建连接: username={username}, async_write={async_write}")
             return cls._pools[username]
     
