@@ -1624,15 +1624,22 @@ def test_web_skill_routes_use_runtime_settings_boundary():
     routes_skills = (repo / "src/mini_ai/web/routes/skills.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
     runtime_paths = (repo / "src/mini_ai/application/runtime_paths.py").read_text()
+    skill_service = (repo / "src/mini_ai/application/skill_service.py").read_text()
 
     assert "from ...config import" not in routes_skills
     assert "DATA_DIR" not in routes_skills
     assert "SKILL_PATHS" not in routes_skills
     assert "user_data_dir" not in routes_skills
+    assert "install_skill_tool" not in routes_skills
+    assert "skill_file.write_text" not in routes_skills
+    assert "loader.delete_skill" not in routes_skills
     assert "skill_loader_for_user_workspace" in routes_skills
+    assert "skill_service.create_skill_template" in routes_skills
     assert "runtime_paths.skill_loader_for_user_workspace" in runtime_helpers
     assert "runtime_paths.user_data_dir_for" in runtime_helpers
     assert "def skill_loader_for_user_workspace" in runtime_paths
+    assert "def create_skill_template" in skill_service
+    assert "install_skill_with_loader" in skill_service
 
 
 def test_cli_display_uses_runtime_settings_boundary():

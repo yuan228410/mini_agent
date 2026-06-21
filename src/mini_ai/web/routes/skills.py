@@ -1,8 +1,9 @@
 """技能接口"""
 from fastapi import APIRouter, Query, HTTPException
 
+from ...application import skill_service
+from ...application.skill_service import SkillServiceError
 from ...skills import SkillLoader
-from ...tools import install_skill as install_skill_tool
 from ..runtime_helpers import skill_loader_for_user_workspace
 from ..route_types import (
     RouteErrorResponse,
@@ -24,52 +25,25 @@ def _get_skill_loader(username: str, workspace: str) -> SkillLoader:
 @router.get("/skills")
 async def list_skills(username: str = Query(default=""), workspace: str = Query(default="")) -> SkillsListResponse:
     """列出所有技能"""
-    loader = _get_skill_loader(username, workspace)
-    skills = []
-    for name, skill in loader.skills.items():
-        skills.append({
-            "name": name,
-            "description": skill["meta"].get("description", ""),
-            "tags": skill["meta"].get("tags", ""),
-            "tier": skill.get("tier", ""),
-        })
-    return {"skills": skills}
+    return skill_service.list_skills(_get_skill_loader(username, workspace))
 
 
 @router.get("/skills/{name}")
 async def get_skill_info(name: str, username: str = Query(default=""), workspace: str = Query(default="")) -> SkillInfoResponse:
     """获取技能详情"""
-    loader = _get_skill_loader(username, workspace)
-    if name not in loader.skills:
-        raise HTTPException(status_code=404, detail=f"技能 '{name}' 不存在")
-    
-    skill = loader.skills[name]
-    meta = skill["meta"]
-    
-    return {
-        "name": name,
-        "description": meta.get("description", ""),
-        "tags": meta.get("tags", ""),
-        "tier": skill.get("tier", "global"),
-        "path": skill["path"],
-        "content": skill["body"],
-    }
+    try:
+        return skill_service.get_skill_info(_get_skill_loader(username, workspace), name)
+    except SkillServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 @router.post("/skills/{name}/load")
 async def load_skill(name: str, username: str = Query(default=""), workspace: str = Query(default="")) -> SkillLoadResponse:
     """加载技能"""
-    loader = _get_skill_loader(username, workspace)
-    if name not in loader.skills:
-        raise HTTPException(status_code=404, detail=f"技能 '{name}' 不存在")
-    
-    skill = loader.skills[name]
-    return {
-        "ok": True,
-        "name": name,
-        "content": skill["body"],
-        "meta": skill["meta"],
-    }
+    try:
+        return skill_service.load_skill(_get_skill_loader(username, workspace), name)
+    except SkillServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 @router.post("/skills/install")
@@ -80,13 +54,7 @@ async def install_skill(
     workspace: str = Query(default=""),
 ) -> SkillInstallResponse | RouteErrorResponse:
     """安装技能"""
-    loader = _get_skill_loader(username, workspace)
-    result = install_skill_tool._run_with_loader(loader, {"source": source, "level": level})
-
-    if result.startswith("Error:") or "失败" in result:
-        return {"ok": False, "error": result}
-    
-    return {"ok": True, "message": result}
+    return skill_service.install_skill(_get_skill_loader(username, workspace), source, level)
 
 
 @router.post("/skills/{name}/create")
@@ -97,47 +65,10 @@ async def create_skill(
     workspace: str = Query(default=""),
 ) -> SkillCreateResponse:
     """创建技能模板"""
-    loader = _get_skill_loader(username, workspace)
-    
-    target_dir = loader.get_tier_dir(level)
-    if not target_dir:
-        raise HTTPException(status_code=400, detail=f"层级 '{level}' 未配置")
-    
-    skill_dir = target_dir / name
-    if skill_dir.exists():
-        raise HTTPException(status_code=400, detail=f"技能 '{name}' 已存在于 {level} 层级")
-    
-    # 创建目录和模板文件
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_file = skill_dir / "SKILL.md"
-    
-    template = f"""---
-name: {name}
-description: 技能描述（请修改）
-tags: 标签1,标签2
----
-
-# {name}
-
-技能内容（请修改）
-
-## 使用场景
-
-- 场景1
-- 场景2
-
-## 步骤
-
-1. 步骤1
-2. 步骤2
-"""
-    skill_file.write_text(template, encoding="utf-8")
-    
-    return {
-        "ok": True,
-        "message": f"技能模板 '{name}' 已创建",
-        "path": str(skill_dir),
-    }
+    try:
+        return skill_service.create_skill_template(_get_skill_loader(username, workspace), name, level)
+    except SkillServiceError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
 
 @router.delete("/skills/{name}")
@@ -148,11 +79,4 @@ async def delete_skill(
     level: str = Query(default=""),
 ) -> SkillDeleteResponse | RouteErrorResponse:
     """卸载技能"""
-    loader = _get_skill_loader(username, workspace)
-    if level:
-        result = loader.delete_skill_at(name, level)
-    else:
-        result = loader.delete_skill(name)
-    if result.startswith("Error:"):
-        return {"ok": False, "error": result}
-    return {"ok": True, "message": result}
+    return skill_service.delete_skill(_get_skill_loader(username, workspace), name, level)
