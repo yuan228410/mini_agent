@@ -1568,7 +1568,6 @@ def test_web_route_boundaries_use_explicit_dtos():
     assert typing.get_type_hints(workspaces.restore_workspace)["body"] == route_types.WorkspaceRestoreRequest
     assert typing.get_type_hints(workspaces.delete_removed_workspace)["return"] == route_types.WorkspaceActionResponse | route_types.RouteErrorResponse
 
-    assert typing.get_type_hints(commands)["_WEB_COMMANDS"] == list[route_types.WebCommand]
     assert typing.get_type_hints(commands.list_commands)["return"] == route_types.CommandsResponse
     assert typing.get_type_hints(commands.mcp_status)["return"] == route_types.McpStatusResponse
 
@@ -1652,6 +1651,21 @@ def test_web_session_routes_use_application_service_boundary():
     assert "class SessionServiceDependencies" in session_service
     assert "def list_sessions" in session_service
     assert "def rename_session" in session_service
+
+
+def test_web_command_routes_use_application_service_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_commands = (repo / "src/mini_ai/web/routes/commands.py").read_text()
+    command_service = (repo / "src/mini_ai/application/command_service.py").read_text()
+
+    assert "_WEB_COMMANDS" not in routes_commands
+    assert "WebCommand" not in routes_commands
+    assert "_connections" not in routes_commands
+    assert "conn.tools" not in routes_commands
+    assert "command_service.list_commands" in routes_commands
+    assert "command_service.mcp_status" in routes_commands
+    assert "WEB_COMMANDS" in command_service
+    assert "def mcp_status" in command_service
 
 
 def test_web_skill_routes_use_runtime_settings_boundary():
