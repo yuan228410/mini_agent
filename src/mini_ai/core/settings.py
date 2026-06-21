@@ -514,6 +514,7 @@ class SettingsSnapshot:
     image: ImageSettings = field(default_factory=ImageSettings)
     database: DatabaseSettings = field(default_factory=DatabaseSettings)
     paths: PathSettings = field(default_factory=PathSettings)
+    active_model_name: str = ""
     model_configs: dict[str, ModelConfigDict] = field(default_factory=dict)
     subagent_models: ConfigDict = field(default_factory=dict)
     streaming: bool = True
@@ -548,6 +549,7 @@ class SettingsSnapshot:
         image: ImageConfigDict | None = None,
         database: DatabaseConfigDict | None = None,
         paths: PathConfigDict | None = None,
+        active_model_name: str = "",
         model_configs: dict[str, ModelConfigDict] | None = None,
         subagent_models: ConfigDict | None = None,
         streaming: bool = True,
@@ -566,6 +568,7 @@ class SettingsSnapshot:
             image=ImageSettings.from_dict(image),
             database=DatabaseSettings.from_dict(database),
             paths=PathSettings.from_dict(paths),
+            active_model_name=str(active_model_name or ""),
             model_configs=copy.deepcopy(model_configs or {}),
             subagent_models=copy.deepcopy(subagent_models or {}),
             streaming=bool(streaming),

@@ -59,6 +59,7 @@ def build_settings_snapshot(model_config: ModelConfigDict | None = None) -> Sett
             "skill_paths": SKILL_PATHS,
             "workflow_dirs": [DATA_DIR / "workflows", PACKAGE_DIR / "workflows"],
         },
+        active_model_name=str(_raw.get("active_model") or ""),
         model_configs=_raw.get("models") or {},
         subagent_models=SUBAGENT_MODELS,
         streaming=STREAMING,

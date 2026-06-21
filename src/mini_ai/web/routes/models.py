@@ -1,17 +1,18 @@
 """模型管理接口"""
 from fastapi import APIRouter
 
-from ...config import AVAILABLE_MODELS, MODEL_CONFIG, get_model_config
 from ..route_types import ModelsResponse, RouteErrorResponse, SwitchModelRequest, SwitchModelResponse
+from ..runtime_helpers import current_settings_snapshot, model_config_for_name
 
 router = APIRouter()
 
 @router.get("/models")
 async def list_models(session_id: str = "", workspace: str = "", username: str = "") -> ModelsResponse:
+    settings = current_settings_snapshot()
     result = {
-        "active": MODEL_CONFIG.get("model", "?"),
-        "active_name": _get_active_name(),
-        "models": [{"name": n, "model": _models_raw().get(n, {}).get("model", "?")} for n in AVAILABLE_MODELS],
+        "active": settings.model.model or "?",
+        "active_name": settings.active_model_name,
+        "models": [{"name": n, "model": cfg.get("model", "?")} for n, cfg in settings.model_configs.items()],
     }
     # 如果传了 session_id，返回该会话的专属模型
     if session_id and username:
@@ -24,7 +25,8 @@ async def list_models(session_id: str = "", workspace: str = "", username: str =
             session_model = _load_session_model(base, session_id)
         if session_model:
             result["active_name"] = session_model
-            result["active"] = _models_raw().get(session_model, {}).get("model", "?")
+            session_cfg = settings.model_config_for(session_model)
+            result["active"] = session_cfg.get("model", "?") if session_cfg else "?"
     return result
 
 @router.post("/models/switch")
@@ -37,9 +39,10 @@ async def switch_model_endpoint(body: SwitchModelRequest) -> SwitchModelResponse
         return {"error": "缺少 username"}
     if not session_id:
         session_id = "default"
-    if name not in AVAILABLE_MODELS:
-        return {"error": f"未知模型: {name}，可选: {', '.join(AVAILABLE_MODELS)}"}
-    cfg = get_model_config(name)
+    available = current_settings_snapshot().model_configs
+    if name not in available:
+        return {"error": f"未知模型: {name}，可选: {', '.join(available.keys())}"}
+    cfg = model_config_for_name(name)
     if not cfg:
         return {"error": f"模型配置无效: {name}"}
     from ..session_manager import SessionManager, cache_key, _save_session_model, resolve_base
@@ -50,11 +53,3 @@ async def switch_model_endpoint(body: SwitchModelRequest) -> SwitchModelResponse
     base = resolve_base(username, workspace or None)
     _save_session_model(base, session_id, name)
     return {"status": "ok", "active_name": name, "model": cfg.get("model", "?")}
-
-def _get_active_name():
-    from ...config import _raw
-    return _raw.get("active_model", "")
-
-def _models_raw():
-    from ...config import _raw
-    return _raw.get("models") or {}

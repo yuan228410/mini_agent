@@ -1455,6 +1455,7 @@ def test_settings_and_config_boundaries_use_explicit_aliases():
     assert snapshot_hints["mcp"] == McpConfigDict | None
     assert snapshot_hints["database"] == DatabaseConfigDict | None
     assert snapshot_hints["paths"] == PathConfigDict | None
+    assert snapshot_hints["active_model_name"] is str
     assert snapshot_hints["model_configs"] == dict[str, ModelConfigDict] | None
     assert snapshot_hints["subagent_models"] == ConfigDict | None
     assert typing.get_type_hints(settings_mod.SettingsSnapshot.model_config_for)["return"] == ModelConfigDict | None
@@ -1492,6 +1493,7 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies(tmp_path):
         timeouts={"llm": 9, "custom_timeout": {"x": 1}},
         database={"history": {"on_full": "drop", "custom_history": 2}},
         paths=raw_paths,
+        active_model_name="fast-model",
         model_configs=raw_named_models,
         subagent_models=raw_subagent_models,
     )
@@ -1511,6 +1513,7 @@ def test_settings_snapshot_preserves_config_extras_and_deep_copies(tmp_path):
     assert snapshot.database.to_dict()["history"]["custom_history"] == 2
     assert snapshot.paths.workflow_dirs == (tmp_path / "wf",)
     assert snapshot.paths.to_dict()["data_dir"] == str(tmp_path / "data")
+    assert snapshot.active_model_name == "fast-model"
     assert snapshot.model_configs["fast-model"]["model"] == "fast"
     named_model = snapshot.model_config_for("fast-model")
     named_model["model"] = "mutated-copy"
@@ -1593,6 +1596,20 @@ def test_web_route_boundaries_use_explicit_dtos():
     assert route_types.DisplayWireEvent == DisplayWireEvent
     assert route_types.PlanArtifactDict == PlanArtifactDict
     assert route_types.TeamComponents == TeamComponents
+
+
+def test_web_model_routes_use_runtime_settings_boundary():
+    repo = Path(__file__).resolve().parents[1]
+    routes_models = (repo / "src/mini_ai/web/routes/models.py").read_text()
+    routes_sessions = (repo / "src/mini_ai/web/routes/sessions.py").read_text()
+    runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+
+    assert "from ...config import" not in routes_models
+    assert "from ...config import" not in routes_sessions
+    assert "get_model_config" not in runtime_helpers
+    assert "build_settings_snapshot" in runtime_helpers
+    assert "current_settings_snapshot" in runtime_helpers
+    assert "model_config_for_name" in runtime_helpers
 
 
 def test_frontend_rest_boundaries_stay_in_api_module():
