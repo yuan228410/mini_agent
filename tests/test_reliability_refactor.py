@@ -559,6 +559,7 @@ def test_tool_registry_workflow_paths_use_runtime_settings_boundary():
     runtime_factory_text = (root / "core/runtime_factory.py").read_text(encoding="utf-8")
     web_runner_text = (root / "web/chat_runner.py").read_text(encoding="utf-8")
     web_session_text = (root / "web/session_manager.py").read_text(encoding="utf-8")
+    web_deps_text = (root / "web/deps.py").read_text(encoding="utf-8")
 
     assert "from ..config import DATA_DIR" not in factory_text
     assert "from ..config import PACKAGE_DIR" not in factory_text
@@ -570,6 +571,9 @@ def test_tool_registry_workflow_paths_use_runtime_settings_boundary():
     assert "from ..config import DATA_DIR" not in web_session_text
     assert "from .deps import SKILL_PATHS" not in web_session_text
     assert "settings.paths.skill_paths" in web_session_text
+    assert "from ..config import" not in web_deps_text
+    assert "build_settings_snapshot" in web_deps_text
+    assert "_SETTINGS.paths.skill_paths" in web_deps_text
 
 
 

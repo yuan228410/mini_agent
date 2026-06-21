@@ -1,19 +1,19 @@
 """Web 模式共享依赖初始化（仅全局级组件）"""
-from ..config import DATA_DIR, PACKAGE_DIR, SKILL_PATHS, MCP
-from ..core.settings import McpSettings
+from ..core.runtime_factory import build_settings_snapshot
 from ..skills import SkillLoader
 from ..subagents import SubagentLoader
 
-SKILL_LOADER = SkillLoader(DATA_DIR / "skills", SKILL_PATHS)
-SUBAGENT_LOADER = SubagentLoader(PACKAGE_DIR / "subagents")
+_SETTINGS = build_settings_snapshot()
+SKILL_LOADER = SkillLoader(_SETTINGS.paths.data_dir / "skills", _SETTINGS.paths.skill_paths)
+SUBAGENT_LOADER = SubagentLoader(_SETTINGS.paths.package_dir / "subagents")
 
 _MCP_LOADER = None
-MCP_SETTINGS = McpSettings.from_dict(MCP)
+MCP_SETTINGS = _SETTINGS.mcp
 
 
 def _init_mcp():
     global _MCP_LOADER, MCP_SETTINGS
-    settings = McpSettings.from_dict(MCP)
+    settings = build_settings_snapshot().mcp
     MCP_SETTINGS = settings
     if not settings.enabled or not settings.servers:
         return
