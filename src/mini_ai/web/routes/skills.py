@@ -3,7 +3,6 @@ from fastapi import APIRouter, Query, HTTPException
 
 from ...application import skill_service
 from ...application.skill_service import SkillServiceError
-from ...skills import SkillLoader
 from ..runtime_helpers import skill_loader_for_user_workspace
 from ..route_types import (
     RouteErrorResponse,
@@ -18,7 +17,7 @@ from ..route_types import (
 router = APIRouter()
 
 
-def _get_skill_loader(username: str, workspace: str) -> SkillLoader:
+def _get_skill_loader(username: str, workspace: str):
     return skill_loader_for_user_workspace(username, workspace)
 
 

@@ -1735,6 +1735,7 @@ def test_web_skill_routes_use_runtime_settings_boundary():
     assert "DATA_DIR" not in routes_skills
     assert "SKILL_PATHS" not in routes_skills
     assert "user_data_dir" not in routes_skills
+    assert "SkillLoader" not in routes_skills
     assert "install_skill_tool" not in routes_skills
     assert "skill_file.write_text" not in routes_skills
     assert "loader.delete_skill" not in routes_skills
