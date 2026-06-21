@@ -12,7 +12,7 @@ from ..application import command_service, model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
-from ..application.config_service import ConfigMutationDependencies, ConfigPreviewDependencies
+from ..application.config_service import ConfigMutationDependencies, ConfigPreviewDependencies, ConfigToolLoaderDependencies
 from ..application.model_use_cases import ModelRouteDependencies
 from ..application.session_service import SessionServiceDependencies
 from ..application.workspace_service import WorkspaceSwitchDependencies
@@ -105,6 +105,14 @@ def config_preview_dependencies() -> ConfigPreviewDependencies:
         load_session_model=_load_session_model,
         estimate_tokens=estimate_tokens,
     )
+
+
+def config_tool_loader_dependencies() -> ConfigToolLoaderDependencies:
+    """Build Web config tool-preview loader dependencies at the adapter boundary."""
+
+    from .deps import SUBAGENT_LOADER, _MCP_LOADER
+
+    return ConfigToolLoaderDependencies(subagent_loader=SUBAGENT_LOADER, mcp_loader=_MCP_LOADER)
 
 
 def config_mutation_dependencies() -> ConfigMutationDependencies:

@@ -20,6 +20,12 @@ class ConfigSessionStorePort(Protocol):
 
 
 @dataclass(frozen=True, slots=True)
+class ConfigToolLoaderDependencies:
+    subagent_loader: Any | None = None
+    mcp_loader: Any | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ConfigMutationDependencies:
     raw: dict[str, Any]
     config_path: Path

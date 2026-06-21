@@ -1677,6 +1677,8 @@ def test_web_config_routes_use_application_service_boundary():
     assert "config_service.system_prompt_preview" in preview_area
     assert "config_service.tools_preview" in preview_area
     assert "config_preview_dependencies" in preview_area
+    assert "config_tool_loader_dependencies" in preview_area
+    assert "from ..deps import" not in routes_config
 
     settings_area = routes_config.split('@router.get("/settings")', 1)[1]
     assert "yaml" not in routes_config
@@ -1694,8 +1696,10 @@ def test_web_config_routes_use_application_service_boundary():
     assert "config_mutation_dependencies" in settings_area
 
     assert "def config_preview_dependencies" in runtime_helpers
+    assert "def config_tool_loader_dependencies" in runtime_helpers
     assert "def config_mutation_dependencies" in runtime_helpers
     assert "class ConfigPreviewDependencies" in config_service
+    assert "class ConfigToolLoaderDependencies" in config_service
     assert "class ConfigMutationDependencies" in config_service
     assert "def config_summary" in config_service
     assert "def system_prompt_preview" in config_service

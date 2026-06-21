@@ -22,7 +22,7 @@ from ..route_types import (
     SystemPromptResponse,
     ToolsResponse,
 )
-from ..runtime_helpers import config_mutation_dependencies, config_preview_dependencies, current_settings_snapshot
+from ..runtime_helpers import config_mutation_dependencies, config_preview_dependencies, config_tool_loader_dependencies, current_settings_snapshot
 
 router = APIRouter()
 
@@ -57,15 +57,14 @@ async def get_system_prompt(username: str = Query(default=""), workspace: str = 
 @router.get("/config/tools")
 async def get_tools(username: str = Query(default=""), workspace: str = Query(default=""), session_id: str = Query(default="default")) -> ToolsResponse:
     """获取当前会话工具定义（含字符数和 token 估算）。"""
-    from ..deps import SUBAGENT_LOADER, _MCP_LOADER
-
+    loaders = config_tool_loader_dependencies()
     return config_service.tools_preview(
         config_preview_dependencies(),
         username=username,
         workspace=workspace,
         session_id=session_id,
-        subagent_loader=SUBAGENT_LOADER,
-        mcp_loader=_MCP_LOADER,
+        subagent_loader=loaders.subagent_loader,
+        mcp_loader=loaders.mcp_loader,
     )
 
 
