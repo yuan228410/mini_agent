@@ -496,6 +496,21 @@ def test_application_service_uses_injected_runtime_settings_not_config_globals()
 
 
 
+def test_derived_agent_tools_use_runtime_settings_boundaries():
+    root = Path(__file__).resolve().parents[1] / "src/mini_ai/tools"
+
+    dispatch_text = (root / "dispatch_subagent.py").read_text()
+    workflow_text = (root / "workflow_tools.py").read_text()
+
+    assert "from ..config import MODEL_CONFIG" not in dispatch_text
+    assert "from ..config import MODEL_CONFIG" not in workflow_text
+    assert "MODEL_CONFIG" not in dispatch_text
+    assert "MODEL_CONFIG" not in workflow_text
+    assert "settings.model.context_length" in workflow_text
+    assert "base_model_settings.context_length" in dispatch_text
+
+
+
 def test_tool_registry_executes_mixed_calls_in_order_with_bounded_parallelism():
     from mini_ai.core.execution import ExecutionBudget
 
@@ -1657,9 +1672,15 @@ def test_dispatch_subagent_passes_runtime_resources(monkeypatch):
                 "max_turns": 3,
             }
 
+    from mini_ai.core.settings import SettingsSnapshot
+
     registry = object()
     abort_event = threading.Event()
     compactor = object()
+    settings = SettingsSnapshot.from_config_dicts(
+        model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 12345},
+        streaming=True,
+    )
     monkeypatch.setattr("mini_ai.runner.run_agent", fake_run_agent)
 
     result = dispatch_subagent.execute_with_context(
@@ -1669,6 +1690,7 @@ def test_dispatch_subagent_passes_runtime_resources(monkeypatch):
         registry=registry,
         abort_event=abort_event,
         compactor=compactor,
+        settings=settings,
     )
 
     assert result == "done"
@@ -1676,6 +1698,7 @@ def test_dispatch_subagent_passes_runtime_resources(monkeypatch):
     assert captured["abort_event"] is abort_event
     assert captured["compactor"] is compactor
     assert captured["tool_names"] == ["read_file"]
+    assert captured["context_length"] == 12345
 
 
 def test_tool_registry_dispatch_subagent_uses_bound_runtime_resources(monkeypatch):

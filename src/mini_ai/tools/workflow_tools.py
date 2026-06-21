@@ -109,7 +109,6 @@ def run_workflow_with_context(
 ) -> str:
     from ..team.task_graph import TaskGraph, TaskNode
     from ..team.orchestrator import Orchestrator
-    from ..config import MODEL_CONFIG
 
     tasks = normalize_workflow_tasks(args.get("tasks", []))
     if not tasks:
@@ -132,7 +131,7 @@ def run_workflow_with_context(
     logger.info(f"[Workflow] 启动工作流，{len(tasks)} 个任务")
 
     settings = getattr(derived_agent_resources, "settings", None)
-    context_length = settings.model.context_length if settings else MODEL_CONFIG.get("context_length", 256000)
+    context_length = settings.model.context_length if settings else 256000
     orch = Orchestrator(
         graph, blackboard,
         context_length=context_length,

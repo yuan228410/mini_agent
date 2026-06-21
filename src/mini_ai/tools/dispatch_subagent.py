@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 
 from ..config import IMAGE
+from ..core.settings import ModelSettings
 from ..logger import logger
 from ..utils import now_ts
 
@@ -288,9 +289,10 @@ def execute_with_context(
     registry=None,
     abort_event: threading.Event | None = None,
     compactor=None,
+    settings=None,
 ) -> str:
     from ..runner import run_agent
-    from ..config import MODEL_CONFIG, RequestContext, SUBAGENT_MODELS, get_model_config
+    from ..config import RequestContext, SUBAGENT_MODELS, get_model_config
 
     subagent_type = args.get("type", "")
     spec = loader.get(subagent_type) if loader else None
@@ -345,8 +347,9 @@ def execute_with_context(
             logger.debug(f"[dispatch_subagent] 创建子 display 失败: {exc}")
             sub_display = None
 
-    # 获取子代理专属模型配置
-    model_config = MODEL_CONFIG
+    # 获取子代理专属模型配置；默认继承当前 session 的不可变运行时快照。
+    base_model_settings = getattr(settings, "model", None) or ModelSettings.from_dict(None)
+    model_config = base_model_settings.to_dict()
     model_name = SUBAGENT_MODELS.get(subagent_type)
     if model_name:
         custom_config = get_model_config(model_name)
@@ -354,7 +357,7 @@ def execute_with_context(
             model_config = custom_config
             logger.info(f"[派遣→] {spec['name']} 使用模型: {model_name}")
         else:
-            logger.warning(f"[派遣→] 模型 '{model_name}' 未找到，使用默认模型")
+            logger.warning(f"[派遣→] 模型 '{model_name}' 未找到，继承当前会话模型")
 
     ctx = None
     if sub_display:
@@ -369,7 +372,7 @@ def execute_with_context(
             tool_names=spec["tool_names"],
             ctx=ctx,
             abort_event=abort_event,
-            context_length=MODEL_CONFIG.get("context_length", 256000),
+            context_length=int(model_config.get("context_length") or base_model_settings.context_length),
             compactor=compactor,
             tool_registry=registry,
         )

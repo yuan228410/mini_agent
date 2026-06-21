@@ -84,6 +84,7 @@ class ToolRegistry:
                 registry=self,
                 abort_event=getattr(resources, "abort_event", None),
                 compactor=getattr(resources, "compactor", None),
+                settings=getattr(resources, "settings", None),
             )
 
         self.add_tools(_BoundTool(
