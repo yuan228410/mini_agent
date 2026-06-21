@@ -1,16 +1,14 @@
 """工具注册与分发"""
 import json
 import time
-from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from datetime import datetime, timezone, timedelta
 from ..logger import logger
 
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
-from .cache import ToolCache, get_tool_cache
+from .cache import ToolCache
+from .catalog import BoundTool, ToolCatalog
 from .dispatcher import ToolArgumentError, format_tool_exception, parse_tool_args
-from .metadata import metadata_for, normalize_tool_definition
 from .results import ToolExecutionResult
 from .scheduler import plan_tool_call_segments
 from ..core.execution import ExecutionBudget
@@ -24,64 +22,47 @@ def _truncate(output: str, max_chars: int = 8000) -> str:
     return output[:max_chars] + f"\n[已截断，原长 {len(output)} 字符]"
 
 
-class _BoundTool:
-    """Small module-like wrapper binding a tool definition to a closure."""
-
-    def __init__(self, definition: ToolDefinition, execute: Callable[[ToolArgs], object], metadata=None):
-        self.definition = definition
-        self.execute = execute
-        self.metadata = metadata
+_BoundTool = BoundTool
 
 
 class ToolRegistry:
 
     def __init__(self, *, project_path: str = "", display=None, max_result_chars: int = 8000, execution_budget: ExecutionBudget | None = None, allowed_tools: set[str] | None = None):
-        self._tools: list = []
-        self._by_name: dict[str, object] = {}
+        self._catalog = ToolCatalog(allowed_tools=allowed_tools)
         self._display = display
         self._project_path = project_path
-        self._tool_metadata: dict[str, object] = {}
         self._derived_agent_resources = None
         self._cache = ToolCache(cacheable_resolver=self._is_cacheable)
         self._max_result_chars = int(max_result_chars or 8000)
         self._execution_budget = execution_budget or ExecutionBudget()
-        self._allowed_tools = set(allowed_tools) if allowed_tools is not None else None
-        # 兼容测试/外部扩展；新代码优先通过 ToolMetadata.parallel_safe 声明。
-        self._parallel_tools: set[str] = set()
 
     def bind_derived_agent_resources(self, resources):
         self._derived_agent_resources = resources
 
-    def _normalize_module_definition(self, module) -> ToolDefinition:
-        raw = module.definition() if callable(getattr(module, "definition", None)) else module.definition
-        meta = metadata_for(raw.get("function", {}).get("name", ""), getattr(module, "metadata", None))
-        normalized = normalize_tool_definition(raw, meta)
-        module.definition = normalized
-        self._tool_metadata[normalized["function"]["name"]] = meta
-        return normalized
+    @property
+    def _tools(self):
+        return self._catalog.tools
+
+    @_tools.setter
+    def _tools(self, value):
+        self._catalog.tools = value
+
+    @property
+    def _parallel_tools(self):
+        return self._catalog.parallel_tools
 
     def _rebuild_index(self):
-        self._by_name.clear()
-        self._by_name.update({m.definition["function"]["name"]: m for m in self._tools})
+        self._catalog.rebuild_index()
 
     def add_tools(self, *modules):
-        existing = {m.definition["function"]["name"] for m in self._tools}
+        bound_modules = []
         for m in modules:
             if m is config_tool:
                 m = _BoundTool(config_tool.definition, lambda args, _registry=self: config_tool.execute_with_registry(_registry, args))
             elif m is run_command:
                 m = _BoundTool(run_command.definition, lambda args: run_command.execute_with_cwd(self._project_path or None, args))
-            definition = self._normalize_module_definition(m)
-            name = definition["function"]["name"]
-            if name not in existing:
-                self._tools.append(m)
-                existing.add(name)
-            else:
-                for i, old in enumerate(self._tools):
-                    if old.definition["function"]["name"] == name:
-                        self._tools[i] = m
-                        break
-        self._rebuild_index()
+            bound_modules.append(m)
+        self._catalog.add_tools(*bound_modules)
 
     def register_skills(self, skill_loader):
         from . import list_skills, load_skill, install_skill, delete_skill
@@ -153,22 +134,16 @@ class ToolRegistry:
         # workflow/subagent 工具通过 session-local bound closure 动态读取 self._display。
 
     def get_definitions(self) -> list[ToolDefinition]:
-        definitions = []
-        for m in self._tools:
-            name = m.definition["function"]["name"]
-            if self._allowed_tools is not None and name not in self._allowed_tools:
-                continue
-            definitions.append(json.loads(json.dumps(m.definition, ensure_ascii=False)))
-        return definitions
+        return self._catalog.definitions()
 
     def _is_parallel_safe(self, name: str) -> bool:
-        return name in self._parallel_tools or bool(metadata_for(name, self._tool_metadata.get(name)).parallel_safe)
+        return self._catalog.is_parallel_safe(name)
 
     def _is_cacheable(self, name: str) -> bool:
-        return bool(metadata_for(name, self._tool_metadata.get(name)).cacheable)
+        return self._catalog.is_cacheable(name)
 
     def _is_allowed(self, name: str) -> bool:
-        return self._allowed_tools is None or name in self._allowed_tools
+        return self._catalog.is_allowed(name)
 
     def dispatch_result(self, name: str, args: ToolArgs) -> ToolExecutionResult | None:
         if not self._is_allowed(name):
@@ -176,7 +151,7 @@ class ToolRegistry:
                 f"Error: 工具 '{name}' 不在当前执行策略允许范围内",
                 reason="tool_not_allowed",
             )
-        mod = self._by_name.get(name)
+        mod = self._catalog.get(name)
         if not mod:
             return None
         return ToolExecutionResult.from_value(mod.execute(args))

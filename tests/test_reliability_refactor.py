@@ -11,7 +11,7 @@ from mini_ai.core.persister import HistoryPersister
 from mini_ai.memory.async_db_writer import AsyncDBWriter
 from mini_ai.memory.history_db import HistoryDB
 from mini_ai.tools import ToolRegistry
-from mini_ai.tools.metadata import normalize_tool_definition
+from mini_ai.tools.metadata import ToolMetadata, normalize_tool_definition
 from mini_ai.web.display import WebDisplay
 from mini_ai.config import RequestContext
 from mini_ai.tools import config_tool
@@ -435,6 +435,65 @@ def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
         if hits:
             offenders.append({"path": str(path.relative_to(root)), "hits": hits})
     assert offenders == []
+
+
+def test_tool_catalog_owns_registration_index_and_definition_filtering():
+    from mini_ai.tools.catalog import BoundTool, ToolCatalog
+
+    first_definition = {
+        "type": "function",
+        "function": {"name": "demo", "description": "old", "parameters": {"type": "object", "properties": {}}},
+    }
+    replacement_definition = {
+        "type": "function",
+        "function": {"name": "demo", "description": "new", "parameters": {"type": "object", "properties": {}}},
+    }
+    hidden_definition = {
+        "type": "function",
+        "function": {"name": "hidden", "description": "", "parameters": {"type": "object", "properties": {}}},
+    }
+    first = BoundTool(first_definition, lambda args: "old", metadata=ToolMetadata(parallel_safe=True, cacheable=True))
+    replacement = BoundTool(replacement_definition, lambda args: "new")
+    hidden = BoundTool(hidden_definition, lambda args: "hidden")
+    catalog = ToolCatalog(allowed_tools={"demo"})
+
+    catalog.add_tools(first, hidden)
+    catalog.add_tools(replacement)
+
+    definitions = catalog.definitions()
+    assert [definition["function"]["name"] for definition in definitions] == ["demo"]
+    assert definitions[0]["function"]["description"] == "new"
+    assert catalog.get("demo") is replacement
+    assert catalog.get("hidden") is hidden
+    assert catalog.is_allowed("hidden") is False
+    assert catalog.is_parallel_safe("demo") is False
+    assert catalog.is_cacheable("demo") is False
+
+
+
+def test_tool_registry_delegates_catalog_boundaries():
+    registry_text = (Path(__file__).resolve().parents[1] / "src/mini_ai/tools/__init__.py").read_text()
+
+    assert "self._catalog = ToolCatalog" in registry_text
+    assert "def _normalize_module_definition" not in registry_text
+    assert "self._by_name" not in registry_text
+    assert "self._tool_metadata" not in registry_text
+    assert "self._allowed_tools" not in registry_text
+    assert "metadata_for" not in registry_text
+    assert "normalize_tool_definition" not in registry_text
+
+
+
+def test_application_service_uses_injected_runtime_settings_not_config_globals():
+    text = (Path(__file__).resolve().parents[1] / "src/mini_ai/core/application_service.py").read_text()
+
+    assert "from ..config import MODEL_CONFIG" not in text
+    assert "from ..config import STREAMING" not in text
+    assert "MODEL_CONFIG" not in text
+    assert "STREAMING" not in text
+    assert "settings.model.context_length" in text
+    assert "settings.streaming" in text
+
 
 
 def test_tool_registry_executes_mixed_calls_in_order_with_bounded_parallelism():
@@ -1416,7 +1475,6 @@ def test_tool_registry_uses_session_local_tool_bindings():
         "dispatch_subagent.configure",
         "register_subagent.configure",
         "dispatch_subagent._loader",
-        "registry._by_name",
         "from ..team.task_graph import TaskGraph",
     )
     for pattern in forbidden_registry_bindings:
@@ -1802,7 +1860,6 @@ def test_subagent_tools_do_not_keep_module_level_runtime_state():
             "frontmatter",
             "safe_dump",
             "_registry_ctx",
-            "registry._by_name",
             "dispatch_subagent._loader",
         ),
     }

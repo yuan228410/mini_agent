@@ -5,7 +5,6 @@ import json
 import threading
 from dataclasses import dataclass
 
-from ..config import MODEL_CONFIG, STREAMING, RequestContext
 from ..llm import chat as llm_chat, get_usage, reset_usage
 from ..plan.artifact_parser import strip_artifact_blocks
 from ..plan.service import PlanService
@@ -18,6 +17,7 @@ from .display_protocol import DisplayProtocol
 from .persister import HistoryPersister
 from .runtime_context import SessionRuntimeContext
 from .runtime_types import HistoryDBProtocol, MessageBusProtocol, MessageDict, PlanStateStoreProtocol, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol, UsageDict
+from .settings import ModelSettings, SettingsSnapshot
 
 
 @dataclass
@@ -50,6 +50,20 @@ class ApplicationService:
     flow.
     """
 
+    def __init__(self, *, default_settings: SettingsSnapshot | None = None, request_context_factory=None):
+        self._default_settings = default_settings
+        self._request_context_factory = request_context_factory
+
+    def _fallback_settings(self) -> SettingsSnapshot:
+        return self._default_settings or SettingsSnapshot(model=ModelSettings.from_dict(None))
+
+    def _new_request_context(self, settings: SettingsSnapshot, display: DisplayProtocol | None) -> RequestContextProtocol:
+        if self._request_context_factory is None:
+            from ..config import RequestContext
+
+            return RequestContext(model_config=settings.model.to_dict(), display=display)
+        return self._request_context_factory(model_config=settings.model.to_dict(), display=display)
+
     def run_turn(
         self,
         *,
@@ -66,7 +80,7 @@ class ApplicationService:
         options: RunTurnOptions | None = None,
         runtime: SessionRuntimeContext | None = None,
     ) -> RunTurnResult:
-        settings = runtime.settings if runtime is not None else None
+        settings = runtime.settings if runtime is not None else self._fallback_settings()
         if runtime is not None:
             messages = runtime.messages
             history_db = runtime.history_db
@@ -78,14 +92,14 @@ class ApplicationService:
             options.display = options.display if options.display is not None else runtime.tool_context.display
             options.request_context = options.request_context or runtime.request_context
             options.tool_registry = options.tool_registry or runtime.tool_registry
-            options.streaming = options.streaming if options.streaming is not None else (settings.streaming if settings else STREAMING)
-            options.context_length = options.context_length if options.context_length is not None else (settings.model.context_length if settings else MODEL_CONFIG.get("context_length", 256000))
-            options.max_turns = options.max_turns or (settings.runner.max_turns if settings else 0)
+            options.streaming = options.streaming if options.streaming is not None else settings.streaming
+            options.context_length = options.context_length if options.context_length is not None else settings.model.context_length
+            options.max_turns = options.max_turns or settings.runner.max_turns
         options = options or RunTurnOptions()
         if options.streaming is None:
-            options.streaming = STREAMING
+            options.streaming = settings.streaming
         if options.context_length is None:
-            options.context_length = MODEL_CONFIG.get("context_length", 256000)
+            options.context_length = settings.model.context_length
         if messages is None or tools is None or history_db is None or workspace is None or session_id is None:
             raise ValueError("ApplicationService.run_turn requires messages/tools/history_db/workspace/session_id or runtime")
         if options.tool_registry is None:
@@ -93,7 +107,7 @@ class ApplicationService:
         ctx = options.request_context
         owns_ctx = ctx is None
         if ctx is None:
-            ctx = RequestContext(model_config=MODEL_CONFIG, display=options.display)
+            ctx = self._new_request_context(settings, options.display)
 
         raw_plan_text = None
         persister = HistoryPersister(history_db, workspace, session_id, sanitize_plan_artifacts=options.plan_turn)
