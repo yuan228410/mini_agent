@@ -13,8 +13,11 @@ from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
 from ..application.model_use_cases import ModelRouteDependencies
 from ..application.session_service import SessionServiceDependencies
+from ..application.workspace_service import WorkspaceSwitchDependencies
 from ..skills import SkillLoader
 from ..workspace import WorkspaceManager
+
+_WORKSPACE_MANAGERS: dict[str, WorkspaceManager] = {}
 
 
 def current_settings_snapshot() -> SettingsSnapshot:
@@ -45,6 +48,28 @@ def workspace_manager_for_user(username: str, settings: SettingsSnapshot | None 
     """Build a workspace manager from runtime path settings."""
 
     return WorkspaceManager(user_data_dir_for_settings(username, settings), ensure_default=False)
+
+
+def cached_workspace_manager_for_user(username: str, settings: SettingsSnapshot | None = None) -> WorkspaceManager:
+    """Return a cached Web workspace manager for a user."""
+
+    if settings is not None:
+        return workspace_manager_for_user(username, settings)
+    if username not in _WORKSPACE_MANAGERS:
+        _WORKSPACE_MANAGERS[username] = workspace_manager_for_user(username)
+    return _WORKSPACE_MANAGERS[username]
+
+
+def workspace_switch_dependencies() -> WorkspaceSwitchDependencies:
+    """Build Web workspace switch invalidation hooks at the adapter boundary."""
+
+    from .session_manager import SessionManager
+    from ..tools.cache import clear_tool_cache
+
+    return WorkspaceSwitchDependencies(
+        clear_tool_cache=clear_tool_cache,
+        clear_workspace_sessions=SessionManager.instance().clear_workspace_prefix,
+    )
 
 
 def skill_loader_for_user_workspace(username: str = "", workspace: str = "", settings: SettingsSnapshot | None = None) -> SkillLoader:

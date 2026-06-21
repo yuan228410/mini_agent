@@ -1725,6 +1725,10 @@ def test_web_workspace_routes_use_application_service_boundary():
     assert "from ...config import" not in routes_workspaces
     assert "DATA_DIR" not in routes_workspaces
     assert "user_data_dir" not in routes_workspaces
+    assert "WorkspaceManager" not in routes_workspaces
+    assert "from ..session_manager import" not in routes_workspaces
+    assert "clear_tool_cache" not in routes_workspaces
+    assert "clear_workspace_prefix" not in routes_workspaces
     assert "ContextBuilder" not in routes_workspaces
     assert "MemoryStore" not in routes_workspaces
     assert "SkillLoader" not in routes_workspaces
@@ -1733,8 +1737,12 @@ def test_web_workspace_routes_use_application_service_boundary():
     assert "mgr.delete" not in routes_workspaces
     assert "workspace_service.list_workspaces" in routes_workspaces
     assert "workspace_service.switch_workspace" in routes_workspaces
-    assert "workspace_manager_for_user" in routes_workspaces
+    assert "cached_workspace_manager_for_user" in routes_workspaces
+    assert "workspace_switch_dependencies" in routes_workspaces
     assert "def workspace_manager_for_user" in runtime_helpers
+    assert "def cached_workspace_manager_for_user" in runtime_helpers
+    assert "def workspace_switch_dependencies" in runtime_helpers
+    assert "class WorkspaceSwitchDependencies" in workspace_service
     assert "def create_workspace" in workspace_service
     assert "def switch_workspace" in workspace_service
 

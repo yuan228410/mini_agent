@@ -5,8 +5,7 @@ import time
 
 from ...application import workspace_service
 from ...logger import logger
-from ...workspace import WorkspaceManager
-from ..runtime_helpers import workspace_manager_for_user
+from ..runtime_helpers import cached_workspace_manager_for_user, workspace_switch_dependencies
 from ..route_types import (
     RemovedWorkspacesResponse,
     RouteErrorResponse,
@@ -21,13 +20,9 @@ from ..route_types import (
 
 router = APIRouter()
 
-_ws_managers: dict[str, WorkspaceManager] = {}
 
-
-def _get_mgr(username: str) -> WorkspaceManager:
-    if username not in _ws_managers:
-        _ws_managers[username] = workspace_manager_for_user(username)
-    return _ws_managers[username]
+def _get_mgr(username: str):
+    return cached_workspace_manager_for_user(username)
 
 
 @router.get("/workspaces")
@@ -57,14 +52,12 @@ async def add_workspace(body: WorkspaceAddRequest) -> WorkspaceActionResponse | 
 async def switch_workspace(body: WorkspaceSwitchRequest) -> WorkspaceSwitchResponse | RouteErrorResponse:
     name = body.get("name", "").strip()
     username = body.get("username", "")
-    result = workspace_service.switch_workspace(_get_mgr(username), name, username)
-    if result.get("status") == "ok":
-        from ..session_manager import SessionManager
-        from ...tools.cache import clear_tool_cache
-
-        clear_tool_cache()
-        SessionManager.instance().clear_workspace_prefix(f"{username}:{name}:")
-    return result
+    return workspace_service.switch_workspace(
+        _get_mgr(username),
+        name,
+        username,
+        workspace_switch_dependencies(),
+    )
 
 
 @router.delete("/workspaces/{name}")

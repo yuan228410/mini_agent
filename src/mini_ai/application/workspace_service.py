@@ -1,10 +1,17 @@
 """Workspace management use cases shared by UI adapters."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..workspace import WorkspaceManager
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceSwitchDependencies:
+    clear_tool_cache: Callable[[], None]
+    clear_workspace_sessions: Callable[[str], None]
 
 
 def list_workspaces(mgr: WorkspaceManager, username: str, project_root: Path | None = None) -> dict[str, Any]:
@@ -44,8 +51,13 @@ def add_workspace(mgr: WorkspaceManager, path: str, username: str) -> dict[str, 
     return _action_response(result)
 
 
-def switch_workspace(mgr: WorkspaceManager, name: str, username: str) -> dict[str, Any]:
-    """Validate and return switch metadata for a workspace."""
+def switch_workspace(
+    mgr: WorkspaceManager,
+    name: str,
+    username: str,
+    deps: WorkspaceSwitchDependencies | None = None,
+) -> dict[str, Any]:
+    """Validate workspace switching and run adapter-provided invalidation hooks."""
 
     if not name:
         return {"error": "名称不能为空"}
@@ -54,6 +66,9 @@ def switch_workspace(mgr: WorkspaceManager, name: str, username: str) -> dict[st
     ws = mgr.get(name)
     if not ws:
         return {"error": f"工作空间 '{name}' 不存在"}
+    if deps:
+        deps.clear_tool_cache()
+        deps.clear_workspace_sessions(f"{username}:{name}:")
     return {"status": "ok", "message": f"已切换到 '{name}'", "project_path": ws.project_path}
 
 
