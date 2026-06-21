@@ -486,6 +486,20 @@ def test_tool_registry_executes_mixed_calls_in_order_with_bounded_parallelism():
     assert events == ["read_file", "write_file", "list_dir"]
 
 
+def test_tool_dispatcher_reports_argument_parse_errors():
+    from mini_ai.core.tool_models import ToolCall
+    from mini_ai.tools.dispatcher import ToolArgumentError, parse_tool_args
+
+    tc = ToolCall.from_dict({"id": "bad", "function": {"name": "read_file", "arguments": "{"}})
+
+    with pytest.raises(ToolArgumentError) as exc_info:
+        parse_tool_args(tc)
+
+    message = exc_info.value.user_message()
+    assert "参数 JSON 解析错误" in message
+    assert "read_file" in message
+
+
 def test_tool_call_scheduler_preserves_barriers_and_parallel_segments():
     from mini_ai.core.tool_models import ToolCall
     from mini_ai.tools.scheduler import plan_tool_call_segments

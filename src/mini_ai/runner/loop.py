@@ -9,16 +9,18 @@ import threading
 from .state import LoopState
 from ..core.display_protocol import DisplayProtocol
 from ..core.runtime_types import CompactorProtocol, MessageBusProtocol, MessageDict, RequestContextProtocol, ToolDefinition, ToolRegistryProtocol
+from ..core.settings import TimeoutSettings
 from .executor import ToolExecutor
 from .error_handler import ErrorHandler
 
 # 相对导入父模块
 from ..logger import logger
-from ..config import RUNNER
 from ..utils import now_ts
 from ..llm.base import estimate_messages_tokens
 
-_CONTEXT_USAGE_LIMIT = RUNNER.get("context_usage_limit", 0.88)
+DEFAULT_CONTEXT_USAGE_LIMIT = 0.88
+DEFAULT_MAX_TURNS = 20
+DEFAULT_MAX_CONSECUTIVE_ERRORS = 3
 MAX_OVERFLOW_RETRIES = 3
 
 def run_tool_loop(
@@ -32,11 +34,13 @@ def run_tool_loop(
     abort_event: threading.Event | None = None,
     max_turns: int = 0,
     context_length: int | None = None,
-    context_usage_limit: float = _CONTEXT_USAGE_LIMIT,
+    context_usage_limit: float = DEFAULT_CONTEXT_USAGE_LIMIT,
     ctx: RequestContextProtocol | None = None,
     bus: MessageBusProtocol | None = None,
     compactor: CompactorProtocol | None = None,
     tool_registry: ToolRegistryProtocol | None = None,
+    timeout_settings: TimeoutSettings | None = None,
+    max_consecutive_errors: int = DEFAULT_MAX_CONSECUTIVE_ERRORS,
 ) -> tuple[MessageDict | None, bool]:
     """统一工具循环
     
@@ -63,13 +67,13 @@ def run_tool_loop(
 
     # 初始化状态
     if max_turns <= 0:
-        max_turns = RUNNER.get("max_turns", 20)
+        max_turns = DEFAULT_MAX_TURNS
     
     state = LoopState(max_turns=max_turns)
     state.messages = messages
     
     # 初始化执行器和错误处理器
-    executor = ToolExecutor(display=display, persist_fn=persist_fn, streaming=streaming)
+    executor = ToolExecutor(display=display, persist_fn=persist_fn, streaming=streaming, timeout_settings=timeout_settings)
     error_handler = ErrorHandler()
     
     # 主循环
@@ -154,7 +158,7 @@ def run_tool_loop(
             # 与 error_handler.py 的 ToolError 异常路径不同，二者不会重复触发
             if _has_recent_tool_error(messages):
                 state.record_error()
-                if state.consecutive_errors >= RUNNER.get("max_consecutive_errors", 3):
+                if state.consecutive_errors >= max_consecutive_errors:
                     logger.warning(f"[runner] 连续 {state.consecutive_errors} 次工具错误，提前退出")
                     return _force_summary(messages, ctx, display, bus, state)
             else:

@@ -13,6 +13,7 @@ from ..logger import logger
 from ..utils import now_ts
 from ..core.display_protocol import DisplayProtocol
 from ..core.runtime_types import MessageDict, RequestContextProtocol, ToolDefinition, UsageDict
+from ..core.settings import TimeoutSettings
 
 class ToolExecutor:
     """工具执行器
@@ -28,6 +29,7 @@ class ToolExecutor:
         display: DisplayProtocol | None = None,
         persist_fn: Callable[[MessageDict], None] | None = None,
         streaming: bool = False,
+        timeout_settings: TimeoutSettings | None = None,
     ):
         """
         Args:
@@ -38,6 +40,7 @@ class ToolExecutor:
         self.display = display
         self.persist_fn = persist_fn or (lambda m: None)
         self.streaming = streaming
+        self.timeout_settings = timeout_settings
     
     def call_llm(
         self,
@@ -110,11 +113,11 @@ class ToolExecutor:
         """流式调用 LLM（支持自动重试）"""
         from ..llm import chat_stream as llm_chat_stream, get_model, get_usage
         from ..llm.retry import RetryStrategy
-        from ..config import TIMEOUTS
-        
+
         # 初始化重试策略（与 LLM 层保持一致）
-        max_retries = TIMEOUTS.get("llm_retries", 3)
-        retry_delay = TIMEOUTS.get("llm_retry_delay", 2)
+        timeouts = self.timeout_settings or TimeoutSettings()
+        max_retries = timeouts.llm_retries
+        retry_delay = timeouts.llm_retry_delay
         strategy = RetryStrategy(
             max_retries=max_retries,
             base_delay=retry_delay,

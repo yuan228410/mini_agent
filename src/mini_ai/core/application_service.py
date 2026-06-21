@@ -130,6 +130,8 @@ class ApplicationService:
                 context_length=options.context_length,
                 compactor=compactor,
                 tool_registry=options.tool_registry,
+                timeout_settings=settings.timeouts if settings else None,
+                max_consecutive_errors=int(settings.runner.extra.get("max_consecutive_errors", 3)) if settings else 3,
             )
             persister.flush_deferred(messages)
 

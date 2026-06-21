@@ -9,7 +9,6 @@ import json
 import threading
 import time
 
-from ..config import MODEL_CONFIG, STREAMING, PLAN, TIMEOUTS
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..logger import logger
 from ..runner import run_tool_loop

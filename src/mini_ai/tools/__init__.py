@@ -9,6 +9,7 @@ from ..logger import logger
 
 from . import delete_file, delete_skill, dispatch_subagent, edit_file, list_dir, read_file, read_image, rename_file, run_command, search_files, update_todos, web_fetch, write_file, config_tool, register_subagent
 from .cache import ToolCache, get_tool_cache
+from .dispatcher import ToolArgumentError, format_tool_exception, parse_tool_args
 from .metadata import metadata_for, normalize_tool_definition
 from .results import ToolExecutionResult
 from .scheduler import plan_tool_call_segments
@@ -217,17 +218,14 @@ class ToolRegistry:
     def _execute_one(self, tc: ToolCall | ToolWirePayload, messages: list[MessageDict], display=None, persist_fn=None) -> None:
         tc = self._as_tool_call(tc)
         name = tc.function.name
-        raw_args = tc.function.arguments
         try:
-            args = json.loads(raw_args) if raw_args else {}
-        except (json.JSONDecodeError, TypeError) as e:
-            # JSON 解析失败，返回详细错误给 LLM
-            args = {}
-            error_msg = f"⚠ 工具调用失败：参数 JSON 解析错误\n\n工具: {name}\n原始参数: {raw_args[:200]}\n错误: {type(e).__name__}: {e}\n\n请检查参数格式是否正确。"
+            args = parse_tool_args(tc)
+        except ToolArgumentError as e:
+            error_msg = e.user_message()
             tool_msg = self._tool_message(tc.id, name, error_msg)
             messages.append(tool_msg)
             self._persist_tool_message(persist_fn, tc.id, name, error_msg)
-            logger.warning(f"[工具✗] {name} JSON解析失败: {raw_args[:200]}")
+            logger.warning(f"[工具✗] {name} JSON解析失败: {e.raw_arguments[:200]}")
             return
         
         # 检查会话级缓存
@@ -269,20 +267,7 @@ class ToolRegistry:
             else:
                 logger.info(f"[工具←] {name} len=0 output=None")
         except Exception as e:
-            # 使用异常体系生成详细错误信息
-            from ..exceptions import MiniAIError, ToolError
-            if isinstance(e, MiniAIError):
-                # 已知异常，提供详细上下文
-                output = f"⚠ {e.to_user_message()}\n\n工具: {name}\n参数: {args_summary}\n错误类型: {type(e).__name__}\n可恢复: {'是' if e.recoverable else '否'}"
-                if hasattr(e, 'context') and e.context:
-                    output += f"\n上下文: {e.context}"
-            elif isinstance(e, (FileNotFoundError, PermissionError, IsADirectoryError)):
-                # 文件系统异常，提供具体信息
-                output = f"⚠ 文件操作失败\n\n工具: {name}\n错误: {type(e).__name__}: {e}\n参数: {args_summary}\n\n请检查路径是否正确，权限是否足够。"
-            else:
-                # 未知异常，提供完整堆栈
-                import traceback
-                output = f"⚠ 工具执行异常\n\n工具: {name}\n错误: {type(e).__name__}: {e}\n参数: {args_summary}\n\n堆栈:\n{traceback.format_exc()}"
+            output = format_tool_exception(name, args_summary, e)
             logger.error(f"[工具✗] {name} 异常: {e}", exc_info=True)
         elapsed = time.monotonic() - t0
         if display:
@@ -310,15 +295,11 @@ class ToolRegistry:
         def _run(tc: ToolCall, ctx_copy):
             try:
                 name = tc.function.name
-                args_str = tc.function.arguments or ""
-                
-                # JSON 解析
                 try:
-                    args = json.loads(args_str) if args_str else {}
-                except (json.JSONDecodeError, TypeError) as e:
-                    error_msg = f"⚠ 工具调用失败：参数 JSON 解析错误\n\n工具: {name}\n原始参数: {args_str[:200]}\n错误: {type(e).__name__}: {e}\n\n请检查参数格式是否正确。"
-                    return tc.id, error_msg
-                
+                    args = parse_tool_args(tc)
+                except ToolArgumentError as e:
+                    return tc.id, e.user_message()
+
                 # 检查缓存（并发安全：首个线程执行，其余等待）
                 cached_result, hit = cache.get_or_wait(name, args)
                 if hit:
@@ -349,21 +330,11 @@ class ToolRegistry:
                     logger.info(f"[并行←] {name} len=0 output=None")
                 return tc.id, result
             except Exception as e:
-                # 使用异常体系生成详细错误信息
-                from ..exceptions import MiniAIError
                 args_summary = json.dumps(args, ensure_ascii=False) if 'args' in locals() else "{}"
-                
-                if isinstance(e, MiniAIError):
-                    error_msg = f"⚠ {e.to_user_message()}\n\n工具: {name}\n参数: {args_summary}\n错误类型: {type(e).__name__}\n可恢复: {'是' if e.recoverable else '否'}"
-                    if hasattr(e, 'context') and e.context:
-                        error_msg += f"\n上下文: {e.context}"
-                elif isinstance(e, (FileNotFoundError, PermissionError, IsADirectoryError)):
-                    error_msg = f"⚠ 文件操作失败\n\n工具: {name}\n错误: {type(e).__name__}: {e}\n参数: {args_summary}\n\n请检查路径是否正确，权限是否足够。"
-                else:
-                    import traceback
-                    error_msg = f"⚠ 工具执行异常\n\n工具: {name if 'name' in locals() else 'unknown'}\n错误: {type(e).__name__}: {e}\n参数: {args_summary}\n\n堆栈:\n{traceback.format_exc()}"
-                
-                logger.error(f"[并行工具✗] {name if 'name' in locals() else 'unknown'} 异常: {e}", exc_info=True)
+                tool_name = name if 'name' in locals() else 'unknown'
+                error_msg = format_tool_exception(tool_name, args_summary, e)
+
+                logger.error(f"[并行工具✗] {tool_name} 异常: {e}", exc_info=True)
                 
                 # 异常时也要推送 tool_result，避免前端占位符不更新
                 if display:

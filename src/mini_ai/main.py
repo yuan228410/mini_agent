@@ -274,6 +274,8 @@ def _create_workspace_session(
             context_usage_limit=settings.runner.context_usage_limit,
             compactor=compactor,
             tool_registry=tool_registry,
+            timeout_settings=settings.timeouts,
+            max_consecutive_errors=int(settings.runner.extra.get("max_consecutive_errors", 3)),
         )
         return msg
 

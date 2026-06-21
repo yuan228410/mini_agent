@@ -119,6 +119,8 @@ def test_application_service_defaults_to_runtime_settings(monkeypatch):
     assert captured["streaming"] is False
     assert captured["context_length"] == 77
     assert captured["max_turns"] == 6
+    assert captured["timeout_settings"] is snapshot.timeouts
+    assert captured["max_consecutive_errors"] == 3
     runtime.close()
 
 
