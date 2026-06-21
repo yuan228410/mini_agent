@@ -8,18 +8,15 @@
 import asyncio
 import json
 import threading
-import time
 
 from fastapi import APIRouter, Query, WebSocket
 
+from ...application import chat_service
 from ...core.events import DisplayEvent, DisplayEventType
 from ...core.runtime_types import DisplayWireEvent, MessageDict, PlanArtifactDict
 from ...logger import logger
-from ...tools import inject_todos as _inject_todos
 from ...utils import now_ts
 from ..route_types import (
-    ChatHistoryEntry,
-    ChatHistoryImage,
     ChatHistoryResponse,
     ChatResetRequest,
     ChatResetResponse,
@@ -27,7 +24,7 @@ from ..route_types import (
     RouteErrorResponse,
 )
 from ..chat_runner import run_tool_loop_sync
-from ..runtime_helpers import chat_session_dependencies, request_context_for_settings, settings_for_model
+from ..runtime_helpers import chat_rest_dependencies, chat_session_dependencies, request_context_for_settings, settings_for_model
 from ...plan.service import PlanService
 from ...plan.store import PlanStore
 
@@ -438,111 +435,16 @@ async def chat_ws_endpoint(ws: WebSocket):
 
 # ── REST: 聊天历史 ──
 
-_MAX_HISTORY_LOAD = 2000
-
 @router.get("/chat/history")
 async def chat_history(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default="")) -> ChatHistoryResponse:
-    _t0 = time.time()
-    if not username:
-        return {"session_id": session_id, "history": []}
-    if not session_id:
-        return {"session_id": "", "history": []}
-    deps = _chat_deps()
-    resolve_base = deps["resolve_base"]
-    cache_key = deps["cache_key"]
-    get_or_create_components = deps["get_or_create_components"]
-    sm = deps["session_manager"]
-    try:
-        base = resolve_base(username, workspace or None)
-    except Exception:
-        return {"session_id": session_id, "history": []}
-
-    key = cache_key(username, workspace or None, session_id)
-    mem_msgs = sm.get_messages(key)
-
-    current_plan = None
-    if mem_msgs:
-        messages = [m for m in mem_msgs if m["role"] not in ("system", "tool")]
-        comp = get_or_create_components(username, session_id, base, workspace or None)
-        current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
-    else:
-        comp = get_or_create_components(username, session_id, base, workspace or None)
-        messages = comp["history_db"].load_session_for_display(workspace or "default", session_id) or []
-        current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
-
-    history: list[ChatHistoryEntry] = []
-    for m in messages:
-        entry: ChatHistoryEntry = {"role": m["role"]}
-        content = m.get("content")
-
-        if isinstance(content, list):
-            text_parts = []
-            images: list[ChatHistoryImage] = []
-            for part in content:
-                if isinstance(part, dict):
-                    if part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                    elif part.get("type") == "image_url":
-                        img_url = part.get("image_url", {}).get("url", "")
-                        if img_url:
-                            images.append({"dataUrl": img_url, "name": "", "size": 0})
-            entry["content"] = "\n".join(text_parts)
-            if images:
-                entry["images"] = images
-        else:
-            if content:
-                entry["content"] = content
-
-        if m.get("timestamp"):
-            entry["timestamp"] = m["timestamp"]
-        if m.get("thinking"):
-            entry["thinking"] = m["thinking"]
-        if m.get("tool_calls"):
-            entry["tool_calls"] = m["tool_calls"]
-        if m.get("kind"):
-            entry["kind"] = m["kind"]
-        if m.get("plan"):
-            entry["plan"] = m["plan"]
-        history.append(entry)
-
-    logger.info(f"[chat_history] sid={session_id} ws={workspace} msgs={len(messages)} time={time.time()-_t0:.3f}s")
-    return {"session_id": session_id, "history": history, "current_plan": current_plan}
+    return chat_service.chat_history(chat_rest_dependencies(), session_id=session_id, username=username, workspace=workspace)
 
 
 # ── REST: 重置会话 ──
 
 @router.post("/chat/reset")
 async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse | RouteErrorResponse:
-    body = body or {}
-    username = body.get("username", "")
-    session_id = body.get("session_id", "")
-    workspace = body.get("workspace", "")
-    if not username:
-        return {"error": "缺少 username"}
-    if not session_id:
-        session_id = "default"
-    deps = _chat_deps()
-    resolve_base = deps["resolve_base"]
-    cache_key = deps["cache_key"]
-    get_or_create_session = deps["get_or_create_session"]
-    update_meta_cache = deps["update_meta_cache"]
-    sm = deps["session_manager"]
-    ws = workspace or None
-    base = resolve_base(username, ws)
-    sid, messages = get_or_create_session(username, session_id, base, ws, create=False)
-    if not messages:
-        return {"error": f"会话 '{session_id}' 不存在"}
-    system_content = messages[0]["content"]
-    old_name = messages[0].get("name", "")
-    key = cache_key(username, ws, sid)
-
-    sm.reset_session(key, system_content, old_name)
-    msgs = sm.get_messages(key)
-    if msgs:
-        _inject_todos(msgs)
-    update_meta_cache(username, sid, ws, msgs)
-
-    return {"status": "ok", "session_id": sid}
+    return chat_service.reset_chat(chat_rest_dependencies(), body)
 
 
 # ── REST: 导出会话 ──
@@ -550,78 +452,24 @@ async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse 
 @router.get("/chat/export")
 async def chat_export(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default=""), limit: int = Query(default=0), include_thinking: bool = Query(default=False), include_tools: bool = Query(default=False)):
     from fastapi.responses import JSONResponse, Response
-    deps = _chat_deps()
-    resolve_base = deps["resolve_base"]
-    get_or_create_components = deps["get_or_create_components"]
-    load_session_name = deps["load_session_name"]
-    if not username:
-        return JSONResponse({"error": "缺少 username"}, status_code=400)
-    if not session_id:
-        return JSONResponse({"error": "缺少 session_id"}, status_code=400)
-    try:
-        base = resolve_base(username, workspace or None)
-    except Exception as e:
-        logger.error(f"[export] resolve_base error: {e}")
-        return JSONResponse({"error": f"工作空间错误: {e}"}, status_code=400)
-
-    comp = get_or_create_components(username, session_id, base, workspace or None)
-    messages = comp["history_db"].load_session(workspace or "default", session_id, limit=limit) or []
-    if not messages:
-        return JSONResponse({"error": f"会话 '{session_id}' 不存在或无消息"}, status_code=404)
-
-    session_name = load_session_name(base, session_id)
-    if not session_name:
-        for m in messages:
-            if m.get("role") == "user" and m.get("content"):
-                session_name = m["content"][:50]
-                break
-    if not session_name:
-        session_name = session_id
-
-    lines = [f"# {session_name}\n"]
-    for m in messages:
-        role = m.get("role", "")
-        content = m.get("content") or ""
-        ts = m.get("timestamp", "")
-        if role in ("system", "tool"):
-            continue
-        if role == "user":
-            label = f"**🧑 用户**"
-            if ts:
-                label += f"  `{ts}`"
-            lines.append(f"\n{label}\n\n{content}\n")
-        elif role == "assistant":
-            thinking = m.get("thinking")
-            tool_calls = m.get("tool_calls")
-            has_thinking = include_thinking and thinking
-            has_tools = include_tools and tool_calls
-            if not content and not has_thinking and not has_tools:
-                continue
-            label = f"**🤖 助手**"
-            if ts:
-                label += f"  `{ts}`"
-            lines.append(f"\n{label}\n")
-            if has_thinking:
-                thinking_text = thinking if isinstance(thinking, str) else str(thinking)
-                lines.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n{thinking_text}\n\n</details>\n")
-            if has_tools:
-                for tc in tool_calls:
-                    fn = tc.get("function", {})
-                    name = fn.get("name", "?")
-                    args = str(fn.get("arguments", ""))
-                    result = tc.get("_result", "")
-                    lines.append(f"\n> 🔧 **{name}**({args[:200]})\n")
-                    if result:
-                        lines.append(f"> 结果: {result[:500]}\n")
-            if content:
-                lines.append(f"\n{content}\n")
-
-    md_content = "\n".join(lines)
     from urllib.parse import quote
-    safe_name = session_name.replace("/", "-").replace(" ", "-")[:60]
-    encoded_name = quote(safe_name)
+
+    result = chat_service.export_chat(
+        chat_rest_dependencies(),
+        session_id=session_id,
+        username=username,
+        workspace=workspace,
+        limit=limit,
+        include_thinking=include_thinking,
+        include_tools=include_tools,
+    )
+    if isinstance(result, dict):
+        status_code = int(result.get("status_code", 400))
+        return JSONResponse({"error": result.get("error", "导出失败")}, status_code=status_code)
+
+    encoded_name = quote(result.filename)
     return Response(
-        content=md_content,
+        content=result.content,
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}.md"},
     )

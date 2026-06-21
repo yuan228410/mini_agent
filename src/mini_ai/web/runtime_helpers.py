@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..application import command_service, model_use_cases, runtime_paths
+from ..application import chat_service, command_service, model_use_cases, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
@@ -188,6 +188,24 @@ def chat_session_dependencies() -> dict[str, Any]:
         "load_session_name": _load_session_name,
         "update_meta_cache": _update_meta_cache,
     }
+
+
+def chat_rest_dependencies() -> chat_service.ChatRestDependencies:
+    """Build Web chat REST dependencies at the adapter boundary."""
+
+    from ..tools import inject_todos
+
+    deps = chat_session_dependencies()
+    return chat_service.ChatRestDependencies(
+        session_manager=deps["session_manager"],
+        cache_key=deps["cache_key"],
+        resolve_base=deps["resolve_base"],
+        get_or_create_session=deps["get_or_create_session"],
+        get_or_create_components=deps["get_or_create_components"],
+        load_session_name=deps["load_session_name"],
+        update_meta_cache=deps["update_meta_cache"],
+        inject_todos=inject_todos,
+    )
 
 
 def team_component_for_user_workspace(username: str, workspace: str | None):

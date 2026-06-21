@@ -421,8 +421,19 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
         "_update_meta_cache",
     ]
     assert [name for name in stale_imports if name in text] == []
+    rest_area = text.split('# ── REST: 聊天历史 ──', 1)[1]
+    assert "get_or_create_components" not in rest_area
+    assert "get_or_create_session" not in rest_area
+    assert "load_session_for_display" not in rest_area
+    assert "load_session(" not in rest_area
+    assert "reset_session" not in rest_area
+    assert "chat_service.chat_history" in rest_area
+    assert "chat_service.reset_chat" in rest_area
+    assert "chat_service.export_chat" in rest_area
+    assert "chat_rest_dependencies" in rest_area
     assert "chat_session_dependencies" in text
     assert "def chat_session_dependencies" in runtime_helpers
+    assert "def chat_rest_dependencies" in runtime_helpers
 
 
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
