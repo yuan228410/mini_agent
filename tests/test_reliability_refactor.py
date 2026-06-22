@@ -527,9 +527,11 @@ def test_web_chat_route_uses_application_message_builder():
 def test_web_chat_route_delegates_queue_event_handling():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    coordinator = (root / "web" / "chat_run_coordinator.py").read_text(encoding="utf-8")
     helper = (root / "web" / "chat_events.py").read_text(encoding="utf-8")
 
-    assert "relay_chat_queue_events" in text
+    assert "relay_chat_queue_events" not in text
+    assert "relay_chat_queue_events" in coordinator
     assert "initial_chat_usage" not in text
     assert "normalize_chat_queue_event" not in text
     assert "drain_ready_chat_events" not in text
@@ -548,6 +550,7 @@ def test_web_chat_route_delegates_queue_event_handling():
 def test_web_chat_route_delegates_run_context_setup():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    coordinator = (root / "web" / "chat_run_coordinator.py").read_text(encoding="utf-8")
     helper = (root / "web" / "chat_run_context.py").read_text(encoding="utf-8")
 
     assert "import threading" not in text
@@ -556,7 +559,8 @@ def test_web_chat_route_delegates_run_context_setup():
     assert "get_or_create_components" not in text
     assert "sm.get_model" not in text
     assert "sm.get_lock" not in text
-    assert "prepare_chat_run_context" in text
+    assert "prepare_chat_run_context" not in text
+    assert "prepare_chat_run_context" in coordinator
     assert "class ChatRunContext" in helper
     assert "def prepared_abort_event" in helper
     assert "def prepare_chat_run_context" in helper
@@ -604,6 +608,7 @@ def test_web_chat_route_delegates_ws_send():
 def test_web_chat_route_delegates_run_finalization():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    coordinator = (root / "web" / "chat_run_coordinator.py").read_text(encoding="utf-8")
     finalization = (root / "web" / "chat_run_finalization.py").read_text(encoding="utf-8")
 
     assert "set_last_usage" not in text
@@ -611,7 +616,8 @@ def test_web_chat_route_delegates_run_finalization():
     assert "future.result()" not in text
     assert "asyncio.current_task" not in text
     assert "DisplayEventType.DONE" not in text
-    assert "finalize_chat_run" in text
+    assert "finalize_chat_run" not in text
+    assert "finalize_chat_run" in coordinator
     assert "def finalize_chat_run" in finalization
     assert "set_last_usage" in finalization
     assert "release_active_task" in finalization
@@ -676,18 +682,37 @@ def test_web_chat_route_delegates_endpoint_state():
 def test_web_chat_route_delegates_executor_launch():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    coordinator = (root / "web" / "chat_run_coordinator.py").read_text(encoding="utf-8")
     executor = (root / "web" / "chat_executor.py").read_text(encoding="utf-8")
 
     assert "run_tool_loop_sync" not in text
     assert "from ..chat_runner import _executor" not in text
     assert "run_in_executor" not in text
     assert "executor_args(" not in text
-    assert "launch_chat_executor" in text
+    assert "launch_chat_executor" not in text
+    assert "launch_chat_executor" in coordinator
     assert "def launch_chat_executor" in executor
     assert "run_tool_loop_sync" in executor
     assert "_executor" in executor
     assert "run_in_executor" in executor
     assert "executor_args(" in executor
+
+
+def test_web_chat_route_delegates_run_coordinator():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    coordinator = (root / "web" / "chat_run_coordinator.py").read_text(encoding="utf-8")
+
+    assert "run_chat_websocket_turn" in text
+    assert "logger.info" not in text
+    assert "prepare_chat_run_context" not in text
+    assert "relay_chat_queue_events" not in text
+    assert "finalize_chat_run" not in text
+    assert "def run_chat_websocket_turn" in coordinator
+    assert "prepare_chat_run_context" in coordinator
+    assert "relay_chat_queue_events" in coordinator
+    assert "finalize_chat_run" in coordinator
+    assert "error_event" in coordinator
 
 
 def test_web_chat_export_response_delegates_to_adapter():
