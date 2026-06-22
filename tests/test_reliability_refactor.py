@@ -476,6 +476,17 @@ def test_web_chat_compact_command_delegates_to_application_service():
     assert "settings_for_model" in runtime_helpers
 
 
+def test_web_chat_route_uses_single_task_launcher():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    reader_area = text.split("async def _reader():", 1)[1].split("# 启动 reader", 1)[0]
+
+    assert "async def _launch_chat_task" in text
+    assert "claim_active_task" not in reader_area
+    assert "asyncio.create_task(_run_chat" not in reader_area
+    assert reader_area.count("await _launch_chat_task") == 3
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

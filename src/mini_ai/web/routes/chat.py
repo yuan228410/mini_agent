@@ -70,6 +70,21 @@ async def chat_ws_endpoint(ws: WebSocket):
             except Exception as e:
                 logger.warning(f'[Web] _send failed: {e}, event={wire.get("event")}')
 
+    async def _launch_chat_task(
+        sid: str,
+        username: str,
+        user_message: str,
+        ws_name: str | None = None,
+        images: list[ImageUpload] | None = None,
+        plan_turn: bool = False,
+        approved_plan: PlanArtifactDict | None = None,
+        session_key: str | None = None,
+    ) -> None:
+        task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, images, plan_turn, approved_plan))
+        if not sm.claim_active_task(session_key or cache_key(username, ws_name, sid), task):
+            task.cancel()
+            await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
+
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list[ImageUpload] | None = None, plan_turn: bool = False, approved_plan: PlanArtifactDict | None = None) -> None:
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")
         session_key = cache_key(username, ws_name, sid)
@@ -245,10 +260,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                             await _send(event)
                         if result.run:
                             run = result.run
-                            task = asyncio.create_task(_run_chat(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan))
-                            if not sm.claim_active_task(result.session_key or cache_key(username, ws_name, run.sid), task):
-                                task.cancel()
-                                await _send(_error_event("当前会话正在生成，请稍后再发送", run.sid))
+                            await _launch_chat_task(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan, result.session_key)
                         continue
 
                     if msg_type != "chat":
@@ -272,10 +284,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                             await _send(event)
                         if result.run:
                             run = result.run
-                            task = asyncio.create_task(_run_chat(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan))
-                            if not sm.claim_active_task(result.session_key or cache_key(username, ws_name, run.sid), task):
-                                task.cancel()
-                                await _send(_error_event("当前会话正在生成，请稍后再发送", run.sid))
+                            await _launch_chat_task(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan, result.session_key)
                         continue
 
                     if not session_id:
@@ -286,14 +295,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                     sid = session_id
 
                     # 同一会话只允许一个生成任务，避免多个 runner 同时改同一 messages 导致串流
-                    session_key = cache_key(username, ws_name, sid)
-                    task = asyncio.create_task(
-                        _run_chat(sid, username, user_message, ws_name, images)
-                    )
-                    if not sm.claim_active_task(session_key, task):
-                        task.cancel()
-                        await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
-                        continue
+                    await _launch_chat_task(sid, username, user_message, ws_name, images)
 
                 except asyncio.TimeoutError:
                     pass
