@@ -10,8 +10,7 @@ import asyncio
 from fastapi import APIRouter, Query, WebSocket
 
 from ...application import chat_service
-from ...core.events import DisplayEvent
-from ...core.runtime_types import DisplayWireEvent, PlanArtifactDict
+from ...core.runtime_types import PlanArtifactDict
 from ...logger import logger
 from ..route_types import (
     ChatHistoryResponse,
@@ -26,6 +25,8 @@ from ..chat_events import relay_chat_queue_events
 from ..chat_run_context import prepare_chat_run_context
 from ..chat_run_finalization import finalize_chat_run
 from ..chat_runner import run_tool_loop_sync
+from ..chat_sender import ChatWebSocketSender
+from ..chat_task_launcher import chat_task_launcher
 from ..runtime_helpers import chat_compact_dependencies, chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies
 
 router = APIRouter()
@@ -42,7 +43,7 @@ async def chat_ws_endpoint(ws: WebSocket):
     await ws.accept()
     _ws_abort_keys: list[str] = []
     ws_closed = False
-    _write_lock = asyncio.Lock()
+    sender = ChatWebSocketSender(ws)
     _ws_username: str | None = None
     deps = _chat_deps()
     plan_deps = plan_command_dependencies()
@@ -54,16 +55,10 @@ async def chat_ws_endpoint(ws: WebSocket):
         compact_dependencies=compact_deps,
     )
     sm = deps["session_manager"]
-    cache_key = deps["cache_key"]
     update_meta_cache = deps["update_meta_cache"]
 
-    async def _send(data: DisplayWireEvent | DisplayEvent) -> None:
-        wire = data.to_wire() if isinstance(data, DisplayEvent) else data
-        async with _write_lock:
-            try:
-                await ws.send_json(wire)
-            except Exception as e:
-                logger.warning(f'[Web] _send failed: {e}, event={wire.get("event")}')
+    async def _send(data) -> None:
+        await sender.send(data)
 
     async def _launch_chat_task(
         sid: str,
@@ -75,10 +70,8 @@ async def chat_ws_endpoint(ws: WebSocket):
         approved_plan: PlanArtifactDict | None = None,
         session_key: str | None = None,
     ) -> None:
-        task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, images, plan_turn, approved_plan))
-        if not sm.claim_active_task(session_key or cache_key(username, ws_name, sid), task):
-            task.cancel()
-            await _send(error_event("当前会话正在生成，请稍后再发送", sid))
+        launcher = chat_task_launcher(session_manager=sm, cache_key=deps["cache_key"], send=_send, run_chat=_run_chat)
+        await launcher.launch(sid, username, user_message, ws_name, images, plan_turn, approved_plan, session_key)
 
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list[ImageUpload] | None = None, plan_turn: bool = False, approved_plan: PlanArtifactDict | None = None) -> None:
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")

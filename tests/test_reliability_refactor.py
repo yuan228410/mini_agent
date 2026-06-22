@@ -486,14 +486,19 @@ def test_web_chat_route_uses_single_task_launcher():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
+    launcher = (root / "web" / "chat_task_launcher.py").read_text(encoding="utf-8")
     reader_area = text.split("async def _reader():", 1)[1].split("# 启动 reader", 1)[0]
 
     assert "async def _launch_chat_task" in text
-    assert "claim_active_task" not in reader_area
-    assert "asyncio.create_task(_run_chat" not in reader_area
+    assert "claim_active_task" not in text
+    assert "asyncio.create_task(_run_chat" not in text
+    assert "chat_task_launcher" in text
     assert "dispatch_chat_ws_message" in reader_area
     assert "def send_plan_command_result" in command_dispatch
     assert command_dispatch.count("await launch_chat_task") == 2
+    assert "class ChatTaskLauncher" in launcher
+    assert "claim_active_task" in launcher
+    assert "asyncio.create_task" in launcher
 
 
 def test_web_chat_route_uses_application_message_builder():
@@ -570,6 +575,22 @@ def test_web_chat_route_delegates_command_dispatch():
     assert "def dispatch_chat_ws_message" in command_dispatch
     assert "json.loads" in command_dispatch
     assert "msg_type" in command_dispatch
+
+
+def test_web_chat_route_delegates_ws_send():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    sender = (root / "web" / "chat_sender.py").read_text(encoding="utf-8")
+
+    assert "_write_lock" not in text
+    assert "send_json" not in text
+    assert "DisplayWireEvent" not in text
+    assert "DisplayEvent" not in text
+    assert "ChatWebSocketSender" in text
+    assert "class ChatWebSocketSender" in sender
+    assert "asyncio.Lock" in sender
+    assert "send_json" in sender
+    assert "to_wire" in sender
 
 
 def test_web_chat_route_delegates_run_finalization():
