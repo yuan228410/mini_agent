@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..application import chat_compact_service, chat_service, command_service, model_use_cases, plan_command_service, runtime_paths
-from ..core.runtime_factory import build_request_context, build_settings_snapshot
+from ..core.runtime_factory import build_request_context, build_session_runtime, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
 from ..application.config_service import ConfigMutationDependencies, ConfigPreviewDependencies, ConfigToolLoaderDependencies
@@ -205,6 +205,21 @@ def chat_rest_dependencies() -> chat_service.ChatRestDependencies:
         load_session_name=deps["load_session_name"],
         update_meta_cache=deps["update_meta_cache"],
         inject_todos=inject_todos,
+    )
+
+
+def chat_runtime_dependencies() -> chat_service.ChatRuntimeDependencies:
+    """Build Web chat runtime construction dependencies at the adapter boundary."""
+
+    from .deps import SUBAGENT_LOADER, _MCP_LOADER
+    from .session_manager import build_system_prompt
+
+    return chat_service.ChatRuntimeDependencies(
+        build_system_prompt=build_system_prompt,
+        settings_for_model=settings_for_model,
+        build_runtime=build_session_runtime,
+        subagent_loader=SUBAGENT_LOADER,
+        mcp_loader=_MCP_LOADER,
     )
 
 

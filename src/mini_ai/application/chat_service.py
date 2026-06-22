@@ -10,8 +10,8 @@ from typing import Any, Callable
 from ..core.display_protocol import DisplayProtocol
 from ..core.events import DisplayEvent, DisplayEventType
 from ..core.persister import HistoryPersister
-from ..core.runtime_context import SessionRuntimeContext
-from ..core.runtime_factory import build_request_context
+from ..core.runtime_context import SessionIdentity, SessionRuntimeContext
+from ..core.runtime_factory import build_request_context, build_session_runtime
 from ..core.runtime_types import (
     HistoryDBProtocol,
     MessageBusProtocol,
@@ -92,6 +92,21 @@ class TeamInboxInjectionResult:
 class TeamFollowupTiming:
     deadline: float
     poll_interval: float
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRuntimeDependencies:
+    build_system_prompt: Callable[[str, str, Path | None, str | None], str]
+    settings_for_model: Callable[[SettingsSnapshot, str | None], SettingsSnapshot]
+    build_runtime: Callable[..., SessionRuntimeContext]
+    subagent_loader: Any
+    mcp_loader: Any
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRuntimeBundle:
+    runtime: SessionRuntimeContext
+    settings: SettingsSnapshot | None
 
 
 PLAN_DISCUSSION_DISPLAY_CONTENT = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
@@ -175,6 +190,73 @@ def prepare_execution_turn(
     plan_svc = plan_service or PlanService()
     plan_svc.seed_execution_todos(artifact=approved_plan, session_key=session_key, display=display)
     messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": timestamp or now_ts(), "_internal": True})
+
+
+def ensure_session_system_prompt(
+    messages: list[MessageDict],
+    *,
+    username: str,
+    session_id: str,
+    base: Path | None,
+    workspace: str | None,
+    build_system_prompt: Callable[[str, str, Path | None, str | None], str],
+) -> None:
+    """Refresh placeholder system prompts before runtime construction."""
+
+    if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
+        messages[0]["content"] = build_system_prompt(username, session_id, base, workspace)
+
+
+def build_chat_runtime_bundle(
+    deps: ChatRuntimeDependencies,
+    *,
+    username: str,
+    workspace: str | None,
+    session_id: str,
+    base: Path | None,
+    messages: list[MessageDict],
+    display: DisplayProtocol | None,
+    components: dict[str, Any],
+    abort_event: threading.Event | None,
+    model_name: str | None,
+) -> ChatRuntimeBundle:
+    """Build a session runtime from adapter-neutral Web chat components."""
+
+    ensure_session_system_prompt(
+        messages,
+        username=username,
+        session_id=session_id,
+        base=base,
+        workspace=workspace,
+        build_system_prompt=deps.build_system_prompt,
+    )
+    base_settings = components.get("settings")
+    runtime_settings = deps.settings_for_model(base_settings, model_name) if base_settings else None
+    cfg = runtime_settings.model.to_dict() if runtime_settings else None
+    runtime = deps.build_runtime(
+        identity=SessionIdentity(
+            username=username or "default",
+            workspace=workspace or "default",
+            session_id=session_id,
+            project_path=components.get("project_path") or "",
+        ),
+        messages=messages,
+        display=display,
+        history_db=components.get("history_db"),
+        memory_store=components.get("store"),
+        skill_loader=components.get("skill_loader"),
+        subagent_loader=deps.subagent_loader,
+        bus=components.get("bus"),
+        team_mgr=components.get("team_mgr"),
+        blackboard=components.get("blackboard"),
+        abort_event=abort_event,
+        model_config=cfg,
+        settings=runtime_settings,
+        mcp_loader=deps.mcp_loader,
+        compactor=components.get("compactor"),
+        context_builder=components.get("ctx_builder"),
+    )
+    return ChatRuntimeBundle(runtime=runtime, settings=runtime_settings)
 
 
 def default_chat_tools(tool_registry: ToolRegistryProtocol) -> list[ToolDefinition]:

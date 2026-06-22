@@ -401,8 +401,9 @@ def test_web_runtime_paths_do_not_import_model_config_global():
     for rel in ["web/chat_runner.py", "web/routes/chat.py"]:
         text = (root / rel).read_text(encoding="utf-8")
         assert "MODEL_CONFIG" not in text
-    assert "settings_for_model" in (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
-    assert "request_context_for_settings" in (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    assert "settings_for_model" in runtime_helpers
+    assert "request_context_for_settings" in runtime_helpers
 
 
 def test_web_chat_route_does_not_import_stale_session_helpers():
@@ -500,6 +501,23 @@ def test_web_chat_route_uses_application_message_builder():
     assert "def build_user_message" in service
     assert "def append_user_message" in service
     assert "image_url" in service
+
+
+def test_web_chat_route_delegates_queue_event_handling():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    helper = (root / "web" / "chat_events.py").read_text(encoding="utf-8")
+
+    assert "initial_chat_usage" in text
+    assert "normalize_chat_queue_event" in text
+    assert "drain_ready_chat_events" in text
+    assert "complete_usage = {" not in text
+    assert "queue.get_nowait()" not in text
+    assert "prompt_tokens" not in text.split("complete_usage = initial_chat_usage()", 1)[1].split("usage = complete_usage", 1)[0]
+    assert "TERMINAL_CHAT_EVENTS" in helper
+    assert "class ChatQueueEvent" in helper
+    assert "def normalize_chat_queue_event" in helper
+    assert "def drain_ready_chat_events" in helper
 
 
 def test_web_chat_runner_delegates_session_auto_naming():
@@ -627,6 +645,28 @@ def test_web_chat_runner_delegates_team_followup_timing():
     assert "def team_followup_timing" in service
     assert "lead_wait" in service
     assert "lead_poll_interval" in service
+
+
+def test_web_chat_runner_delegates_runtime_setup():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "build_session_runtime" not in runner
+    assert "SessionIdentity" not in runner
+    assert "settings_for_model" not in runner
+    assert "SUBAGENT_LOADER" not in runner
+    assert "_MCP_LOADER" not in runner
+    assert "build_chat_runtime_bundle" in runner
+    assert "chat_runtime_dependencies" in runner
+    assert "def chat_runtime_dependencies" in runtime_helpers
+    assert "class ChatRuntimeDependencies" in service
+    assert "class ChatRuntimeBundle" in service
+    assert "def ensure_session_system_prompt" in service
+    assert "def build_chat_runtime_bundle" in service
+    assert "build_session_runtime" in service
+    assert "SessionIdentity" in service
 
 
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():

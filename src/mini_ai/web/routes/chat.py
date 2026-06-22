@@ -22,6 +22,7 @@ from ..route_types import (
     ImageUpload,
     RouteErrorResponse,
 )
+from ..chat_events import drain_ready_chat_events, initial_chat_usage, normalize_chat_queue_event
 from ..chat_runner import run_tool_loop_sync
 from ..runtime_helpers import chat_compact_dependencies, chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies
 
@@ -115,7 +116,7 @@ async def chat_ws_endpoint(ws: WebSocket):
             _executor, run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name, plan_turn, approved_plan
         )
 
-        complete_usage = {"prompt_tokens": 0, "completion_tokens": 0}
+        complete_usage = initial_chat_usage()
         aborted = False
         got_terminal = False
         try:
@@ -125,34 +126,27 @@ async def chat_ws_endpoint(ws: WebSocket):
                     break
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=0.15)
-                    event["data"]["session_id"] = sid
-                    logger.info(f'[Web] WS dequeue: event={event["event"]} sid={sid} has_error={bool(event["data"].get("error"))}')
-                    if event["event"] == "complete" and "prompt_tokens" in event["data"]:
-                        complete_usage = {"prompt_tokens": event["data"]["prompt_tokens"], "completion_tokens": event["data"].get("completion_tokens", 0)}
-                    if event["event"] in ("done", "aborted", "error", "complete"):
-                        logger.debug(f'[Web] terminal event from queue sid={sid} event={event["event"]}')
-                    await _send(event)
-                    logger.info(f'[Web] WS after _send: event={event["event"]} sid={sid}')
-                    if event["event"] in ("done", "aborted", "error", "complete"):
+                    queued = normalize_chat_queue_event(event, session_id=sid, usage=complete_usage)
+                    complete_usage = queued.usage
+                    logger.info(f'[Web] WS dequeue: event={queued.wire["event"]} sid={sid} has_error={bool(queued.wire["data"].get("error"))}')
+                    if queued.terminal:
+                        logger.debug(f'[Web] terminal event from queue sid={sid} event={queued.wire["event"]}')
+                    await _send(queued.wire)
+                    logger.info(f'[Web] WS after _send: event={queued.wire["event"]} sid={sid}')
+                    if queued.terminal:
                         got_terminal = True
-                        logger.info(f'[Web] WS breaking: event={event["event"]} sid={sid}')
+                        logger.info(f'[Web] WS breaking: event={queued.wire["event"]} sid={sid}')
                         break
                 except asyncio.TimeoutError:
                     if future.done():
-                        for _ in range(10):
-                            try:
-                                event = queue.get_nowait()
-                                event["data"]["session_id"] = sid
-                                if event["event"] == "complete" and "prompt_tokens" in event["data"]:
-                                    complete_usage = {"prompt_tokens": event["data"]["prompt_tokens"], "completion_tokens": event["data"].get("completion_tokens", 0)}
-                                if event["event"] in ("done", "aborted", "error", "complete"):
-                                    logger.debug(f'[Web] drained terminal event sid={sid} event={event["event"]}')
-                                await _send(event)
-                                logger.info(f'[Web] WS drain: event={event["event"]} sid={sid}')
-                                if event["event"] in ("done", "aborted", "error", "complete"):
-                                    got_terminal = True
-                                    break
-                            except asyncio.QueueEmpty:
+                        for queued in drain_ready_chat_events(queue, session_id=sid, usage=complete_usage):
+                            complete_usage = queued.usage
+                            if queued.terminal:
+                                logger.debug(f'[Web] drained terminal event sid={sid} event={queued.wire["event"]}')
+                            await _send(queued.wire)
+                            logger.info(f'[Web] WS drain: event={queued.wire["event"]} sid={sid}')
+                            if queued.terminal:
+                                got_terminal = True
                                 break
                         break
         except Exception as e:

@@ -4,24 +4,20 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
-from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, default_chat_tools, handle_invalid_chat_result, inject_team_inbox_messages, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools, should_poll_team_followup, team_followup_timing
+from ..llm import get_usage
+from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, build_chat_runtime_bundle, default_chat_tools, handle_invalid_chat_result, inject_team_inbox_messages, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools, should_poll_team_followup, team_followup_timing
 from ..application.session_service import maybe_auto_name_session
-from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
-from ..core.runtime_context import SessionIdentity
 from ..core.runtime_types import MessageDict, ToolDefinition
-from ..tools import inject_todos as _inject_todos
 from ..logger import logger, set_session_id
-from ..plan.artifact_parser import strip_artifact_blocks
 from ..plan.store import PlanStore
 from .display import WebDisplay
 from .session_manager import (
     SessionManager, cache_key, safe_queue_put,
-    resolve_base, get_or_create_components, build_system_prompt,
+    resolve_base, get_or_create_components,
     _save_session_name, _update_meta_cache,
 )
-from .runtime_helpers import settings_for_model
+from .runtime_helpers import chat_runtime_dependencies
 
 # 线程池配置
 _MAX_CONCURRENT_SESSIONS = 10
@@ -69,37 +65,19 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 comp_key = session_key.split(":")[-1] if ":" in session_key else session_key
                 comp = get_or_create_components(username, comp_key, base, workspace)
 
-                if messages and messages[0]["role"] == "system" and len(messages[0]["content"]) < 50:
-                    messages[0]["content"] = build_system_prompt(username, comp_key, base, workspace)
-
                 disp = WebDisplay(queue, loop, session_id=comp_key, suppress_text=plan_turn)
-                from .deps import SUBAGENT_LOADER, _MCP_LOADER
-                base_settings = comp.get("settings")
-                runtime_settings = settings_for_model(base_settings, model_name) if base_settings else None
-                cfg = runtime_settings.model.to_dict() if runtime_settings else None
-                runtime = build_session_runtime(
-                    identity=SessionIdentity(
-                        username=username or "default",
-                        workspace=workspace or "default",
-                        session_id=comp_key,
-                        project_path=comp.get("project_path") or "",
-                    ),
+                runtime = build_chat_runtime_bundle(
+                    chat_runtime_dependencies(),
+                    username=username,
+                    workspace=workspace,
+                    session_id=comp_key,
+                    base=base,
                     messages=messages,
                     display=disp,
-                    history_db=comp.get("history_db"),
-                    memory_store=comp.get("store"),
-                    skill_loader=comp.get("skill_loader"),
-                    subagent_loader=SUBAGENT_LOADER,
-                    bus=comp.get("bus"),
-                    team_mgr=comp.get("team_mgr"),
-                    blackboard=comp.get("blackboard"),
+                    components=comp,
                     abort_event=abort_event,
-                    model_config=cfg,
-                    settings=runtime_settings,
-                    mcp_loader=_MCP_LOADER,
-                    compactor=comp.get("compactor"),
-                    context_builder=comp.get("ctx_builder"),
-                )
+                    model_name=model_name,
+                ).runtime
                 disp._usage_provider = runtime.usage_collector.snapshot if runtime.usage_collector else None
                 if runtime.execution_budget:
                     disp._stream_flush_ms = runtime.execution_budget.stream_chunk_flush_ms
