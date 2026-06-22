@@ -2181,6 +2181,8 @@ def test_web_config_routes_use_application_service_boundary():
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
     config_dependencies = (repo / "src/mini_ai/web/config_dependencies.py").read_text()
     config_service = (repo / "src/mini_ai/application/config_service.py").read_text()
+    config_preview = (repo / "src/mini_ai/application/config_preview.py").read_text()
+    config_mutation = (repo / "src/mini_ai/application/config_mutation.py").read_text()
 
     preview_area = routes_config.split('@router.get("/settings")', 1)[0]
     assert "get_model_config" not in preview_area
@@ -2220,15 +2222,15 @@ def test_web_config_routes_use_application_service_boundary():
     assert "class ConfigPreviewDependencies" in config_service
     assert "class ConfigToolLoaderDependencies" in config_service
     assert "class ConfigMutationDependencies" in config_service
-    assert "def config_summary" in config_service
-    assert "def system_prompt_preview" in config_service
-    assert "def tools_preview" in config_service
-    assert "def settings_payload" in config_service
-    assert "def update_settings" in config_service
-    assert "def add_model" in config_service
-    assert "def remove_model" in config_service
-    assert "def add_mcp_server" in config_service
-    assert "def remove_mcp_server" in config_service
+    assert "def config_summary" in config_preview
+    assert "def system_prompt_preview" in config_preview
+    assert "def tools_preview" in config_preview
+    assert "def settings_payload" in config_mutation
+    assert "def update_settings" in config_mutation
+    assert "def add_model" in config_mutation
+    assert "def remove_model" in config_mutation
+    assert "def add_mcp_server" in config_mutation
+    assert "def remove_mcp_server" in config_mutation
 
 
 def test_web_command_routes_use_application_service_boundary():
