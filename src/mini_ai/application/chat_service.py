@@ -24,6 +24,7 @@ from ..core.runtime_types import (
 from ..core.settings import ModelSettings, SettingsSnapshot
 from ..llm import chat as llm_chat, get_usage, reset_usage
 from ..plan.artifact_parser import strip_artifact_blocks
+from ..plan.prompts import build_plan_user_message
 from ..plan.service import PlanService
 from ..plan.store import PlanStore
 from ..plan.tool_policy import ToolPolicy, filter_tools
@@ -120,6 +121,35 @@ def persist_latest_user_message(history_db: HistoryDBProtocol, *, workspace: str
         content, metadata = persisted_user_payload(user_msgs[-1])
         history_db.append(workspace, session_id, "user", content, metadata=metadata)
     return user_msgs
+
+
+def prepare_plan_turn(messages: list[MessageDict], *, current_plan: MessageDict | None, selected_option_id: str | None) -> None:
+    """Wrap the latest user message as a plan-mode instruction."""
+
+    plan_user = next((message for message in reversed(messages) if message.get("role") == "user"), None)
+    if plan_user and isinstance(plan_user.get("content"), str):
+        plan_user["_plan_original_content"] = plan_user.get("content", "")
+        plan_user["content"] = build_plan_user_message(
+            plan_user.get("content", ""),
+            current_plan=current_plan,
+            selected_option_id=selected_option_id,
+        )
+
+
+def prepare_execution_turn(
+    messages: list[MessageDict],
+    *,
+    approved_plan: MessageDict,
+    session_key: str,
+    display: DisplayProtocol | None = None,
+    timestamp: str | None = None,
+    plan_service: PlanService | None = None,
+) -> None:
+    """Seed execution todos and append the internal execution instruction."""
+
+    plan_svc = plan_service or PlanService()
+    plan_svc.seed_execution_todos(artifact=approved_plan, session_key=session_key, display=display)
+    messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": timestamp or now_ts(), "_internal": True})
 
 
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:

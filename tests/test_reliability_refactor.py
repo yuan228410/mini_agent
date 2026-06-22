@@ -531,6 +531,23 @@ def test_web_chat_runner_delegates_user_history_persistence():
     assert "_plan_original_content" in service
 
 
+def test_web_chat_runner_delegates_plan_turn_preparation():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "build_plan_user_message" not in runner
+    assert "PlanService" not in runner
+    assert "seed_execution_todos" not in runner
+    assert "execution_instruction" not in runner
+    assert "prepare_plan_turn" in runner
+    assert "prepare_execution_turn" in runner
+    assert "def prepare_plan_turn" in service
+    assert "def prepare_execution_turn" in service
+    assert "build_plan_user_message" in service
+    assert "PlanService" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

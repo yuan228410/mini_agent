@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, persist_latest_user_message
+from ..application.chat_service import ApplicationService, RunTurnOptions, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -14,8 +14,6 @@ from ..core.runtime_types import MessageDict, ToolDefinition
 from ..tools import inject_todos as _inject_todos
 from ..logger import logger, set_session_id
 from ..plan.artifact_parser import strip_artifact_blocks
-from ..plan.prompts import build_plan_user_message
-from ..plan.service import PlanService
 from ..plan.store import PlanStore
 from ..plan.tool_policy import ToolPolicy, filter_tools
 from .display import WebDisplay
@@ -119,20 +117,11 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 plan_state = sm.get_plan_state(session_key)
                 if plan_turn:
                     tools = filter_tools(all_tools, ToolPolicy.PLAN_READONLY)
-                    plan_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
-                    if plan_user and isinstance(plan_user.get("content"), str):
-                        plan_user["_plan_original_content"] = plan_user.get("content", "")
-                        plan_user["content"] = build_plan_user_message(
-                            plan_user.get("content", ""),
-                            current_plan=plan_state.current_plan,
-                            selected_option_id=plan_state.selected_option_id,
-                        )
+                    prepare_plan_turn(messages, current_plan=plan_state.current_plan, selected_option_id=plan_state.selected_option_id)
                 else:
                     tools = filter_tools(all_tools, ToolPolicy.EXECUTION)
                     if approved_plan:
-                        plan_svc = PlanService()
-                        plan_svc.seed_execution_todos(artifact=approved_plan, session_key=session_key, display=disp)
-                        messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": now_ts(), "_internal": True})
+                        prepare_execution_turn(messages, approved_plan=approved_plan, session_key=session_key, display=disp)
 
                 user_msgs = persist_latest_user_message(comp["history_db"], workspace=workspace or "default", session_id=comp_key, messages=messages)
 
