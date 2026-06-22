@@ -11,7 +11,7 @@ import threading
 
 from fastapi import APIRouter, Query, WebSocket
 
-from ...application import chat_service
+from ...application import chat_service, plan_command_service
 from ...core.events import DisplayEvent, DisplayEventType
 from ...core.runtime_types import DisplayWireEvent, MessageDict, PlanArtifactDict
 from ...logger import logger
@@ -24,9 +24,7 @@ from ..route_types import (
     RouteErrorResponse,
 )
 from ..chat_runner import run_tool_loop_sync
-from ..runtime_helpers import chat_rest_dependencies, chat_session_dependencies, request_context_for_settings, settings_for_model
-from ...plan.service import PlanService
-from ...plan.store import PlanStore
+from ..runtime_helpers import chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies, request_context_for_settings, settings_for_model
 
 router = APIRouter()
 
@@ -45,6 +43,7 @@ async def chat_ws_endpoint(ws: WebSocket):
     _write_lock = asyncio.Lock()
     _ws_username: str | None = None
     deps = _chat_deps()
+    plan_deps = plan_command_dependencies()
     sm = deps["session_manager"]
     cache_key = deps["cache_key"]
     resolve_base = deps["resolve_base"]
@@ -61,13 +60,6 @@ async def chat_ws_endpoint(ws: WebSocket):
         if session_id:
             payload["session_id"] = session_id
         return DisplayEvent(DisplayEventType.ERROR, payload).to_wire()
-
-    def _plan_event(kind: str, session_id: str | None = None, **data) -> DisplayWireEvent:
-        payload = {"kind": kind}
-        payload.update(data)
-        if session_id:
-            payload["session_id"] = session_id
-        return DisplayEvent(DisplayEventType.PLAN_EVENT, payload).to_wire()
 
     async def _send(data: DisplayWireEvent | DisplayEvent) -> None:
         wire = data.to_wire() if isinstance(data, DisplayEvent) else data
@@ -240,71 +232,23 @@ async def chat_ws_endpoint(ws: WebSocket):
                     ws_name = data.get("workspace")
 
                     if msg_type and msg_type.startswith("plan."):
-                        if not session_id:
-                            await _send(_error_event("请先选择会话"))
-                            continue
-                        base = resolve_base(username, ws_name)
-                        sid, messages = get_or_create_session(username, session_id, base, ws_name)
-                        comp = get_or_create_components(username, sid, base, ws_name)
-                        session_key = cache_key(username, ws_name, sid)
-                        store = PlanStore(comp["history_db"], ws_name or "default", sid)
-                        plan_svc = PlanService()
-
-                        try:
-                            if msg_type == "plan.start":
-                                artifact = plan_svc.start(session_key=session_key, sm=sm, store=store, goal=data.get("goal", ""))
-                                await _send(_plan_event("state.changed", sid, state=artifact.status, mode="plan"))
-                                await _send(_plan_event("artifact.updated", sid, plan=artifact.to_dict()))
-                                continue
-                            if msg_type == "plan.select_option":
-                                artifact = plan_svc.select_option(session_key=session_key, sm=sm, store=store, plan_id=data.get("plan_id", ""), option_id=data.get("option_id", ""))
-                                await _send(_plan_event("option.selected", sid, option_id=artifact.selected_option_id, plan=artifact.to_dict()))
-                                await _send(_plan_event("approval.required", sid, plan=artifact.to_dict(), plan_id=artifact.plan_id, revision=artifact.revision))
-                                continue
-                            if msg_type == "plan.apply_decision":
-                                artifact = plan_svc.apply_decision(
-                                    session_key=session_key,
-                                    sm=sm,
-                                    store=store,
-                                    plan_id=data.get("plan_id", ""),
-                                    step_id=data.get("step_id", ""),
-                                    decision_id=data.get("decision_id", ""),
-                                    selected_option_ids=data.get("selected_option_ids") or [],
-                                    custom_value=data.get("custom_value", ""),
-                                    revision=int(data["revision"]) if data.get("revision") is not None else None,
-                                )
-                                await _send(_plan_event("decision.applied", sid, plan=artifact.to_dict(), step_id=data.get("step_id", ""), decision_id=data.get("decision_id", "")))
-                                await _send(_plan_event("artifact.updated", sid, plan=artifact.to_dict()))
-                                if artifact.status == "awaiting_approval":
-                                    await _send(_plan_event("approval.required", sid, plan=artifact.to_dict(), plan_id=artifact.plan_id, revision=artifact.revision))
-                                continue
-                            if msg_type == "plan.cancel":
-                                plan_svc.cancel(session_key=session_key, sm=sm, store=store)
-                                await _send(_plan_event("cancelled", sid, mode="chat"))
-                                continue
-                            if msg_type == "plan.approve":
-                                artifact = plan_svc.approve(session_key=session_key, sm=sm, store=store, plan_id=data.get("plan_id", ""), revision=int(data.get("revision") or 0))
-                                executing_artifact = plan_svc.mark_executing(session_key=session_key, sm=sm, store=store, artifact=artifact)
-                                await _send(_plan_event("approved", sid, plan=artifact.to_dict()))
-                                await _send(_plan_event("execution.started", sid, plan=executing_artifact.to_dict(), mode="execute"))
-                                task = asyncio.create_task(_run_chat(sid, username, "", ws_name, None, False, executing_artifact.to_dict()))
-                                if not sm.claim_active_task(session_key, task):
-                                    task.cancel()
-                                    await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
-                                continue
-                            if msg_type in ("plan.message", "plan.revise"):
-                                user_message = data.get("message", "").strip()
-                                if not user_message:
-                                    await _send(_error_event("计划消息不能为空", sid))
-                                    continue
-                                task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, data.get("images"), True, None))
-                                if not sm.claim_active_task(session_key, task):
-                                    task.cancel()
-                                    await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
-                                continue
-                        except Exception as e:
-                            await _send(_plan_event("error", sid, error=str(e)))
-                            continue
+                        result = plan_command_service.handle_plan_command(
+                            plan_deps,
+                            username=username,
+                            session_id=session_id,
+                            workspace=ws_name,
+                            msg_type=msg_type,
+                            payload=data,
+                        )
+                        for event in result.events:
+                            await _send(event)
+                        if result.run:
+                            run = result.run
+                            task = asyncio.create_task(_run_chat(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan))
+                            if not sm.claim_active_task(result.session_key or cache_key(username, ws_name, run.sid), task):
+                                task.cancel()
+                                await _send(_error_event("当前会话正在生成，请稍后再发送", run.sid))
+                        continue
 
                     if msg_type != "chat":
                         continue
@@ -349,36 +293,15 @@ async def chat_ws_endpoint(ws: WebSocket):
                     # 处理 /act 命令（批准当前计划并执行）
                     if user_message == "/act":
                         ws_name = data.get("workspace")
-                        if not session_id:
-                            await _send(_error_event("请先选择会话"))
-                            continue
-                        base = resolve_base(username, ws_name)
-                        sid, _ = get_or_create_session(username, session_id, base, ws_name)
-                        comp = get_or_create_components(username, sid, base, ws_name)
-                        session_key = cache_key(username, ws_name, sid)
-                        store = PlanStore(comp["history_db"], ws_name or "default", sid)
-                        artifact_dict = sm.get_plan_state(session_key).current_plan or store.current()
-                        if not artifact_dict:
-                            await _send(_plan_event("error", sid, error="当前没有可审批的计划"))
-                            continue
-                        try:
-                            plan_svc = PlanService()
-                            artifact = plan_svc.approve(
-                                session_key=session_key,
-                                sm=sm,
-                                store=store,
-                                plan_id=artifact_dict.get("plan_id", ""),
-                                revision=int(artifact_dict.get("revision") or 0),
-                            )
-                            executing_artifact = plan_svc.mark_executing(session_key=session_key, sm=sm, store=store, artifact=artifact)
-                            await _send(_plan_event("approved", sid, plan=artifact.to_dict()))
-                            await _send(_plan_event("execution.started", sid, plan=executing_artifact.to_dict(), mode="execute"))
-                            task = asyncio.create_task(_run_chat(sid, username, "", ws_name, None, False, executing_artifact.to_dict()))
-                            if not sm.claim_active_task(session_key, task):
+                        result = plan_command_service.approve_current_plan(plan_deps, username=username, session_id=session_id, workspace=ws_name)
+                        for event in result.events:
+                            await _send(event)
+                        if result.run:
+                            run = result.run
+                            task = asyncio.create_task(_run_chat(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan))
+                            if not sm.claim_active_task(result.session_key or cache_key(username, ws_name, run.sid), task):
                                 task.cancel()
-                                await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
-                        except Exception as e:
-                            await _send(_plan_event("error", sid, error=str(e)))
+                                await _send(_error_event("当前会话正在生成，请稍后再发送", run.sid))
                         continue
 
                     if not session_id:

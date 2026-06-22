@@ -436,6 +436,27 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
     assert "def chat_rest_dependencies" in runtime_helpers
 
 
+def test_web_chat_plan_commands_delegate_to_application_service():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    service = (root / "application" / "plan_command_service.py").read_text(encoding="utf-8")
+
+    assert "from ...plan.service import" not in text
+    assert "from ...plan.store import" not in text
+    assert "PlanService" not in text
+    assert "PlanStore" not in text
+    assert "plan_command_service.handle_plan_command" in text
+    assert "plan_command_service.approve_current_plan" in text
+    assert "plan_command_dependencies" in text
+    assert "def plan_command_dependencies" in runtime_helpers
+    assert "class PlanCommandDependencies" in service
+    assert "def handle_plan_command" in service
+    assert "def approve_current_plan" in service
+    assert "PlanService" in service
+    assert "PlanStore" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

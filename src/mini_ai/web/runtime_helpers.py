@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..application import chat_service, command_service, model_use_cases, runtime_paths
+from ..application import chat_service, command_service, model_use_cases, plan_command_service, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
@@ -205,6 +205,19 @@ def chat_rest_dependencies() -> chat_service.ChatRestDependencies:
         load_session_name=deps["load_session_name"],
         update_meta_cache=deps["update_meta_cache"],
         inject_todos=inject_todos,
+    )
+
+
+def plan_command_dependencies() -> plan_command_service.PlanCommandDependencies:
+    """Build Web plan command dependencies at the adapter boundary."""
+
+    deps = chat_session_dependencies()
+    return plan_command_service.PlanCommandDependencies(
+        session_manager=deps["session_manager"],
+        cache_key=deps["cache_key"],
+        resolve_base=deps["resolve_base"],
+        get_or_create_session=deps["get_or_create_session"],
+        get_or_create_components=deps["get_or_create_components"],
     )
 
 
