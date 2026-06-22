@@ -10,7 +10,7 @@ import threading
 class TestWebRuntimeSettings:
     def test_session_components_include_settings_snapshot(self, tmp_path, monkeypatch):
         from mini_ai.core import SettingsSnapshot
-        from mini_ai.web import session_manager as smod
+        from mini_ai.web import session_components as scmod
         from mini_ai.web.session_manager import SessionManager, get_or_create_components
 
         class FakeWorkspaceManager:
@@ -41,15 +41,15 @@ class TestWebRuntimeSettings:
             def __init__(self, *args, **kwargs):
                 self.context_length = kwargs.get("context_length")
 
-        monkeypatch.setattr(smod, "WorkspaceManager", FakeWorkspaceManager)
-        monkeypatch.setattr(smod, "user_data_dir", lambda username: tmp_path / username)
+        monkeypatch.setattr(scmod, "WorkspaceManager", FakeWorkspaceManager)
+        monkeypatch.setattr(scmod, "user_data_dir", lambda username: tmp_path / username)
         monkeypatch.setattr("mini_ai.memory.MemoryStore", FakeMemoryStore)
         monkeypatch.setattr("mini_ai.memory.HistoryDBPool", FakeHistoryDBPool)
         monkeypatch.setattr("mini_ai.memory.Compactor", FakeCompactor)
         monkeypatch.setattr("mini_ai.skills.SkillLoader", FakeSkillLoader)
         monkeypatch.setattr("mini_ai.context.ContextBuilder", FakeContextBuilder)
         monkeypatch.setattr(
-            smod,
+            scmod,
             "build_settings_snapshot",
             lambda: SettingsSnapshot.from_config_dicts(
                 model_config={"api_url": "u", "api_key": "k", "model": "m", "context_length": 1234},
