@@ -523,6 +523,7 @@ def test_web_chat_route_uses_application_message_builder():
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     run_context = (root / "web" / "chat_run_context.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    turn = (root / "application" / "chat_turn.py").read_text(encoding="utf-8")
 
     assert "MessageDict" not in text
     assert "content_blocks" not in text
@@ -530,9 +531,9 @@ def test_web_chat_route_uses_application_message_builder():
     assert "now_ts" not in text
     assert "chat_service.append_user_message" not in text
     assert "chat_service.append_user_message" in run_context
-    assert "def build_user_message" in service
-    assert "def append_user_message" in service
-    assert "image_url" in service
+    assert "def build_user_message" in turn
+    assert "def append_user_message" in turn
+    assert "image_url" in turn
 
 
 def test_web_chat_route_delegates_queue_event_handling():
@@ -790,22 +791,24 @@ def test_web_chat_runner_delegates_user_history_persistence():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    turn = (root / "application" / "chat_turn.py").read_text(encoding="utf-8")
 
     assert "persist_latest_user_message" not in runner
     assert "import json" not in runner
     assert "user_meta" not in runner
     assert "persisted_user_content" not in runner
-    assert "def visible_user_messages" in service
-    assert "def persisted_user_payload" in service
-    assert "def persist_latest_user_message" in service
-    assert "def prepare_chat_turn" in service
-    assert "_plan_original_content" in service
+    assert "def visible_user_messages" in turn
+    assert "def persisted_user_payload" in turn
+    assert "def persist_latest_user_message" in turn
+    assert "def prepare_chat_turn" in turn
+    assert "_plan_original_content" in turn
 
 
 def test_web_chat_runner_delegates_plan_turn_preparation():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    turn = (root / "application" / "chat_turn.py").read_text(encoding="utf-8")
 
     assert "build_plan_user_message" not in runner
     assert "PlanService" not in runner
@@ -814,16 +817,17 @@ def test_web_chat_runner_delegates_plan_turn_preparation():
     assert "prepare_plan_turn" not in runner
     assert "prepare_execution_turn" not in runner
     assert "prepare_chat_turn" in runner
-    assert "def prepare_plan_turn" in service
-    assert "def prepare_execution_turn" in service
-    assert "build_plan_user_message" in service
-    assert "PlanService" in service
+    assert "def prepare_plan_turn" in turn
+    assert "def prepare_execution_turn" in turn
+    assert "build_plan_user_message" in turn
+    assert "PlanService" in turn
 
 
 def test_web_chat_runner_delegates_tool_selection_policy():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    turn = (root / "application" / "chat_turn.py").read_text(encoding="utf-8")
 
     assert "ToolPolicy" not in runner
     assert "filter_tools" not in runner
@@ -831,17 +835,18 @@ def test_web_chat_runner_delegates_tool_selection_policy():
     assert "default_chat_tools" not in runner
     assert "select_turn_tools" not in runner
     assert "prepare_chat_turn" in runner
-    assert "def default_chat_tools" in service
-    assert "def select_turn_tools" in service
-    assert "ToolPolicy.PLAN_READONLY" in service
-    assert "ToolPolicy.EXECUTION" in service
-    assert "filter_tools" in service
+    assert "def default_chat_tools" in turn
+    assert "def select_turn_tools" in turn
+    assert "ToolPolicy.PLAN_READONLY" in turn
+    assert "ToolPolicy.EXECUTION" in turn
+    assert "filter_tools" in turn
 
 
 def test_web_chat_runner_delegates_error_response_construction():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    response = (root / "application" / "chat_response.py").read_text(encoding="utf-8")
 
     assert "handle_invalid_chat_result" in runner
     assert "valid_assistant_result" in runner
@@ -849,35 +854,38 @@ def test_web_chat_runner_delegates_error_response_construction():
     assert "error_context" not in runner
     assert "last_tool_calls" not in runner
     assert "err_text =" not in runner
-    assert "def fallback_error_text" in service
-    assert "def chat_error_context" in service
-    assert "def valid_assistant_result" in service
-    assert "def handle_invalid_chat_result" in service
-    assert "DisplayEventType.COMPLETE" in service
-    assert "history_db.append(workspace, history_session_id, \"assistant\", err_text)" in service
+    assert "def fallback_error_text" in response
+    assert "def chat_error_context" in response
+    assert "def valid_assistant_result" in response
+    assert "def handle_invalid_chat_result" in response
+    assert "DisplayEventType.COMPLETE" in response
+    assert "history_db.append(workspace, history_session_id, \"assistant\", err_text)" in response
 
 
 def test_web_chat_runner_delegates_assistant_response_persistence():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    response = (root / "application" / "chat_response.py").read_text(encoding="utf-8")
 
     assert "计划已更新" not in runner
     assert "asst_ts" not in runner
     assert "append_chat_assistant_message" not in runner
     assert "apply_plan_discussion_response" not in runner
     assert "finalize_chat_assistant_response" in runner
-    assert "PLAN_DISCUSSION_DISPLAY_CONTENT" in service
-    assert "def apply_plan_discussion_response" in service
-    assert "def append_chat_assistant_message" in service
-    assert "def finalize_chat_assistant_response" in service
-    assert "kind\": \"chat\"" in service
+    assert "PLAN_DISCUSSION_DISPLAY_CONTENT" in response
+    assert "def apply_plan_discussion_response" in response
+    assert "def append_chat_assistant_message" in response
+    assert "def finalize_chat_assistant_response" in response
+    assert "kind\": \"chat\"" in response
 
 
 def test_web_chat_runner_delegates_team_followup_injection():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    response = (root / "application" / "chat_response.py").read_text(encoding="utf-8")
+    models = (root / "application" / "chat_models.py").read_text(encoding="utf-8")
 
     assert "format_inbox_messages" not in runner
     assert "队友回禀" not in runner
@@ -885,26 +893,28 @@ def test_web_chat_runner_delegates_team_followup_injection():
     assert "from ..utils import now_ts" not in runner
     assert "should_poll_team_followup" in runner
     assert "inject_team_inbox_messages" in runner
-    assert "class TeamInboxInjectionResult" in service
-    assert "def should_poll_team_followup" in service
-    assert "def inject_team_inbox_messages" in service
-    assert "TEAM_FOLLOWUP_INSTRUCTION" in service
-    assert "format_inbox_messages" in service
+    assert "class TeamInboxInjectionResult" in models
+    assert "def should_poll_team_followup" in response
+    assert "def inject_team_inbox_messages" in response
+    assert "TEAM_FOLLOWUP_INSTRUCTION" in response
+    assert "format_inbox_messages" in response
 
 
 def test_web_chat_runner_delegates_team_followup_timing():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    response = (root / "application" / "chat_response.py").read_text(encoding="utf-8")
+    models = (root / "application" / "chat_models.py").read_text(encoding="utf-8")
 
     assert "lead_wait" not in runner
     assert "lead_poll_interval" not in runner
     assert "timeout_settings" not in runner
     assert "team_followup_timing" in runner
-    assert "class TeamFollowupTiming" in service
-    assert "def team_followup_timing" in service
-    assert "lead_wait" in service
-    assert "lead_poll_interval" in service
+    assert "class TeamFollowupTiming" in models
+    assert "def team_followup_timing" in response
+    assert "lead_wait" in response
+    assert "lead_poll_interval" in response
 
 
 def test_web_chat_runner_delegates_runtime_setup():
@@ -912,6 +922,8 @@ def test_web_chat_runner_delegates_runtime_setup():
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     chat_dependencies = (root / "web" / "chat_dependencies.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+    turn = (root / "application" / "chat_turn.py").read_text(encoding="utf-8")
+    models = (root / "application" / "chat_models.py").read_text(encoding="utf-8")
 
     assert "build_session_runtime" not in runner
     assert "SessionIdentity" not in runner
@@ -922,11 +934,11 @@ def test_web_chat_runner_delegates_runtime_setup():
     assert "chat_runtime_dependencies" in runner
     assert "def chat_runtime_dependencies" in chat_dependencies
     assert "class ChatRuntimeDependencies" in service
-    assert "class ChatRuntimeBundle" in service
-    assert "def ensure_session_system_prompt" in service
-    assert "def build_chat_runtime_bundle" in service
-    assert "build_session_runtime" in service
-    assert "SessionIdentity" in service
+    assert "class ChatRuntimeBundle" in models
+    assert "def ensure_session_system_prompt" in turn
+    assert "def build_chat_runtime_bundle" in turn
+    assert "build_session_runtime" in chat_dependencies
+    assert "SessionIdentity" in turn
 
 
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
