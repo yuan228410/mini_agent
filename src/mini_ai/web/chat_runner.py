@@ -5,12 +5,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage
-from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, build_chat_runtime_bundle, default_chat_tools, handle_invalid_chat_result, inject_team_inbox_messages, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools, should_poll_team_followup, team_followup_timing
+from ..application.chat_service import ApplicationService, RunTurnOptions, build_chat_runtime_bundle, finalize_chat_assistant_response, handle_invalid_chat_result, inject_team_inbox_messages, prepare_chat_turn, should_poll_team_followup, team_followup_timing, valid_assistant_result
 from ..application.session_service import maybe_auto_name_session
 from ..core.events import DisplayEvent, DisplayEventType
 from ..core.runtime_types import MessageDict, ToolDefinition
 from ..logger import logger, set_session_id
-from ..plan.store import PlanStore
 from .display import WebDisplay
 from .session_manager import (
     SessionManager, cache_key, safe_queue_put,
@@ -82,22 +81,25 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 if runtime.execution_budget:
                     disp._stream_flush_ms = runtime.execution_budget.stream_chunk_flush_ms
                     disp._stream_max_chars = runtime.execution_budget.stream_chunk_max_chars
-                tool_registry = runtime.tool_registry
                 ctx = runtime.request_context
                 settings = runtime.settings
 
-                if tools is None:
-                    tools = default_chat_tools(tool_registry)
-                all_tools = tools
-
-                plan_state = sm.get_plan_state(session_key)
-                tools = select_turn_tools(all_tools, plan_turn=plan_turn)
-                if plan_turn:
-                    prepare_plan_turn(messages, current_plan=plan_state.current_plan, selected_option_id=plan_state.selected_option_id)
-                elif approved_plan:
-                    prepare_execution_turn(messages, approved_plan=approved_plan, session_key=session_key, display=disp)
-
-                user_msgs = persist_latest_user_message(comp["history_db"], workspace=workspace or "default", session_id=comp_key, messages=messages)
+                prepared = prepare_chat_turn(
+                    runtime=runtime,
+                    messages=messages,
+                    tools=tools,
+                    history_db=comp["history_db"],
+                    workspace=workspace or "default",
+                    session_id=comp_key,
+                    session_key=session_key,
+                    plan_state_store=sm,
+                    plan_turn=plan_turn,
+                    approved_plan=approved_plan,
+                    max_turns=max_turns,
+                    abort_event=abort_event,
+                    display=disp,
+                )
+                tools = prepared.tools
 
                 maybe_auto_name_session(messages, base=base, session_id=comp_key, save_session_name=_save_session_name)
 
@@ -106,19 +108,10 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 result = ApplicationService().run_turn(
                     runtime=runtime,
                     tools=tools,
-                    plan_store=PlanStore(comp["history_db"], workspace or "default", comp_key) if (plan_turn or approved_plan) else None,
+                    plan_store=prepared.plan_store,
                     plan_state=sm,
-                    user_text_for_history=(user_msgs[-1].get("_plan_original_content", user_msgs[-1].get("content", "")) if user_msgs else None),
-                    options=RunTurnOptions(
-                        streaming=None,
-                        abort_event=abort_event,
-                        max_turns=max_turns,
-                        plan_turn=plan_turn,
-                        approved_plan=approved_plan,
-                        context_length=None,
-                        persist_user_history=False,
-                        plan_session_key=session_key,
-                    ),
+                    user_text_for_history=prepared.user_text_for_history,
+                    options=prepared.options,
                 )
                 msg = result.message
 
@@ -164,7 +157,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         lead_event.wait(timeout=timing.poll_interval)
 
                 # ── 错误处理 ──
-                if not msg or (not msg.get("content") and not msg.get("tool_calls")):
+                if not valid_assistant_result(msg):
                     if msg is None:
                         logger.error(f"[Web⚠] msg=None, 可能是流式错误或中断")
                     usage = dict(get_usage())
@@ -182,15 +175,11 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     return error_result.message, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
                 # ── 正常流程 ──
-                raw_plan_text = result.raw_plan_text if plan_turn else None
-                if msg and msg.get("content") and msg["content"].strip():
-                    if plan_turn:
-                        display_content = apply_plan_discussion_response(messages, msg, raw_plan_text)
-                        safe_queue_put(queue, _ws_event(DisplayEventType.TEXT, content=display_content, session_id=comp_key), loop)
-                    else:
-                        append_chat_assistant_message(messages, msg)
+                dispatch = finalize_chat_assistant_response(messages=messages, result=result, plan_turn=plan_turn)
+                if dispatch.display_content is not None:
+                    safe_queue_put(queue, _ws_event(DisplayEventType.TEXT, content=dispatch.display_content, session_id=comp_key), loop)
 
-                usage = result.usage
+                usage = dispatch.usage
                 safe_queue_put(queue, _ws_event(DisplayEventType.COMPLETE, prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"]), loop)
                 return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 

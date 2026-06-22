@@ -7,7 +7,6 @@
 """
 import asyncio
 import json
-import threading
 
 from fastapi import APIRouter, Query, WebSocket
 
@@ -23,6 +22,7 @@ from ..route_types import (
     RouteErrorResponse,
 )
 from ..chat_events import drain_ready_chat_events, initial_chat_usage, normalize_chat_queue_event
+from ..chat_run_context import prepare_chat_run_context
 from ..chat_runner import run_tool_loop_sync
 from ..runtime_helpers import chat_compact_dependencies, chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies
 
@@ -48,8 +48,6 @@ async def chat_ws_endpoint(ws: WebSocket):
     sm = deps["session_manager"]
     cache_key = deps["cache_key"]
     resolve_base = deps["resolve_base"]
-    get_or_create_session = deps["get_or_create_session"]
-    get_or_create_components = deps["get_or_create_components"]
     update_meta_cache = deps["update_meta_cache"]
 
     def _ws_event(event: DisplayEventType | str, **data) -> DisplayWireEvent:
@@ -87,33 +85,21 @@ async def chat_ws_endpoint(ws: WebSocket):
 
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list[ImageUpload] | None = None, plan_turn: bool = False, approved_plan: PlanArtifactDict | None = None) -> None:
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")
-        session_key = cache_key(username, ws_name, sid)
-        base = resolve_base(username, ws_name)
-        messages = get_or_create_session(username, sid, base, ws_name)[1]
+        run_context = prepare_chat_run_context(
+            deps,
+            username=username,
+            session_id=sid,
+            workspace=ws_name,
+            user_message=user_message,
+            images=images,
+        )
+        _ws_abort_keys.append(run_context.session_key)
 
-        # 构造用户消息（可能包含图片）。审批后的执行由 approved_plan 注入内部指令，不追加可见用户消息。
-        chat_service.append_user_message(messages, user_message, images)
-        get_or_create_components(username, sid, base, ws_name)
-
-        queue: asyncio.Queue = asyncio.Queue(maxsize=1000)
-        loop = asyncio.get_event_loop()
-
-        abort_event = sm.get_abort_event(session_key)
-        if abort_event is None:
-            abort_event = threading.Event()
-        else:
-            abort_event.clear()  # 上次 abort 后重置，否则新请求立即被中止
-
-        model_name = sm.get_model(session_key)
-        _ws_abort_keys.append(session_key)
-
-        s_lock = sm.get_lock(session_key)
-        comp = get_or_create_components(username, sid, base, ws_name)
-        settings = comp.get("settings")
-        max_turns_web = settings.web.max_turns if settings else 10
         from ..chat_runner import _executor
-        future = loop.run_in_executor(
-            _executor, run_tool_loop_sync, queue, loop, messages, None, max_turns_web, abort_event, model_name, s_lock, session_key, username, ws_name, plan_turn, approved_plan
+        future = run_context.loop.run_in_executor(
+            _executor,
+            run_tool_loop_sync,
+            *run_context.executor_args(username=username, workspace=ws_name, plan_turn=plan_turn, approved_plan=approved_plan),
         )
 
         complete_usage = initial_chat_usage()
@@ -121,11 +107,11 @@ async def chat_ws_endpoint(ws: WebSocket):
         got_terminal = False
         try:
             while True:
-                if abort_event.is_set():
+                if run_context.abort_event.is_set():
                     aborted = True
                     break
                 try:
-                    event = await asyncio.wait_for(queue.get(), timeout=0.15)
+                    event = await asyncio.wait_for(run_context.queue.get(), timeout=0.15)
                     queued = normalize_chat_queue_event(event, session_id=sid, usage=complete_usage)
                     complete_usage = queued.usage
                     logger.info(f'[Web] WS dequeue: event={queued.wire["event"]} sid={sid} has_error={bool(queued.wire["data"].get("error"))}')
@@ -139,7 +125,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                         break
                 except asyncio.TimeoutError:
                     if future.done():
-                        for queued in drain_ready_chat_events(queue, session_id=sid, usage=complete_usage):
+                        for queued in drain_ready_chat_events(run_context.queue, session_id=sid, usage=complete_usage):
                             complete_usage = queued.usage
                             if queued.terminal:
                                 logger.debug(f'[Web] drained terminal event sid={sid} event={queued.wire["event"]}')
@@ -162,8 +148,8 @@ async def chat_ws_endpoint(ws: WebSocket):
                 pass
 
         usage = complete_usage
-        sm.set_last_usage(session_key, usage)
-        update_meta_cache(username, sid, ws_name, messages)
+        sm.set_last_usage(run_context.session_key, usage)
+        update_meta_cache(username, sid, ws_name, run_context.messages)
 
         logger.info(f"[Web] WS loop exit: aborted={aborted} got_terminal={got_terminal} sid={sid}")
         if not aborted and not got_terminal:
@@ -182,7 +168,7 @@ async def chat_ws_endpoint(ws: WebSocket):
                 ))
 
         current_task = asyncio.current_task()
-        sm.release_active_task(session_key, current_task)
+        sm.release_active_task(run_context.session_key, current_task)
 
     async def _reader():
         nonlocal ws_closed, _ws_username

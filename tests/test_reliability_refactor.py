@@ -491,13 +491,15 @@ def test_web_chat_route_uses_single_task_launcher():
 def test_web_chat_route_uses_application_message_builder():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    run_context = (root / "web" / "chat_run_context.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
 
     assert "MessageDict" not in text
     assert "content_blocks" not in text
     assert "dataUrl" not in text
     assert "now_ts" not in text
-    assert "chat_service.append_user_message" in text
+    assert "chat_service.append_user_message" not in text
+    assert "chat_service.append_user_message" in run_context
     assert "def build_user_message" in service
     assert "def append_user_message" in service
     assert "image_url" in service
@@ -520,6 +522,25 @@ def test_web_chat_route_delegates_queue_event_handling():
     assert "def drain_ready_chat_events" in helper
 
 
+def test_web_chat_route_delegates_run_context_setup():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    helper = (root / "web" / "chat_run_context.py").read_text(encoding="utf-8")
+
+    assert "import threading" not in text
+    assert "asyncio.Queue(maxsize" not in text
+    assert "get_or_create_session" not in text
+    assert "get_or_create_components" not in text
+    assert "sm.get_model" not in text
+    assert "sm.get_lock" not in text
+    assert "prepare_chat_run_context" in text
+    assert "class ChatRunContext" in helper
+    assert "def prepared_abort_event" in helper
+    assert "def prepare_chat_run_context" in helper
+    assert "get_or_create_session" in helper
+    assert "get_or_create_components" in helper
+
+
 def test_web_chat_runner_delegates_session_auto_naming():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
@@ -539,13 +560,14 @@ def test_web_chat_runner_delegates_user_history_persistence():
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
 
-    assert "persist_latest_user_message" in runner
+    assert "persist_latest_user_message" not in runner
     assert "import json" not in runner
     assert "user_meta" not in runner
     assert "persisted_user_content" not in runner
     assert "def visible_user_messages" in service
     assert "def persisted_user_payload" in service
     assert "def persist_latest_user_message" in service
+    assert "def prepare_chat_turn" in service
     assert "_plan_original_content" in service
 
 
@@ -558,8 +580,9 @@ def test_web_chat_runner_delegates_plan_turn_preparation():
     assert "PlanService" not in runner
     assert "seed_execution_todos" not in runner
     assert "execution_instruction" not in runner
-    assert "prepare_plan_turn" in runner
-    assert "prepare_execution_turn" in runner
+    assert "prepare_plan_turn" not in runner
+    assert "prepare_execution_turn" not in runner
+    assert "prepare_chat_turn" in runner
     assert "def prepare_plan_turn" in service
     assert "def prepare_execution_turn" in service
     assert "build_plan_user_message" in service
@@ -574,8 +597,9 @@ def test_web_chat_runner_delegates_tool_selection_policy():
     assert "ToolPolicy" not in runner
     assert "filter_tools" not in runner
     assert "list_teammates" not in runner
-    assert "default_chat_tools" in runner
-    assert "select_turn_tools" in runner
+    assert "default_chat_tools" not in runner
+    assert "select_turn_tools" not in runner
+    assert "prepare_chat_turn" in runner
     assert "def default_chat_tools" in service
     assert "def select_turn_tools" in service
     assert "ToolPolicy.PLAN_READONLY" in service
@@ -589,11 +613,14 @@ def test_web_chat_runner_delegates_error_response_construction():
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
 
     assert "handle_invalid_chat_result" in runner
+    assert "valid_assistant_result" in runner
+    assert "not msg.get(\"content\")" not in runner
     assert "error_context" not in runner
     assert "last_tool_calls" not in runner
     assert "err_text =" not in runner
     assert "def fallback_error_text" in service
     assert "def chat_error_context" in service
+    assert "def valid_assistant_result" in service
     assert "def handle_invalid_chat_result" in service
     assert "DisplayEventType.COMPLETE" in service
     assert "history_db.append(workspace, history_session_id, \"assistant\", err_text)" in service
@@ -606,11 +633,13 @@ def test_web_chat_runner_delegates_assistant_response_persistence():
 
     assert "计划已更新" not in runner
     assert "asst_ts" not in runner
-    assert "append_chat_assistant_message" in runner
-    assert "apply_plan_discussion_response" in runner
+    assert "append_chat_assistant_message" not in runner
+    assert "apply_plan_discussion_response" not in runner
+    assert "finalize_chat_assistant_response" in runner
     assert "PLAN_DISCUSSION_DISPLAY_CONTENT" in service
     assert "def apply_plan_discussion_response" in service
     assert "def append_chat_assistant_message" in service
+    assert "def finalize_chat_assistant_response" in service
     assert "kind\": \"chat\"" in service
 
 

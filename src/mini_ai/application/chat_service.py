@@ -109,6 +109,22 @@ class ChatRuntimeBundle:
     settings: SettingsSnapshot | None
 
 
+@dataclass(frozen=True, slots=True)
+class ChatPreparedTurn:
+    tools: list[ToolDefinition]
+    user_messages: list[MessageDict]
+    plan_store: PlanStore | None
+    user_text_for_history: Any
+    options: RunTurnOptions
+
+
+@dataclass(frozen=True, slots=True)
+class ChatAssistantDispatch:
+    message: MessageDict | None
+    usage: UsageDict
+    display_content: str | None = None
+
+
 PLAN_DISCUSSION_DISPLAY_CONTENT = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
 TEAM_FOLLOWUP_INSTRUCTION = "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。"
 
@@ -270,6 +286,75 @@ def select_turn_tools(tools: list[ToolDefinition], *, plan_turn: bool) -> list[T
 
     policy = ToolPolicy.PLAN_READONLY if plan_turn else ToolPolicy.EXECUTION
     return filter_tools(tools, policy)
+
+
+def prepare_chat_turn(
+    *,
+    runtime: SessionRuntimeContext,
+    messages: list[MessageDict],
+    tools: list[ToolDefinition] | None,
+    history_db: HistoryDBProtocol,
+    workspace: str,
+    session_id: str,
+    session_key: str,
+    plan_state_store: PlanStateStoreProtocol,
+    plan_turn: bool,
+    approved_plan: MessageDict | None,
+    max_turns: int,
+    abort_event: threading.Event | None,
+    display: DisplayProtocol | None,
+) -> ChatPreparedTurn:
+    """Prepare tools, history, plan state and run options for a chat turn."""
+
+    selected_tools = default_chat_tools(runtime.tool_registry) if tools is None else tools
+    plan_state = plan_state_store.get_plan_state(session_key)
+    selected_tools = select_turn_tools(selected_tools, plan_turn=plan_turn)
+    if plan_turn:
+        prepare_plan_turn(messages, current_plan=plan_state.current_plan, selected_option_id=plan_state.selected_option_id)
+    elif approved_plan:
+        prepare_execution_turn(messages, approved_plan=approved_plan, session_key=session_key, display=display)
+
+    user_messages = persist_latest_user_message(history_db, workspace=workspace, session_id=session_id, messages=messages)
+    return ChatPreparedTurn(
+        tools=selected_tools,
+        user_messages=user_messages,
+        plan_store=PlanStore(history_db, workspace, session_id) if (plan_turn or approved_plan) else None,
+        user_text_for_history=(user_messages[-1].get("_plan_original_content", user_messages[-1].get("content", "")) if user_messages else None),
+        options=RunTurnOptions(
+            streaming=None,
+            abort_event=abort_event,
+            max_turns=max_turns,
+            plan_turn=plan_turn,
+            approved_plan=approved_plan,
+            context_length=None,
+            persist_user_history=False,
+            plan_session_key=session_key,
+        ),
+    )
+
+
+def valid_assistant_result(message: MessageDict | None) -> bool:
+    """Return whether an assistant message has content or tool calls."""
+
+    return bool(message and (message.get("content") or message.get("tool_calls")))
+
+
+def finalize_chat_assistant_response(
+    *,
+    messages: list[MessageDict],
+    result: RunTurnResult,
+    plan_turn: bool,
+) -> ChatAssistantDispatch:
+    """Persist/convert a successful assistant result and return display metadata."""
+
+    message = result.message
+    display_content = None
+    if message and message.get("content") and message["content"].strip():
+        if plan_turn:
+            display_content = apply_plan_discussion_response(messages, message, result.raw_plan_text)
+        else:
+            append_chat_assistant_message(messages, message)
+    return ChatAssistantDispatch(message=message, usage=result.usage, display_content=display_content)
 
 
 def fallback_error_text(message: MessageDict | None) -> str:
