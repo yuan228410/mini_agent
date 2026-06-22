@@ -3,7 +3,8 @@ from fastapi import APIRouter
 
 from ...application import model_use_cases
 from ..route_types import ModelsResponse, RouteErrorResponse, SwitchModelRequest, SwitchModelResponse
-from ..runtime_helpers import current_settings_snapshot, model_route_dependencies
+from ..config_dependencies import model_route_dependencies
+from ..runtime_helpers import current_settings_snapshot
 
 router = APIRouter()
 

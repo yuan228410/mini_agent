@@ -5,7 +5,7 @@ from typing import Any
 
 from ..application import chat_service
 from .chat_export_response import chat_export_response
-from .runtime_helpers import chat_rest_dependencies
+from .chat_dependencies import chat_rest_dependencies
 
 
 def chat_history_response(*, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:

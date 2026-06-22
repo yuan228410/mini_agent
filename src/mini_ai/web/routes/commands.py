@@ -3,7 +3,7 @@ from fastapi import APIRouter
 
 from ...application import command_service
 from ..route_types import CommandsResponse, McpStatusResponse
-from ..runtime_helpers import mcp_status_dependencies
+from ..config_dependencies import mcp_status_dependencies
 
 router = APIRouter()
 

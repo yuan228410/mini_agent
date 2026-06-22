@@ -22,7 +22,8 @@ from ..route_types import (
     SystemPromptResponse,
     ToolsResponse,
 )
-from ..runtime_helpers import config_mutation_dependencies, config_preview_dependencies, config_tool_loader_dependencies, current_settings_snapshot
+from ..config_dependencies import config_mutation_dependencies, config_preview_dependencies, config_tool_loader_dependencies
+from ..runtime_helpers import current_settings_snapshot
 
 router = APIRouter()
 

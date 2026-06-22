@@ -17,7 +17,7 @@ from .session_manager import (
     resolve_base, get_or_create_components,
     _save_session_name, _update_meta_cache,
 )
-from .runtime_helpers import chat_runtime_dependencies
+from .chat_dependencies import chat_runtime_dependencies
 
 # 线程池配置
 _MAX_CONCURRENT_SESSIONS = 10

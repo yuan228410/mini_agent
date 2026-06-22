@@ -10,7 +10,7 @@ from ..core.events import DisplayEvent
 from ..core.runtime_types import DisplayWireEvent
 from .chat_command_dispatch import ChatCommandDependencies
 from .chat_sender import ChatWebSocketSender
-from .runtime_helpers import chat_compact_dependencies, chat_session_dependencies, plan_command_dependencies
+from .chat_dependencies import chat_compact_dependencies, chat_session_dependencies, plan_command_dependencies
 
 
 @dataclass(slots=True)

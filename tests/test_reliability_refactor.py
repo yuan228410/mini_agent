@@ -411,7 +411,7 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
     rest_adapter = (root / "web" / "chat_rest_adapter.py").read_text(encoding="utf-8")
-    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    chat_dependencies = (root / "web" / "chat_dependencies.py").read_text(encoding="utf-8")
     stale_imports = [
         "ws_key",
         "safe_queue_put",
@@ -443,8 +443,8 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
     assert "chat_rest_dependencies" in rest_adapter
     assert "chat_session_dependencies" not in text
     assert "chat_session_dependencies" in endpoint_state
-    assert "def chat_session_dependencies" in runtime_helpers
-    assert "def chat_rest_dependencies" in runtime_helpers
+    assert "def chat_session_dependencies" in chat_dependencies
+    assert "def chat_rest_dependencies" in chat_dependencies
 
 
 def test_web_chat_plan_commands_delegate_to_application_service():
@@ -452,7 +452,7 @@ def test_web_chat_plan_commands_delegate_to_application_service():
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
-    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    chat_dependencies = (root / "web" / "chat_dependencies.py").read_text(encoding="utf-8")
     service = (root / "application" / "plan_command_service.py").read_text(encoding="utf-8")
 
     assert "from ...plan.service import" not in text
@@ -465,7 +465,7 @@ def test_web_chat_plan_commands_delegate_to_application_service():
     assert "plan_command_service.approve_current_plan" in command_dispatch
     assert "plan_command_dependencies" not in text
     assert "plan_command_dependencies" in endpoint_state
-    assert "def plan_command_dependencies" in runtime_helpers
+    assert "def plan_command_dependencies" in chat_dependencies
     assert "class PlanCommandDependencies" in service
     assert "def handle_plan_command" in service
     assert "def approve_current_plan" in service
@@ -478,7 +478,7 @@ def test_web_chat_compact_command_delegates_to_application_service():
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
-    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    chat_dependencies = (root / "web" / "chat_dependencies.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_compact_service.py").read_text(encoding="utf-8")
 
     assert "request_context_for_settings" not in text
@@ -489,11 +489,11 @@ def test_web_chat_compact_command_delegates_to_application_service():
     assert "chat_compact_service.compact_chat" in command_dispatch
     assert "chat_compact_dependencies" not in text
     assert "chat_compact_dependencies" in endpoint_state
-    assert "def chat_compact_dependencies" in runtime_helpers
+    assert "def chat_compact_dependencies" in chat_dependencies
     assert "class ChatCompactDependencies" in service
     assert "def compact_chat" in service
-    assert "request_context_for_settings" in runtime_helpers
-    assert "settings_for_model" in runtime_helpers
+    assert "request_context_for_settings" in chat_dependencies
+    assert "settings_for_model" in chat_dependencies
 
 
 def test_web_chat_route_uses_single_task_launcher():
@@ -910,7 +910,7 @@ def test_web_chat_runner_delegates_team_followup_timing():
 def test_web_chat_runner_delegates_runtime_setup():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
-    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    chat_dependencies = (root / "web" / "chat_dependencies.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
 
     assert "build_session_runtime" not in runner
@@ -920,7 +920,7 @@ def test_web_chat_runner_delegates_runtime_setup():
     assert "_MCP_LOADER" not in runner
     assert "build_chat_runtime_bundle" in runner
     assert "chat_runtime_dependencies" in runner
-    assert "def chat_runtime_dependencies" in runtime_helpers
+    assert "def chat_runtime_dependencies" in chat_dependencies
     assert "class ChatRuntimeDependencies" in service
     assert "class ChatRuntimeBundle" in service
     assert "def ensure_session_system_prompt" in service
@@ -2115,6 +2115,7 @@ def test_web_model_routes_use_runtime_settings_boundary():
     routes_models = (repo / "src/mini_ai/web/routes/models.py").read_text()
     routes_sessions = (repo / "src/mini_ai/web/routes/sessions.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    config_dependencies = (repo / "src/mini_ai/web/config_dependencies.py").read_text()
     model_use_cases = (repo / "src/mini_ai/application/model_use_cases.py").read_text()
 
     assert "from ...config import" not in routes_models
@@ -2129,7 +2130,7 @@ def test_web_model_routes_use_runtime_settings_boundary():
     assert "build_settings_snapshot" in runtime_helpers
     assert "current_settings_snapshot" in runtime_helpers
     assert "model_route_dependencies" in routes_models
-    assert "def model_route_dependencies" in runtime_helpers
+    assert "def model_route_dependencies" in config_dependencies
     assert "model_use_cases.list_models" in routes_models
     assert "model_use_cases.switch_session_model" in routes_models
     assert "def model_options" in model_use_cases
@@ -2166,6 +2167,7 @@ def test_web_config_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_config = (repo / "src/mini_ai/web/routes/config.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    config_dependencies = (repo / "src/mini_ai/web/config_dependencies.py").read_text()
     config_service = (repo / "src/mini_ai/application/config_service.py").read_text()
 
     preview_area = routes_config.split('@router.get("/settings")', 1)[0]
@@ -2200,9 +2202,9 @@ def test_web_config_routes_use_application_service_boundary():
     assert "config_service.remove_mcp_server" in settings_area
     assert "config_mutation_dependencies" in settings_area
 
-    assert "def config_preview_dependencies" in runtime_helpers
-    assert "def config_tool_loader_dependencies" in runtime_helpers
-    assert "def config_mutation_dependencies" in runtime_helpers
+    assert "def config_preview_dependencies" in config_dependencies
+    assert "def config_tool_loader_dependencies" in config_dependencies
+    assert "def config_mutation_dependencies" in config_dependencies
     assert "class ConfigPreviewDependencies" in config_service
     assert "class ConfigToolLoaderDependencies" in config_service
     assert "class ConfigMutationDependencies" in config_service
@@ -2221,6 +2223,7 @@ def test_web_command_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_commands = (repo / "src/mini_ai/web/routes/commands.py").read_text()
     runtime_helpers = (repo / "src/mini_ai/web/runtime_helpers.py").read_text()
+    config_dependencies = (repo / "src/mini_ai/web/config_dependencies.py").read_text()
     command_service = (repo / "src/mini_ai/application/command_service.py").read_text()
 
     assert "_WEB_COMMANDS" not in routes_commands
@@ -2233,7 +2236,7 @@ def test_web_command_routes_use_application_service_boundary():
     assert "command_service.list_commands" in routes_commands
     assert "command_service.mcp_status" in routes_commands
     assert "mcp_status_dependencies" in routes_commands
-    assert "def mcp_status_dependencies" in runtime_helpers
+    assert "def mcp_status_dependencies" in config_dependencies
     assert "WEB_COMMANDS" in command_service
     assert "class McpStatusDependencies" in command_service
     assert "def mcp_status" in command_service
