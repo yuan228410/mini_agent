@@ -20,8 +20,9 @@ from ..route_types import (
     ImageUpload,
     RouteErrorResponse,
 )
-from ..chat_command_dispatch import ChatCommandDependencies, dispatch_chat_ws_message, error_event, ws_event
-from ..chat_events import drain_ready_chat_events, initial_chat_usage, normalize_chat_queue_event
+from ..chat_command_dispatch import ChatCommandDependencies, dispatch_chat_ws_message, error_event
+from ..chat_connection_cleanup import cleanup_chat_connection
+from ..chat_events import relay_chat_queue_events
 from ..chat_run_context import prepare_chat_run_context
 from ..chat_run_finalization import finalize_chat_run
 from ..chat_runner import run_tool_loop_sync
@@ -98,42 +99,18 @@ async def chat_ws_endpoint(ws: WebSocket):
             *run_context.executor_args(username=username, workspace=ws_name, plan_turn=plan_turn, approved_plan=approved_plan),
         )
 
-        complete_usage = initial_chat_usage()
-        aborted = False
-        got_terminal = False
         try:
-            while True:
-                if run_context.abort_event.is_set():
-                    aborted = True
-                    break
-                try:
-                    event = await asyncio.wait_for(run_context.queue.get(), timeout=0.15)
-                    queued = normalize_chat_queue_event(event, session_id=sid, usage=complete_usage)
-                    complete_usage = queued.usage
-                    logger.info(f'[Web] WS dequeue: event={queued.wire["event"]} sid={sid} has_error={bool(queued.wire["data"].get("error"))}')
-                    if queued.terminal:
-                        logger.debug(f'[Web] terminal event from queue sid={sid} event={queued.wire["event"]}')
-                    await _send(queued.wire)
-                    logger.info(f'[Web] WS after _send: event={queued.wire["event"]} sid={sid}')
-                    if queued.terminal:
-                        got_terminal = True
-                        logger.info(f'[Web] WS breaking: event={queued.wire["event"]} sid={sid}')
-                        break
-                except asyncio.TimeoutError:
-                    if future.done():
-                        for queued in drain_ready_chat_events(run_context.queue, session_id=sid, usage=complete_usage):
-                            complete_usage = queued.usage
-                            if queued.terminal:
-                                logger.debug(f'[Web] drained terminal event sid={sid} event={queued.wire["event"]}')
-                            await _send(queued.wire)
-                            logger.info(f'[Web] WS drain: event={queued.wire["event"]} sid={sid}')
-                            if queued.terminal:
-                                got_terminal = True
-                                break
-                        break
+            relay_result = await relay_chat_queue_events(
+                queue=run_context.queue,
+                abort_event=run_context.abort_event,
+                future=future,
+                session_id=sid,
+                send=_send,
+            )
         except Exception as e:
             logger.error(f"[Web] WS chat task error: {e}", exc_info=True)
             await _send(error_event(str(e), sid))
+            relay_result = None
 
         await finalize_chat_run(
             run_context=run_context,
@@ -144,9 +121,9 @@ async def chat_ws_endpoint(ws: WebSocket):
             sid=sid,
             username=username,
             workspace=ws_name,
-            usage=complete_usage,
-            aborted=aborted,
-            got_terminal=got_terminal,
+            usage=relay_result.usage if relay_result else {"prompt_tokens": 0, "completion_tokens": 0},
+            aborted=relay_result.aborted if relay_result else False,
+            got_terminal=relay_result.got_terminal if relay_result else False,
         )
 
     async def _reader():
@@ -185,18 +162,7 @@ async def chat_ws_endpoint(ws: WebSocket):
         pass
     finally:
         ws_closed = True
-        # 中止所有关联会话
-        for key in _ws_abort_keys:
-            evt = sm.get_abort_event(key)
-            if evt:
-                evt.set()
-        reader_task.cancel()
-        try:
-            await reader_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            pass
+        await cleanup_chat_connection(reader_task=reader_task, abort_keys=_ws_abort_keys, session_manager=sm)
 
 
 # ── REST: 聊天历史 ──

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
+
+from ..core.runtime_types import DisplayWireEvent
+from ..logger import logger
 
 
 TERMINAL_CHAT_EVENTS = {"done", "aborted", "error", "complete"}
@@ -19,6 +22,16 @@ class ChatQueueEvent:
     wire: dict[str, Any]
     usage: dict[str, int]
     terminal: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ChatRelayResult:
+    usage: dict[str, int]
+    aborted: bool
+    got_terminal: bool
+
+
+SendChatEvent = Callable[[DisplayWireEvent], Awaitable[None]]
 
 
 def initial_chat_usage() -> dict[str, int]:
@@ -63,3 +76,49 @@ def drain_ready_chat_events(
         if normalized.terminal:
             break
     return events
+
+
+async def relay_chat_queue_events(
+    *,
+    queue: asyncio.Queue,
+    abort_event,
+    future: Any,
+    session_id: str,
+    send: SendChatEvent,
+    poll_timeout: float = 0.15,
+) -> ChatRelayResult:
+    """Relay queued chat events until abort, terminal event, or runner completion."""
+
+    usage = initial_chat_usage()
+    aborted = False
+    got_terminal = False
+    while True:
+        if abort_event.is_set():
+            aborted = True
+            break
+        try:
+            event = await asyncio.wait_for(queue.get(), timeout=poll_timeout)
+            queued = normalize_chat_queue_event(event, session_id=session_id, usage=usage)
+            usage = queued.usage
+            logger.info(f'[Web] WS dequeue: event={queued.wire["event"]} sid={session_id} has_error={bool(queued.wire["data"].get("error"))}')
+            if queued.terminal:
+                logger.debug(f'[Web] terminal event from queue sid={session_id} event={queued.wire["event"]}')
+            await send(queued.wire)
+            logger.info(f'[Web] WS after _send: event={queued.wire["event"]} sid={session_id}')
+            if queued.terminal:
+                got_terminal = True
+                logger.info(f'[Web] WS breaking: event={queued.wire["event"]} sid={session_id}')
+                break
+        except asyncio.TimeoutError:
+            if future.done():
+                for queued in drain_ready_chat_events(queue, session_id=session_id, usage=usage):
+                    usage = queued.usage
+                    if queued.terminal:
+                        logger.debug(f'[Web] drained terminal event sid={session_id} event={queued.wire["event"]}')
+                    await send(queued.wire)
+                    logger.info(f'[Web] WS drain: event={queued.wire["event"]} sid={session_id}')
+                    if queued.terminal:
+                        got_terminal = True
+                        break
+                break
+    return ChatRelayResult(usage=usage, aborted=aborted, got_terminal=got_terminal)

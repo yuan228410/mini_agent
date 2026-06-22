@@ -518,16 +518,20 @@ def test_web_chat_route_delegates_queue_event_handling():
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     helper = (root / "web" / "chat_events.py").read_text(encoding="utf-8")
 
-    assert "initial_chat_usage" in text
-    assert "normalize_chat_queue_event" in text
-    assert "drain_ready_chat_events" in text
-    assert "complete_usage = {" not in text
+    assert "relay_chat_queue_events" in text
+    assert "initial_chat_usage" not in text
+    assert "normalize_chat_queue_event" not in text
+    assert "drain_ready_chat_events" not in text
+    assert "complete_usage =" not in text
+    assert "queue.get()" not in text
     assert "queue.get_nowait()" not in text
-    assert "prompt_tokens" not in text.split("complete_usage = initial_chat_usage()", 1)[1].split("usage = complete_usage", 1)[0]
+    assert "WS dequeue" not in text
     assert "TERMINAL_CHAT_EVENTS" in helper
     assert "class ChatQueueEvent" in helper
+    assert "class ChatRelayResult" in helper
     assert "def normalize_chat_queue_event" in helper
     assert "def drain_ready_chat_events" in helper
+    assert "def relay_chat_queue_events" in helper
 
 
 def test_web_chat_route_delegates_run_context_setup():
@@ -584,6 +588,23 @@ def test_web_chat_route_delegates_run_finalization():
     assert "release_active_task" in finalization
     assert "future.result()" in finalization
     assert "DisplayEventType.DONE" in finalization
+
+
+def test_web_chat_route_delegates_connection_cleanup():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    cleanup = (root / "web" / "chat_connection_cleanup.py").read_text(encoding="utf-8")
+    finally_area = text.split("finally:", 1)[1]
+
+    assert "cleanup_chat_connection" in text
+    assert "reader_task.cancel()" not in text
+    assert "get_abort_event(key)" not in text
+    assert "asyncio.CancelledError" not in text
+    assert "cleanup_chat_connection" in finally_area
+    assert "def cleanup_chat_connection" in cleanup
+    assert "reader_task.cancel()" in cleanup
+    assert "get_abort_event(key)" in cleanup
+    assert "asyncio.CancelledError" in cleanup
 
 
 def test_web_chat_runner_delegates_session_auto_naming():
