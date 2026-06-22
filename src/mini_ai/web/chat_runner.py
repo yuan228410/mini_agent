@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, default_chat_tools, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools
+from ..application.chat_service import ApplicationService, RunTurnOptions, default_chat_tools, handle_invalid_chat_result, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -199,48 +199,20 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 # ── 错误处理 ──
                 if not msg or (not msg.get("content") and not msg.get("tool_calls")):
                     if msg is None:
-                        err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
                         logger.error(f"[Web⚠] msg=None, 可能是流式错误或中断")
-                    elif msg.get("interrupted"):
-                        err_text = "⏸ 生成已中断"
-                    elif msg.get("error"):
-                        err_text = f"⚠ {msg.get('error')}"
-                    else:
-                        err_text = "⚠ LLM 未返回有效回复（可能因限流或错误）"
-
-                    messages.append({"role": "assistant", "content": err_text, "timestamp": now_ts()})
-                    comp["history_db"].append(workspace or "default", comp_key, "assistant", err_text)
-
-                    error_context = {
-                        "session_id": session_key,
-                        "workspace": workspace,
-                        "message_count": len(messages),
-                        "last_user_message": None,
-                        "last_tool_calls": [],
-                    }
-                    for m in reversed(messages[-5:]):
-                        if m.get("role") == "user":
-                            error_context["last_user_message"] = m.get("content", "")[:200]
-                            break
-                    for m in reversed(messages[-10:]):
-                        if m.get("role") == "assistant" and m.get("tool_calls"):
-                            error_context["last_tool_calls"] = [
-                                {"name": tc.get("function", {}).get("name"), "id": tc.get("id")}
-                                for tc in m["tool_calls"][:3]
-                            ]
-                            break
-
-                    usage = get_usage()
-                    logger.warning(f"[Web] error path: err={err_text[:80]}")
-                    safe_queue_put(queue, _ws_event(
-                        DisplayEventType.COMPLETE,
-                        prompt_tokens=usage["prompt_tokens"],
-                        completion_tokens=usage["completion_tokens"],
-                        error=err_text,
-                        error_context=error_context,
-                        session_id=session_key,
-                    ), loop)
-                    return msg, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
+                    usage = dict(get_usage())
+                    error_result = handle_invalid_chat_result(
+                        message=msg,
+                        messages=messages,
+                        history_db=comp["history_db"],
+                        workspace=workspace or "default",
+                        history_session_id=comp_key,
+                        event_session_id=session_key,
+                        usage=usage,
+                    )
+                    logger.warning(f"[Web] error path: err={error_result.error_text[:80]}")
+                    safe_queue_put(queue, error_result.event, loop)
+                    return error_result.message, {"prompt_tokens": usage["prompt_tokens"], "completion_tokens": usage["completion_tokens"]}
 
                 # ── 正常流程 ──
                 raw_plan_text = result.raw_plan_text if plan_turn else None

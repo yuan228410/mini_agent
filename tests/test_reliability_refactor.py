@@ -565,6 +565,22 @@ def test_web_chat_runner_delegates_tool_selection_policy():
     assert "filter_tools" in service
 
 
+def test_web_chat_runner_delegates_error_response_construction():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "handle_invalid_chat_result" in runner
+    assert "error_context" not in runner
+    assert "last_tool_calls" not in runner
+    assert "err_text =" not in runner
+    assert "def fallback_error_text" in service
+    assert "def chat_error_context" in service
+    assert "def handle_invalid_chat_result" in service
+    assert "DisplayEventType.COMPLETE" in service
+    assert "history_db.append(workspace, history_session_id, \"assistant\", err_text)" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

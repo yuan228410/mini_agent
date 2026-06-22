@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..core.display_protocol import DisplayProtocol
+from ..core.events import DisplayEvent, DisplayEventType
 from ..core.persister import HistoryPersister
 from ..core.runtime_context import SessionRuntimeContext
 from ..core.runtime_factory import build_request_context
@@ -71,6 +72,14 @@ class ChatRestDependencies:
 class ChatExportResult:
     content: str
     filename: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChatErrorResult:
+    message: MessageDict | None
+    usage: UsageDict
+    event: dict[str, Any]
+    error_text: str
 
 
 def build_user_message(user_message: str, images: list[dict[str, Any]] | None = None, *, timestamp: str | None = None) -> MessageDict | None:
@@ -163,6 +172,71 @@ def select_turn_tools(tools: list[ToolDefinition], *, plan_turn: bool) -> list[T
 
     policy = ToolPolicy.PLAN_READONLY if plan_turn else ToolPolicy.EXECUTION
     return filter_tools(tools, policy)
+
+
+def fallback_error_text(message: MessageDict | None) -> str:
+    """Return the assistant-visible fallback error text for an invalid model response."""
+
+    if message is None:
+        return "⚠ LLM 未返回有效回复（可能因限流或错误）"
+    if message.get("interrupted"):
+        return "⏸ 生成已中断"
+    if message.get("error"):
+        return f"⚠ {message.get('error')}"
+    return "⚠ LLM 未返回有效回复（可能因限流或错误）"
+
+
+def chat_error_context(*, session_id: str, workspace: str | None, messages: list[MessageDict]) -> dict[str, Any]:
+    """Build diagnostic context for a failed chat turn."""
+
+    context: dict[str, Any] = {
+        "session_id": session_id,
+        "workspace": workspace,
+        "message_count": len(messages),
+        "last_user_message": None,
+        "last_tool_calls": [],
+    }
+    for message in reversed(messages[-5:]):
+        if message.get("role") == "user":
+            context["last_user_message"] = str(message.get("content", ""))[:200]
+            break
+    for message in reversed(messages[-10:]):
+        if message.get("role") == "assistant" and message.get("tool_calls"):
+            context["last_tool_calls"] = [
+                {"name": tool_call.get("function", {}).get("name"), "id": tool_call.get("id")}
+                for tool_call in message["tool_calls"][:3]
+            ]
+            break
+    return context
+
+
+def handle_invalid_chat_result(
+    *,
+    message: MessageDict | None,
+    messages: list[MessageDict],
+    history_db: HistoryDBProtocol,
+    workspace: str,
+    history_session_id: str,
+    event_session_id: str,
+    usage: UsageDict,
+    timestamp: str | None = None,
+) -> ChatErrorResult:
+    """Append/persist a fallback assistant error and build the complete event."""
+
+    err_text = fallback_error_text(message)
+    messages.append({"role": "assistant", "content": err_text, "timestamp": timestamp or now_ts()})
+    history_db.append(workspace, history_session_id, "assistant", err_text)
+    event = DisplayEvent(
+        DisplayEventType.COMPLETE,
+        {
+            "prompt_tokens": usage.get("prompt_tokens", 0),
+            "completion_tokens": usage.get("completion_tokens", 0),
+            "error": err_text,
+            "error_context": chat_error_context(session_id=event_session_id, workspace=workspace, messages=messages),
+            "session_id": event_session_id,
+        },
+    ).to_wire()
+    return ChatErrorResult(message=message, usage=usage, event=event, error_text=err_text)
 
 
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:
