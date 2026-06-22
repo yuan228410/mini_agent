@@ -410,6 +410,7 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
+    rest_adapter = (root / "web" / "chat_rest_adapter.py").read_text(encoding="utf-8")
     runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     stale_imports = [
         "ws_key",
@@ -429,10 +430,17 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
     assert "load_session_for_display" not in rest_area
     assert "load_session(" not in rest_area
     assert "reset_session" not in rest_area
-    assert "chat_service.chat_history" in rest_area
-    assert "chat_service.reset_chat" in rest_area
-    assert "chat_service.export_chat" in rest_area
-    assert "chat_rest_dependencies" in rest_area
+    assert "chat_service.chat_history" not in rest_area
+    assert "chat_service.reset_chat" not in rest_area
+    assert "chat_service.export_chat" not in rest_area
+    assert "chat_rest_dependencies" not in rest_area
+    assert "chat_history_response" in rest_area
+    assert "chat_reset_response" in rest_area
+    assert "chat_export_route_response" in rest_area
+    assert "chat_service.chat_history" in rest_adapter
+    assert "chat_service.reset_chat" in rest_adapter
+    assert "chat_service.export_chat" in rest_adapter
+    assert "chat_rest_dependencies" in rest_adapter
     assert "chat_session_dependencies" not in text
     assert "chat_session_dependencies" in endpoint_state
     assert "def chat_session_dependencies" in runtime_helpers
@@ -491,14 +499,17 @@ def test_web_chat_compact_command_delegates_to_application_service():
 def test_web_chat_route_uses_single_task_launcher():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     launcher = (root / "web" / "chat_task_launcher.py").read_text(encoding="utf-8")
     driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
 
-    assert "async def _launch_chat_task" in text
+    assert "async def _launch_chat_task" not in text
+    assert "async def _launch_chat_task" in websocket_endpoint
     assert "claim_active_task" not in text
     assert "asyncio.create_task(_run_chat" not in text
-    assert "chat_task_launcher" in text
+    assert "chat_task_launcher" not in text
+    assert "chat_task_launcher" in websocket_endpoint
     assert "dispatch_chat_ws_message" in driver
     assert "def send_plan_command_result" in command_dispatch
     assert command_dispatch.count("await launch_chat_task") == 2
@@ -591,6 +602,7 @@ def test_web_chat_route_delegates_command_dispatch():
 def test_web_chat_route_delegates_ws_send():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
     sender = (root / "web" / "chat_sender.py").read_text(encoding="utf-8")
 
     assert "_write_lock" not in text
@@ -598,7 +610,8 @@ def test_web_chat_route_delegates_ws_send():
     assert "DisplayWireEvent" not in text
     assert "DisplayEvent" not in text
     assert "ChatWebSocketSender" not in text
-    assert "build_chat_endpoint_state" in text
+    assert "build_chat_endpoint_state" not in text
+    assert "build_chat_endpoint_state" in websocket_endpoint
     assert "class ChatWebSocketSender" in sender
     assert "asyncio.Lock" in sender
     assert "send_json" in sender
@@ -628,14 +641,17 @@ def test_web_chat_route_delegates_run_finalization():
 def test_web_chat_route_delegates_connection_cleanup():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
     cleanup = (root / "web" / "chat_connection_cleanup.py").read_text(encoding="utf-8")
     driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
 
-    assert "cleanup_chat_connection" in text
+    assert "cleanup_chat_connection" not in text
+    assert "cleanup_chat_connection" in websocket_endpoint
     assert "reader_task.cancel()" not in text
     assert "get_abort_event(key)" not in text
     assert "asyncio.CancelledError" not in text
-    assert "cleanup_reader" in text
+    assert "cleanup_reader" not in text
+    assert "cleanup_reader" in websocket_endpoint
     assert "cleanup_reader(reader_task)" in driver
     assert "def cleanup_chat_connection" in cleanup
     assert "reader_task.cancel()" in cleanup
@@ -646,13 +662,15 @@ def test_web_chat_route_delegates_connection_cleanup():
 def test_web_chat_route_delegates_connection_driver():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
     driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
 
     assert "ws_closed" not in text
     assert "async def _reader" not in text
     assert "while not" not in text
     assert "asyncio.wait_for(ws.receive_text" not in text
-    assert "drive_chat_connection" in text
+    assert "drive_chat_connection" not in text
+    assert "drive_chat_connection" in websocket_endpoint
     assert "class ChatConnectionState" in driver
     assert "def run_chat_reader_loop" in driver
     assert "def drive_chat_connection" in driver
@@ -663,6 +681,7 @@ def test_web_chat_route_delegates_connection_driver():
 def test_web_chat_route_delegates_endpoint_state():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
     endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
 
     assert "ChatCommandDependencies" not in text
@@ -670,7 +689,8 @@ def test_web_chat_route_delegates_endpoint_state():
     assert "plan_command_dependencies" not in text
     assert "chat_compact_dependencies" not in text
     assert "chat_session_dependencies" not in text
-    assert "build_chat_endpoint_state" in text
+    assert "build_chat_endpoint_state" not in text
+    assert "build_chat_endpoint_state" in websocket_endpoint
     assert "class ChatEndpointState" in endpoint_state
     assert "def build_chat_endpoint_state" in endpoint_state
     assert "ChatCommandDependencies" in endpoint_state
@@ -701,9 +721,11 @@ def test_web_chat_route_delegates_executor_launch():
 def test_web_chat_route_delegates_run_coordinator():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
     coordinator = (root / "web" / "chat_run_coordinator.py").read_text(encoding="utf-8")
 
-    assert "run_chat_websocket_turn" in text
+    assert "run_chat_websocket_turn" not in text
+    assert "run_chat_websocket_turn" in websocket_endpoint
     assert "logger.info" not in text
     assert "prepare_chat_run_context" not in text
     assert "relay_chat_queue_events" not in text
@@ -715,16 +737,35 @@ def test_web_chat_route_delegates_run_coordinator():
     assert "error_event" in coordinator
 
 
+def test_web_chat_route_delegates_websocket_endpoint():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    websocket_endpoint = (root / "web" / "chat_websocket_endpoint.py").read_text(encoding="utf-8")
+
+    assert "handle_chat_websocket" in text
+    assert "async def _run_chat" not in text
+    assert "async def _launch_chat_task" not in text
+    assert "async def _cleanup_reader" not in text
+    assert "drive_chat_connection" not in text
+    assert "def handle_chat_websocket" in websocket_endpoint
+    assert "async def _run_chat" in websocket_endpoint
+    assert "async def _launch_chat_task" in websocket_endpoint
+    assert "async def _cleanup_reader" in websocket_endpoint
+
+
 def test_web_chat_export_response_delegates_to_adapter():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    rest_adapter = (root / "web" / "chat_rest_adapter.py").read_text(encoding="utf-8")
     adapter = (root / "web" / "chat_export_response.py").read_text(encoding="utf-8")
 
     assert "JSONResponse" not in text
     assert "urllib.parse" not in text
     assert "Content-Disposition" not in text
     assert "quote(" not in text
-    assert "chat_export_response" in text
+    assert "chat_export_response" not in text
+    assert "chat_export_route_response" in text
+    assert "chat_export_response" in rest_adapter
     assert "def chat_export_response" in adapter
     assert "JSONResponse" in adapter
     assert "Content-Disposition" in adapter
