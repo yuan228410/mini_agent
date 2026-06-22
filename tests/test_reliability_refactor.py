@@ -516,6 +516,21 @@ def test_web_chat_runner_delegates_session_auto_naming():
     assert "save_session_name(base, session_id, auto_name)" in service
 
 
+def test_web_chat_runner_delegates_user_history_persistence():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "persist_latest_user_message" in runner
+    assert "import json" not in runner
+    assert "user_meta" not in runner
+    assert "persisted_user_content" not in runner
+    assert "def visible_user_messages" in service
+    assert "def persisted_user_payload" in service
+    assert "def persist_latest_user_message" in service
+    assert "_plan_original_content" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

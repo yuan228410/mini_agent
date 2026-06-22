@@ -1,12 +1,11 @@
 """Web 端工具循环运行器 — 从 chat.py 提取的 _run_tool_loop_sync"""
 import asyncio
-import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions
+from ..application.chat_service import ApplicationService, RunTurnOptions, persist_latest_user_message
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -135,12 +134,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                         plan_svc.seed_execution_todos(artifact=approved_plan, session_key=session_key, display=disp)
                         messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": now_ts(), "_internal": True})
 
-                user_msgs = [m for m in messages if m["role"] == "user" and not m.get("_internal")]
-                if user_msgs:
-                    last_user = user_msgs[-1]
-                    user_meta = {k: v for k, v in last_user.items() if k not in ("role", "content", "timestamp", "_plan_original_content")}
-                    persisted_user_content = last_user.get("_plan_original_content", last_user.get("content", ""))
-                    comp["history_db"].append(workspace or "default", comp_key, "user", persisted_user_content, metadata=json.dumps(user_meta) if user_meta else "")
+                user_msgs = persist_latest_user_message(comp["history_db"], workspace=workspace or "default", session_id=comp_key, messages=messages)
 
                 maybe_auto_name_session(messages, base=base, session_id=comp_key, save_session_name=_save_session_name)
 

@@ -98,6 +98,30 @@ def append_user_message(messages: list[MessageDict], user_message: str, images: 
     return message
 
 
+def visible_user_messages(messages: list[MessageDict]) -> list[MessageDict]:
+    """Return non-internal user messages in runtime order."""
+
+    return [message for message in messages if message.get("role") == "user" and not message.get("_internal")]
+
+
+def persisted_user_payload(message: MessageDict) -> tuple[Any, str]:
+    """Return content and metadata JSON for a user message history row."""
+
+    metadata = {key: value for key, value in message.items() if key not in ("role", "content", "timestamp", "_plan_original_content")}
+    content = message.get("_plan_original_content", message.get("content", ""))
+    return content, json.dumps(metadata) if metadata else ""
+
+
+def persist_latest_user_message(history_db: HistoryDBProtocol, *, workspace: str, session_id: str, messages: list[MessageDict]) -> list[MessageDict]:
+    """Persist the latest visible user message and return all visible user messages."""
+
+    user_msgs = visible_user_messages(messages)
+    if user_msgs:
+        content, metadata = persisted_user_payload(user_msgs[-1])
+        history_db.append(workspace, session_id, "user", content, metadata=metadata)
+    return user_msgs
+
+
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:
     """Return display-ready chat history for a Web session."""
 
