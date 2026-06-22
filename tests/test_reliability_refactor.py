@@ -596,6 +596,24 @@ def test_web_chat_runner_delegates_assistant_response_persistence():
     assert "kind\": \"chat\"" in service
 
 
+def test_web_chat_runner_delegates_team_followup_injection():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "format_inbox_messages" not in runner
+    assert "队友回禀" not in runner
+    assert "_inject_inbox" not in runner
+    assert "from ..utils import now_ts" not in runner
+    assert "should_poll_team_followup" in runner
+    assert "inject_team_inbox_messages" in runner
+    assert "class TeamInboxInjectionResult" in service
+    assert "def should_poll_team_followup" in service
+    assert "def inject_team_inbox_messages" in service
+    assert "TEAM_FOLLOWUP_INSTRUCTION" in service
+    assert "format_inbox_messages" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

@@ -82,7 +82,14 @@ class ChatErrorResult:
     error_text: str
 
 
+@dataclass(frozen=True, slots=True)
+class TeamInboxInjectionResult:
+    injected: bool
+    count: int = 0
+
+
 PLAN_DISCUSSION_DISPLAY_CONTENT = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
+TEAM_FOLLOWUP_INSTRUCTION = "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。"
 
 
 def build_user_message(user_message: str, images: list[dict[str, Any]] | None = None, *, timestamp: str | None = None) -> MessageDict | None:
@@ -273,6 +280,27 @@ def append_chat_assistant_message(messages: list[MessageDict], message: MessageD
     }
     messages.append(assistant_message)
     return assistant_message
+
+
+def should_poll_team_followup(bus: MessageBusProtocol | None, team_mgr: Any | None, message: MessageDict | None) -> bool:
+    """Return whether a turn should poll teammate inbox replies."""
+
+    return bool(bus and team_mgr and message is not None and not message.get("error") and message.get("tool_calls"))
+
+
+def inject_team_inbox_messages(messages: list[MessageDict], inbox_messages: list[dict[str, Any]], *, label: str = "兜底", timestamp: str | None = None) -> TeamInboxInjectionResult:
+    """Inject teammate inbox replies into the conversation for a follow-up turn."""
+
+    from ..team.loop import format_inbox_messages
+
+    inbox_text = format_inbox_messages(inbox_messages)
+    if not inbox_text:
+        return TeamInboxInjectionResult(injected=False)
+
+    ts = timestamp or now_ts()
+    messages.append({"role": "user", "content": inbox_text, "timestamp": ts})
+    messages.append({"role": "user", "content": TEAM_FOLLOWUP_INSTRUCTION, "timestamp": ts})
+    return TeamInboxInjectionResult(injected=True, count=len(inbox_messages))
 
 
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:

@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, default_chat_tools, handle_invalid_chat_result, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools
+from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, default_chat_tools, handle_invalid_chat_result, inject_team_inbox_messages, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools, should_poll_team_followup
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -22,7 +22,6 @@ from .session_manager import (
     _save_session_name, _update_meta_cache,
 )
 from .runtime_helpers import settings_for_model
-from ..utils import now_ts
 
 # 线程池配置
 _MAX_CONCURRENT_SESSIONS = 10
@@ -158,17 +157,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 # 错误时跳过轮询，直接进入错误处理
                 bus = comp.get("bus")
                 team_mgr = comp.get("team_mgr")
-                if bus and team_mgr and msg is not None and not msg.get("error") and msg.get("tool_calls"):
-                    def _inject_inbox(inbox_msgs, label="兜底"):
-                        from ..team.loop import format_inbox_messages
-                        inbox_text = format_inbox_messages(inbox_msgs)
-                        if not inbox_text:
-                            return False
-                        messages.append({"role": "user", "content": inbox_text, "timestamp": now_ts()})
-                        messages.append({"role": "user", "content": "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。", "timestamp": now_ts()})
-                        logger.info(f"[Web/队友] {label}注入 {len(inbox_msgs)} 条回禀")
-                        return True
-
+                if should_poll_team_followup(bus, team_mgr, msg):
                     lead_event = threading.Event()
                     timeout_settings = settings.timeouts if settings else None
                     deadline = time.monotonic() + (timeout_settings.lead_wait if timeout_settings else 1800)
@@ -177,7 +166,9 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     while time.monotonic() < deadline:
                         inbox = bus.read_inbox("lead")
                         if inbox:
-                            if _inject_inbox(inbox):
+                            injection = inject_team_inbox_messages(messages, inbox)
+                            if injection.injected:
+                                logger.info(f"[Web/队友] 兜底注入 {injection.count} 条回禀")
                                 result2 = ApplicationService().run_turn(
                                     runtime=runtime,
                                     tools=tools,
