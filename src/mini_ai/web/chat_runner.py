@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn
+from ..application.chat_service import ApplicationService, RunTurnOptions, default_chat_tools, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -15,7 +15,6 @@ from ..tools import inject_todos as _inject_todos
 from ..logger import logger, set_session_id
 from ..plan.artifact_parser import strip_artifact_blocks
 from ..plan.store import PlanStore
-from ..plan.tool_policy import ToolPolicy, filter_tools
 from .display import WebDisplay
 from .session_manager import (
     SessionManager, cache_key, safe_queue_put,
@@ -111,17 +110,15 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 settings = runtime.settings
 
                 if tools is None:
-                    tools = [d for d in tool_registry.get_definitions() if d["function"]["name"] not in ("read_inbox", "list_teammates")]
+                    tools = default_chat_tools(tool_registry)
                 all_tools = tools
 
                 plan_state = sm.get_plan_state(session_key)
+                tools = select_turn_tools(all_tools, plan_turn=plan_turn)
                 if plan_turn:
-                    tools = filter_tools(all_tools, ToolPolicy.PLAN_READONLY)
                     prepare_plan_turn(messages, current_plan=plan_state.current_plan, selected_option_id=plan_state.selected_option_id)
-                else:
-                    tools = filter_tools(all_tools, ToolPolicy.EXECUTION)
-                    if approved_plan:
-                        prepare_execution_turn(messages, approved_plan=approved_plan, session_key=session_key, display=disp)
+                elif approved_plan:
+                    prepare_execution_turn(messages, approved_plan=approved_plan, session_key=session_key, display=disp)
 
                 user_msgs = persist_latest_user_message(comp["history_db"], workspace=workspace or "default", session_id=comp_key, messages=messages)
 

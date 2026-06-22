@@ -152,6 +152,19 @@ def prepare_execution_turn(
     messages.append({"role": "user", "content": plan_svc.execution_instruction(approved_plan), "timestamp": timestamp or now_ts(), "_internal": True})
 
 
+def default_chat_tools(tool_registry: ToolRegistryProtocol) -> list[ToolDefinition]:
+    """Return default Web chat tools without teammate inbox-management tools."""
+
+    return [definition for definition in tool_registry.get_definitions() if definition["function"]["name"] not in ("read_inbox", "list_teammates")]
+
+
+def select_turn_tools(tools: list[ToolDefinition], *, plan_turn: bool) -> list[ToolDefinition]:
+    """Apply plan/execution policy to a turn's tool definitions."""
+
+    policy = ToolPolicy.PLAN_READONLY if plan_turn else ToolPolicy.EXECUTION
+    return filter_tools(tools, policy)
+
+
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:
     """Return display-ready chat history for a Web session."""
 

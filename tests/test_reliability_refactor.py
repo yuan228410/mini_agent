@@ -548,6 +548,23 @@ def test_web_chat_runner_delegates_plan_turn_preparation():
     assert "PlanService" in service
 
 
+def test_web_chat_runner_delegates_tool_selection_policy():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "ToolPolicy" not in runner
+    assert "filter_tools" not in runner
+    assert "list_teammates" not in runner
+    assert "default_chat_tools" in runner
+    assert "select_turn_tools" in runner
+    assert "def default_chat_tools" in service
+    assert "def select_turn_tools" in service
+    assert "ToolPolicy.PLAN_READONLY" in service
+    assert "ToolPolicy.EXECUTION" in service
+    assert "filter_tools" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}
