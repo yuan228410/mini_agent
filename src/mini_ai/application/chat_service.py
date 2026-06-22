@@ -32,6 +32,8 @@ from ..plan.tool_policy import ToolPolicy, filter_tools
 from ..runner import run_tool_loop
 from ..tools import inject_todos as _inject_todos
 from ..utils import now_ts
+from .chat_export import ChatExportResult, export_chat
+from .chat_history import chat_history
 
 
 @dataclass
@@ -66,12 +68,6 @@ class ChatRestDependencies:
     load_session_name: Callable[[Path | None, str], str]
     update_meta_cache: Callable[[str, str, str | None, list[MessageDict] | None], None]
     inject_todos: Callable[[list[MessageDict]], None]
-
-
-@dataclass(frozen=True, slots=True)
-class ChatExportResult:
-    content: str
-    filename: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,60 +480,6 @@ def inject_team_inbox_messages(messages: list[MessageDict], inbox_messages: list
     return TeamInboxInjectionResult(injected=True, count=len(inbox_messages))
 
 
-def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:
-    """Return display-ready chat history for a Web session."""
-
-    if not username:
-        return {"session_id": session_id, "history": []}
-    if not session_id:
-        return {"session_id": "", "history": []}
-    try:
-        base = deps.resolve_base(username, workspace or None)
-    except Exception:
-        return {"session_id": session_id, "history": []}
-
-    key = deps.cache_key(username, workspace or None, session_id)
-    mem_msgs = deps.session_manager.get_messages(key)
-
-    if mem_msgs:
-        messages = [m for m in mem_msgs if m["role"] not in ("system", "tool")]
-        comp = deps.get_or_create_components(username, session_id, base, workspace or None)
-        current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
-    else:
-        comp = deps.get_or_create_components(username, session_id, base, workspace or None)
-        messages = comp["history_db"].load_session_for_display(workspace or "default", session_id) or []
-        current_plan = comp["history_db"].get_current_plan(workspace or "default", session_id)
-
-    history: list[dict[str, Any]] = []
-    for message in messages:
-        entry: dict[str, Any] = {"role": message["role"]}
-        content = message.get("content")
-
-        if isinstance(content, list):
-            text_parts = []
-            images: list[dict[str, Any]] = []
-            for part in content:
-                if isinstance(part, dict):
-                    if part.get("type") == "text":
-                        text_parts.append(part.get("text", ""))
-                    elif part.get("type") == "image_url":
-                        img_url = part.get("image_url", {}).get("url", "")
-                        if img_url:
-                            images.append({"dataUrl": img_url, "name": "", "size": 0})
-            entry["content"] = "\n".join(text_parts)
-            if images:
-                entry["images"] = images
-        elif content:
-            entry["content"] = content
-
-        for key_name in ("timestamp", "thinking", "tool_calls", "kind", "plan"):
-            if message.get(key_name):
-                entry[key_name] = message[key_name]
-        history.append(entry)
-
-    return {"session_id": session_id, "history": history, "current_plan": current_plan}
-
-
 def reset_chat(deps: ChatRestDependencies, body: dict[str, Any] | None = None) -> dict[str, Any]:
     """Reset an in-memory chat session to its system prompt."""
 
@@ -564,83 +506,6 @@ def reset_chat(deps: ChatRestDependencies, body: dict[str, Any] | None = None) -
     deps.update_meta_cache(username, sid, ws, msgs)
 
     return {"status": "ok", "session_id": sid}
-
-
-def export_chat(
-    deps: ChatRestDependencies,
-    *,
-    session_id: str = "",
-    username: str,
-    workspace: str = "",
-    limit: int = 0,
-    include_thinking: bool = False,
-    include_tools: bool = False,
-) -> ChatExportResult | dict[str, Any]:
-    """Build a markdown export for a chat session."""
-
-    if not username:
-        return {"error": "缺少 username", "status_code": 400}
-    if not session_id:
-        return {"error": "缺少 session_id", "status_code": 400}
-    try:
-        base = deps.resolve_base(username, workspace or None)
-    except Exception as exc:
-        return {"error": f"工作空间错误: {exc}", "status_code": 400}
-
-    comp = deps.get_or_create_components(username, session_id, base, workspace or None)
-    messages = comp["history_db"].load_session(workspace or "default", session_id, limit=limit) or []
-    if not messages:
-        return {"error": f"会话 '{session_id}' 不存在或无消息", "status_code": 404}
-
-    session_name = deps.load_session_name(base, session_id)
-    if not session_name:
-        for message in messages:
-            if message.get("role") == "user" and message.get("content"):
-                session_name = message["content"][:50]
-                break
-    if not session_name:
-        session_name = session_id
-
-    lines = [f"# {session_name}\n"]
-    for message in messages:
-        role = message.get("role", "")
-        content = message.get("content") or ""
-        ts = message.get("timestamp", "")
-        if role in ("system", "tool"):
-            continue
-        if role == "user":
-            label = "**🧑 用户**"
-            if ts:
-                label += f"  `{ts}`"
-            lines.append(f"\n{label}\n\n{content}\n")
-        elif role == "assistant":
-            thinking = message.get("thinking")
-            tool_calls = message.get("tool_calls")
-            has_thinking = include_thinking and thinking
-            has_tools = include_tools and tool_calls
-            if not content and not has_thinking and not has_tools:
-                continue
-            label = "**🤖 助手**"
-            if ts:
-                label += f"  `{ts}`"
-            lines.append(f"\n{label}\n")
-            if has_thinking:
-                thinking_text = thinking if isinstance(thinking, str) else str(thinking)
-                lines.append(f"\n<details>\n<summary>💭 思考过程</summary>\n\n{thinking_text}\n\n</details>\n")
-            if has_tools:
-                for tool_call in tool_calls:
-                    fn = tool_call.get("function", {})
-                    name = fn.get("name", "?")
-                    args = str(fn.get("arguments", ""))
-                    result = tool_call.get("_result", "")
-                    lines.append(f"\n> 🔧 **{name}**({args[:200]})\n")
-                    if result:
-                        lines.append(f"> 结果: {result[:500]}\n")
-            if content:
-                lines.append(f"\n{content}\n")
-
-    safe_name = session_name.replace("/", "-").replace(" ", "-")[:60]
-    return ChatExportResult(content="\n".join(lines), filename=safe_name)
 
 
 class ApplicationService:
