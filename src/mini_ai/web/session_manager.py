@@ -8,10 +8,9 @@ import threading
 import uuid
 import time
 from datetime import datetime
-from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
+from ..core.runtime_types import MessageDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
 from .route_types import SessionMeta
 from .session_cache import cleanup_components, evict_sessions
 from .session_components import create_session_components
@@ -23,8 +22,10 @@ from .session_metadata import (
     save_session_model,
     save_session_name,
 )
+from .session_keys import cache_key as build_cache_key, ws_key as build_ws_key
 from .session_paths import get_workspace_session_base, resolve_session_base
 from .session_persistence import load_messages_from_db
+from .session_state import DEFAULT_MAX_CACHED_SESSIONS, SessionState
 from .queue_utils import safe_queue_put
 from ..logger import logger
 from ..plan.schema import PlanSessionState
@@ -33,30 +34,10 @@ from ..llm.base import rebuild_tool_messages as _rebuild_tool_messages
 
 
 # ═══════════════════════════════════════════
-# SessionState — 单个会话的所有状态
-# ═══════════════════════════════════════════
-
-@dataclass
-class SessionState:
-    """一个会话的完整状态（合并原 13 个 dict 中的对应字段）"""
-    messages: list[MessageDict] = field(default_factory=list)
-    model: str = ""
-    status: str = "idle"
-    access_time: float = 0.0
-    last_usage: UsageDict = field(default_factory=dict)
-    plan: PlanSessionState = field(default_factory=PlanSessionState)
-    lock: threading.Lock = field(default_factory=threading.Lock)
-    abort_event: threading.Event = field(default_factory=threading.Event)
-    meta: MetadataDict = field(default_factory=dict)
-    refs: int = 0
-    components: SessionComponents = field(default_factory=SessionComponents)
-
-
-# ═══════════════════════════════════════════
 # SessionManager — 单例
 # ═══════════════════════════════════════════
 
-_MAX_CACHED_SESSIONS = 20
+_MAX_CACHED_SESSIONS = DEFAULT_MAX_CACHED_SESSIONS
 
 class SessionManager:
     """会话状态管理器
@@ -88,11 +69,11 @@ class SessionManager:
 
     @staticmethod
     def cache_key(username: str, workspace: str | None, sid: str) -> str:
-        return f"{username}:{workspace or 'default'}:{sid}"
+        return build_cache_key(username, workspace, sid)
 
     @staticmethod
     def ws_key(username: str, workspace: str | None) -> str:
-        return f"{username}:{workspace or 'default'}"
+        return build_ws_key(username, workspace)
 
     # ── 状态读写（线程安全）──
 
