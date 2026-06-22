@@ -402,7 +402,7 @@ def test_web_runtime_paths_do_not_import_model_config_global():
         text = (root / rel).read_text(encoding="utf-8")
         assert "MODEL_CONFIG" not in text
     assert "settings_for_model" in (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
-    assert "request_context_for_settings" in (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    assert "request_context_for_settings" in (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
 
 
 def test_web_chat_route_does_not_import_stale_session_helpers():
@@ -455,6 +455,25 @@ def test_web_chat_plan_commands_delegate_to_application_service():
     assert "def approve_current_plan" in service
     assert "PlanService" in service
     assert "PlanStore" in service
+
+
+def test_web_chat_compact_command_delegates_to_application_service():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_compact_service.py").read_text(encoding="utf-8")
+
+    assert "request_context_for_settings" not in text
+    assert "settings_for_model" not in text
+    assert "from ...llm import chat" not in text
+    assert "compactor" not in text
+    assert "chat_compact_service.compact_chat" in text
+    assert "chat_compact_dependencies" in text
+    assert "def chat_compact_dependencies" in runtime_helpers
+    assert "class ChatCompactDependencies" in service
+    assert "def compact_chat" in service
+    assert "request_context_for_settings" in runtime_helpers
+    assert "settings_for_model" in runtime_helpers
 
 
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():

@@ -11,7 +11,7 @@ import threading
 
 from fastapi import APIRouter, Query, WebSocket
 
-from ...application import chat_service, plan_command_service
+from ...application import chat_compact_service, chat_service, plan_command_service
 from ...core.events import DisplayEvent, DisplayEventType
 from ...core.runtime_types import DisplayWireEvent, MessageDict, PlanArtifactDict
 from ...logger import logger
@@ -24,7 +24,7 @@ from ..route_types import (
     RouteErrorResponse,
 )
 from ..chat_runner import run_tool_loop_sync
-from ..runtime_helpers import chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies, request_context_for_settings, settings_for_model
+from ..runtime_helpers import chat_compact_dependencies, chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies
 
 router = APIRouter()
 
@@ -44,6 +44,7 @@ async def chat_ws_endpoint(ws: WebSocket):
     _ws_username: str | None = None
     deps = _chat_deps()
     plan_deps = plan_command_dependencies()
+    compact_deps = chat_compact_dependencies()
     sm = deps["session_manager"]
     cache_key = deps["cache_key"]
     resolve_base = deps["resolve_base"]
@@ -259,35 +260,8 @@ async def chat_ws_endpoint(ws: WebSocket):
                     # 处理 /compact 命令
                     if user_message == "/compact":
                         ws_name = data.get("workspace")
-                        if not session_id:
-                            await _send(_error_event("请先选择会话"))
-                            continue
-
-                        sid, messages = get_or_create_session(username, session_id, workspace=ws_name, create=False)
-                        if messages is None:
-                            await _send(_error_event(f"会话 {session_id} 不存在"))
-                            continue
-
-                        comp = get_or_create_components(username, sid, resolve_base(username, ws_name), ws_name)
-                        non_system = [m for m in messages if m["role"] != "system"]
-
-                        if len(non_system) <= comp["compactor"].keep_recent:
-                            await _send(_ws_event(DisplayEventType.INFO, message=f"消息数({len(non_system)})未超过保留阈值({comp['compactor'].keep_recent})，无需压缩", session_id=sid))
-                            continue
-
-                        before = len(non_system)
-                        session_key = cache_key(username, ws_name, sid)
-                        model_name = sm.get_model(session_key)
-                        settings = settings_for_model(comp["settings"], model_name)
-                        ctx = request_context_for_settings(settings, display=None)
-
-                        try:
-                            from ...llm import chat
-                            messages[:] = comp["compactor"].compact(chat, messages, ctx=ctx)
-                            after = len([m for m in messages if m["role"] != "system"])
-                            await _send(_ws_event(DisplayEventType.INFO, message=f"✅ 压缩完成：{before} → {after} 条消息", session_id=sid))
-                        except Exception as e:
-                            await _send(_error_event(f"压缩失败: {e}", sid))
+                        result = chat_compact_service.compact_chat(compact_deps, username=username, session_id=session_id, workspace=ws_name)
+                        await _send(result.event)
                         continue
 
                     # 处理 /act 命令（批准当前计划并执行）

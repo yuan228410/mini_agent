@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..application import chat_service, command_service, model_use_cases, plan_command_service, runtime_paths
+from ..application import chat_compact_service, chat_service, command_service, model_use_cases, plan_command_service, runtime_paths
 from ..core.runtime_factory import build_request_context, build_settings_snapshot
 from ..core.runtime_types import ModelConfigDict, RequestContextProtocol
 from ..core.settings import SettingsSnapshot
@@ -218,6 +218,24 @@ def plan_command_dependencies() -> plan_command_service.PlanCommandDependencies:
         resolve_base=deps["resolve_base"],
         get_or_create_session=deps["get_or_create_session"],
         get_or_create_components=deps["get_or_create_components"],
+    )
+
+
+def chat_compact_dependencies() -> chat_compact_service.ChatCompactDependencies:
+    """Build Web chat compaction dependencies at the adapter boundary."""
+
+    from ..llm import chat
+
+    deps = chat_session_dependencies()
+    return chat_compact_service.ChatCompactDependencies(
+        session_manager=deps["session_manager"],
+        cache_key=deps["cache_key"],
+        resolve_base=deps["resolve_base"],
+        get_or_create_session=deps["get_or_create_session"],
+        get_or_create_components=deps["get_or_create_components"],
+        settings_for_model=settings_for_model,
+        request_context_for_settings=request_context_for_settings,
+        chat=chat,
     )
 
 
