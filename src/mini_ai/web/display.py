@@ -3,44 +3,30 @@ import asyncio
 import time
 import threading
 from ..core import events
-from ..core.events import DisplayEvent, DisplayEventType, TERMINAL_EVENT_TYPES
+from ..core.events import DisplayEvent, DisplayEventType
 from ..core.runtime_types import DisplayEventPayload, DisplayWireEvent, TeamMemberStatus
 from ..team.models import WorkflowTaskEnd, WorkflowTaskInfo, WorkflowTaskStart
+from .display_event_adapter import TERMINAL_EVENT_NAMES, WebDisplayEventAdapter, cleanup_session_seq
+from .display_text_buffer import WebTextBuffer
 
-# 全局事件序号计数器（每个会话独立）
-_EVENT_SEQS: dict[str, int] = {}
-_EVENT_SEQS_LOCK = threading.Lock()
-_TERMINAL_EVENTS = {e.value for e in TERMINAL_EVENT_TYPES}
+_TERMINAL_EVENTS = TERMINAL_EVENT_NAMES
 _MAX_PENDING_EVENTS = 2000
-
-
-def cleanup_session_seq(session_id: str):
-    """清理会话事件序号，避免长生命周期 Web 服务累积。"""
-    if not session_id:
-        return
-    with _EVENT_SEQS_LOCK:
-        _EVENT_SEQS.pop(session_id, None)
 
 class WebDisplay:
     def __init__(self, queue: asyncio.Queue, loop: asyncio.AbstractEventLoop, session_id: str = "", agent_id: str = "", suppress_text: bool = False, *, usage_provider=None, stream_flush_ms: int = 40, stream_max_chars: int = 512):
         self.queue = queue
         self.loop = loop
+        self._event_adapter = WebDisplayEventAdapter(session_id=session_id, agent_id=agent_id, usage_provider=usage_provider)
         self.session_id = session_id  # 会话ID，用于前端路由工作流事件
         self.agent_id = agent_id  # Agent ID，用于前端分组消息
         self.suppress_text = suppress_text  # 计划模式下先缓存原始输出，解析后只发送渲染友好的摘要
-        self._usage_provider = usage_provider
-        self._stream_flush_ms = max(0, int(stream_flush_ms))
-        self._stream_max_chars = max(1, int(stream_max_chars))
-        self._text_emit_buf = ""
-        self._text_flush_scheduled = False
+        self._text_buffer = WebTextBuffer(loop=loop, emit_text=self._emit_text_now, flush_ms=stream_flush_ms, max_chars=stream_max_chars)
         self._teammate = ""
         self._thinking_buf = ""
         self._thinking_start_time = 0.0
         self._tool_start_time = 0.0
         self._last_thinking = ""
         self._had_thinking = False
-        self._stream_buf = ""
-        self._streaming = False
         self.thinking_mode = "collapsed"
         self.tool_detail = "summary"
         self._llm_round_start_time = 0.0
@@ -53,6 +39,31 @@ class WebDisplay:
 
     def set_agent_id(self, agent_id: str):
         self.agent_id = agent_id
+        self._event_adapter.set_agent_id(agent_id)
+
+    @property
+    def _usage_provider(self):
+        return self._event_adapter.usage_provider
+
+    @_usage_provider.setter
+    def _usage_provider(self, usage_provider):
+        self._event_adapter.set_usage_provider(usage_provider)
+
+    @property
+    def _stream_flush_ms(self) -> int:
+        return self._text_buffer.flush_ms
+
+    @_stream_flush_ms.setter
+    def _stream_flush_ms(self, value: int) -> None:
+        self._text_buffer.configure(flush_ms=value)
+
+    @property
+    def _stream_max_chars(self) -> int:
+        return self._text_buffer.max_chars
+
+    @_stream_max_chars.setter
+    def _stream_max_chars(self, value: int) -> None:
+        self._text_buffer.configure(max_chars=value)
 
     def child(self, *, agent_id: str = "", teammate: str = "", suppress_text: bool | None = None):
         child = WebDisplay(
@@ -61,9 +72,9 @@ class WebDisplay:
             session_id=self.session_id,
             agent_id=agent_id or self.agent_id,
             suppress_text=self.suppress_text if suppress_text is None else suppress_text,
-            usage_provider=self._usage_provider,
-            stream_flush_ms=self._stream_flush_ms,
-            stream_max_chars=self._stream_max_chars,
+            usage_provider=self._event_adapter.usage_provider,
+            stream_flush_ms=self._text_buffer.flush_ms,
+            stream_max_chars=self._text_buffer.max_chars,
         )
         child.thinking_mode = self.thinking_mode
         child.tool_detail = self.tool_detail
@@ -77,43 +88,11 @@ class WebDisplay:
         else:
             self._push(event, data)
 
-    def _usage_snapshot(self) -> dict:
-        if self._usage_provider is None:
-            return {"prompt_tokens": 0, "completion_tokens": 0}
-        usage = self._usage_provider()
-        if hasattr(usage, "to_dict"):
-            usage = usage.to_dict()
-        return dict(usage or {})
-
     def _push(self, event: str | DisplayEventType, data: DisplayEventPayload | None = None) -> None:
-        if isinstance(event, DisplayEventType):
-            event = event.value
-        if event != DisplayEventType.TEXT.value:
+        event_name = event.value if isinstance(event, DisplayEventType) else event
+        if event_name != DisplayEventType.TEXT.value:
             self._flush_text_buffer()
-        usage = self._usage_snapshot() if event in _TERMINAL_EVENTS or event in {DisplayEventType.LLM_ROUND_END.value, DisplayEventType.DONE.value} else {}
-        if event in _TERMINAL_EVENTS:
-            from ..logger import logger as _dlog
-            _dlog.info(f'[Display] push: event={event} sid={self.session_id} has_err={bool(data and data.get("error"))}')
-        if data is None:
-            data = {}
-        # 自动注入 session_id（用于前端路由工作流事件到对应会话）
-        if self.session_id:
-            data["session_id"] = self.session_id
-        # 自动注入 agent_id（用于前端分组消息）
-        if self.agent_id:
-            data["agent_id"] = self.agent_id
-        if usage:
-            data.setdefault("prompt_tokens", usage.get("prompt_tokens", 0))
-            data.setdefault("completion_tokens", usage.get("completion_tokens", 0))
-
-        # 添加事件序号（用于前端检测消息丢失）
-        if self.session_id:
-            with _EVENT_SEQS_LOCK:
-                seq = _EVENT_SEQS.get(self.session_id, 0) + 1
-                _EVENT_SEQS[self.session_id] = seq
-                data["seq"] = seq
-        
-        self._enqueue({"event": event, "data": data})
+        self._enqueue(self._event_adapter.to_wire(event_name, data))
 
     def _enqueue(self, item: DisplayWireEvent) -> None:
         with self._pending_lock:
@@ -246,57 +225,17 @@ class WebDisplay:
         self._push(DisplayEventType.TEXT, data)
 
     def _schedule_text_flush(self) -> None:
-        if self._text_flush_scheduled:
-            return
-        self._text_flush_scheduled = True
-        delay = self._stream_flush_ms / 1000
-        try:
-            self.loop.call_soon_threadsafe(self.loop.call_later, delay, self._flush_text_buffer)
-        except Exception:
-            self._text_flush_scheduled = False
-            self._flush_text_buffer()
+        self._text_buffer.schedule_flush()
 
     def _flush_text_buffer(self) -> None:
-        text = self._text_emit_buf
-        self._text_emit_buf = ""
-        self._text_flush_scheduled = False
-        self._emit_text_now(text)
+        self._text_buffer.flush()
 
     def text_chunk(self, text: str):
-        self._stream_buf += text
-        self._streaming = True
-        if self.suppress_text:
-            return
-        self._text_emit_buf += text
-        if len(self._text_emit_buf) >= self._stream_max_chars or self._stream_flush_ms == 0:
-            self._flush_text_buffer()
-        else:
-            self._schedule_text_flush()
+        self._text_buffer.add_chunk(text, suppress_text=self.suppress_text)
 
     def text_end(self, full_text: str | None = None):
-        self._flush_text_buffer()
-        # 🔧 修复：先保存 _stream_buf，再清空（避免中断时丢失）
-        saved_buf = self._stream_buf
-        # 流式过程中已通过 text_chunk 发送分段，前端累加成完整文本。
-        # 这里仅在以下两种情况补发 text 事件：
-        #   1) 非流式路径（_stream_buf 为空）：full_text 是唯一来源，必须发
-        #   2) full_text 与已累积内容不一致：兜底，避免丢失内容
-        # 否则跳过补发，否则前端会把完整文本再追加一次，导致显示两遍。
-        should_emit = bool(full_text) and not self.suppress_text and (not saved_buf or full_text != saved_buf)
-        if should_emit:
-            self._stream_buf = ""
-            self._streaming = True
-            data = {"content": full_text}
-            if self._teammate:
-                data["teammate"] = self._teammate
-            self._push(DisplayEventType.TEXT, data)
-        else:
-            # 正常流式结束或中断：保留 saved_buf 供上层使用
-            pass
-        self._stream_buf = ""
-        self._streaming = False
+        saved_buf = self._text_buffer.end(full_text, suppress_text=self.suppress_text)
         self._had_thinking = False
-        # 返回保存的内容，供中断时使用
         return saved_buf
 
     def tool_call_start(self, name: str, args_summary: str, tool_call_id: str = ""):
