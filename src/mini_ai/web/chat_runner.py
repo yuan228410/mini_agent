@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, default_chat_tools, handle_invalid_chat_result, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools
+from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, default_chat_tools, handle_invalid_chat_result, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -218,21 +218,10 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 raw_plan_text = result.raw_plan_text if plan_turn else None
                 if msg and msg.get("content") and msg["content"].strip():
                     if plan_turn:
-                        display_content = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
-                        msg["content"] = display_content
-                        msg["kind"] = "plan_discussion"
+                        display_content = apply_plan_discussion_response(messages, msg, raw_plan_text)
                         safe_queue_put(queue, _ws_event(DisplayEventType.TEXT, content=display_content, session_id=comp_key), loop)
-                        for m in reversed(messages):
-                            if m.get("role") == "assistant" and m.get("content") == raw_plan_text:
-                                m["content"] = display_content
-                                m["kind"] = "plan_discussion"
-                                break
-                    elif not any(
-                        m.get("role") == "assistant" and m.get("content") == msg["content"]
-                        for m in messages[-3:]
-                    ):
-                        asst_ts = now_ts()
-                        messages.append({"role": "assistant", "content": msg["content"], "thinking": msg.get("thinking"), "timestamp": asst_ts, "kind": "chat"})
+                    else:
+                        append_chat_assistant_message(messages, msg)
 
                 usage = result.usage
                 safe_queue_put(queue, _ws_event(DisplayEventType.COMPLETE, prompt_tokens=usage["prompt_tokens"], completion_tokens=usage["completion_tokens"]), loop)

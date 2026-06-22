@@ -581,6 +581,21 @@ def test_web_chat_runner_delegates_error_response_construction():
     assert "history_db.append(workspace, history_session_id, \"assistant\", err_text)" in service
 
 
+def test_web_chat_runner_delegates_assistant_response_persistence():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "计划已更新" not in runner
+    assert "asst_ts" not in runner
+    assert "append_chat_assistant_message" in runner
+    assert "apply_plan_discussion_response" in runner
+    assert "PLAN_DISCUSSION_DISPLAY_CONTENT" in service
+    assert "def apply_plan_discussion_response" in service
+    assert "def append_chat_assistant_message" in service
+    assert "kind\": \"chat\"" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

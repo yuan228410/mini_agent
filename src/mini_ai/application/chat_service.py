@@ -82,6 +82,9 @@ class ChatErrorResult:
     error_text: str
 
 
+PLAN_DISCUSSION_DISPLAY_CONTENT = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
+
+
 def build_user_message(user_message: str, images: list[dict[str, Any]] | None = None, *, timestamp: str | None = None) -> MessageDict | None:
     """Build a runtime user message from adapter-neutral text and image payloads."""
 
@@ -237,6 +240,39 @@ def handle_invalid_chat_result(
         },
     ).to_wire()
     return ChatErrorResult(message=message, usage=usage, event=event, error_text=err_text)
+
+
+def apply_plan_discussion_response(messages: list[MessageDict], message: MessageDict, raw_plan_text: str | None) -> str:
+    """Replace raw plan artifact text with display-friendly plan discussion content."""
+
+    message["content"] = PLAN_DISCUSSION_DISPLAY_CONTENT
+    message["kind"] = "plan_discussion"
+    for existing in reversed(messages):
+        if existing.get("role") == "assistant" and existing.get("content") == raw_plan_text:
+            existing["content"] = PLAN_DISCUSSION_DISPLAY_CONTENT
+            existing["kind"] = "plan_discussion"
+            break
+    return PLAN_DISCUSSION_DISPLAY_CONTENT
+
+
+def append_chat_assistant_message(messages: list[MessageDict], message: MessageDict, *, timestamp: str | None = None) -> MessageDict | None:
+    """Append a normal assistant response unless the runner already persisted it."""
+
+    content = message.get("content")
+    if not content or not str(content).strip():
+        return None
+    if any(existing.get("role") == "assistant" and existing.get("content") == content for existing in messages[-3:]):
+        return None
+
+    assistant_message = {
+        "role": "assistant",
+        "content": content,
+        "thinking": message.get("thinking"),
+        "timestamp": timestamp or now_ts(),
+        "kind": "chat",
+    }
+    messages.append(assistant_message)
+    return assistant_message
 
 
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:
