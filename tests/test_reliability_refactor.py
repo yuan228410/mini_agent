@@ -502,6 +502,20 @@ def test_web_chat_route_uses_application_message_builder():
     assert "image_url" in service
 
 
+def test_web_chat_runner_delegates_session_auto_naming():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "session_service.py").read_text(encoding="utf-8")
+
+    assert "maybe_auto_name_session" in runner
+    assert "first_content" not in runner
+    assert "text_parts" not in runner
+    assert "auto_name =" not in runner
+    assert "def title_from_user_content" in service
+    assert "def maybe_auto_name_session" in service
+    assert "save_session_name(base, session_id, auto_name)" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}

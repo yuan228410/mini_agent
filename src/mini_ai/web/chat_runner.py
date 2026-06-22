@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
 from ..application.chat_service import ApplicationService, RunTurnOptions
+from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
 from ..core.runtime_context import SessionIdentity
@@ -141,16 +142,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                     persisted_user_content = last_user.get("_plan_original_content", last_user.get("content", ""))
                     comp["history_db"].append(workspace or "default", comp_key, "user", persisted_user_content, metadata=json.dumps(user_meta) if user_meta else "")
 
-                if len(user_msgs) == 1 and messages[0].get("name", "") in ("", "新会话"):
-                    first_content = user_msgs[0].get("content", "")
-                    if isinstance(first_content, list):
-                        text_parts = [p.get("text", "") for p in first_content if isinstance(p, dict) and p.get("type") == "text"]
-                        auto_name = " ".join(text_parts)[:50]
-                    else:
-                        auto_name = first_content[:50]
-                    if auto_name:
-                        messages[0]["name"] = auto_name
-                        _save_session_name(base, comp_key, auto_name)
+                maybe_auto_name_session(messages, base=base, session_id=comp_key, save_session_name=_save_session_name)
 
                 logger.debug(f"[Web] run_tool_loop start key={session_key} plan_turn={plan_turn} tools={len(tools)}")
 

@@ -116,6 +116,39 @@ def get_todos(deps: SessionServiceDependencies, username: str, workspace: str | 
     return {"todos": deps.get_session_todos(deps.cache_key(username, workspace, session_id))}
 
 
+def title_from_user_content(content: Any, *, limit: int = 50) -> str:
+    """Derive a compact session title from a user message payload."""
+
+    if isinstance(content, list):
+        text_parts = [part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text"]
+        return " ".join(text_parts)[:limit]
+    return str(content or "")[:limit]
+
+
+def maybe_auto_name_session(
+    messages: list[MessageDict],
+    *,
+    base: Path | None,
+    session_id: str,
+    save_session_name: Callable[[Path | None, str, str], None],
+) -> str | None:
+    """Name a new session from its first visible user message when appropriate."""
+
+    if not messages or messages[0].get("name", "") not in ("", "新会话"):
+        return None
+    user_msgs = [m for m in messages if m.get("role") == "user" and not m.get("_internal")]
+    if len(user_msgs) != 1:
+        return None
+
+    auto_name = title_from_user_content(user_msgs[0].get("content", ""))
+    if not auto_name:
+        return None
+
+    messages[0]["name"] = auto_name
+    save_session_name(base, session_id, auto_name)
+    return auto_name
+
+
 def delete_session(deps: SessionServiceDependencies, body: dict[str, Any]) -> dict[str, Any]:
     """Delete one session and clean associated cached state."""
 
