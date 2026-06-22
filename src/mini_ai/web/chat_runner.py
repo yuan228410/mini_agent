@@ -11,8 +11,9 @@ from ..core.events import DisplayEvent, DisplayEventType
 from ..core.runtime_types import MessageDict, ToolDefinition
 from ..logger import logger, set_session_id
 from .display import WebDisplay
+from .queue_utils import safe_queue_put
 from .session_manager import (
-    SessionManager, cache_key, safe_queue_put,
+    SessionManager, cache_key,
     resolve_base, get_or_create_components,
     _save_session_name, _update_meta_cache,
 )

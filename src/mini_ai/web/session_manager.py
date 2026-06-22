@@ -11,9 +11,9 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..core.events import TERMINAL_EVENT_TYPES
 from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
 from .route_types import SessionMeta
+from .session_cache import cleanup_components, evict_sessions
 from .session_components import create_session_components
 from .session_metadata import (
     build_meta,
@@ -25,6 +25,7 @@ from .session_metadata import (
 )
 from .session_paths import get_workspace_session_base, resolve_session_base
 from .session_persistence import load_messages_from_db
+from .queue_utils import safe_queue_put
 from ..logger import logger
 from ..plan.schema import PlanSessionState
 from ..utils import now_ts
@@ -252,27 +253,7 @@ class SessionManager:
 
     def _evict(self, keep_key: str | None = None):
         """淘汰最老的非活跃会话（在 _lock 内调用）"""
-        candidates = [(k, s.access_time) for k, s in self._sessions.items()]
-        candidates.sort(key=lambda x: x[1])
-
-        evicted = 0
-        target = len(self._sessions) - _MAX_CACHED_SESSIONS + 5
-        for k, _ in candidates:
-            if evicted >= target:
-                break
-            if k == keep_key:
-                continue
-            s = self._sessions.get(k)
-            if not s:
-                continue
-            if s.refs > 0:
-                continue
-            if s.status == "generating":
-                continue
-            self._cleanup_components(s.components)
-            del self._sessions[k]
-            evicted += 1
-
+        evicted = evict_sessions(self._sessions, max_cached_sessions=_MAX_CACHED_SESSIONS, keep_key=keep_key)
         if evicted > 0:
             logger.info(f"[Web] 淘汰 {evicted} 个非活跃会话缓存，当前缓存数: {len(self._sessions)}")
 
@@ -288,7 +269,7 @@ class SessionManager:
         with self._lock:
             s = self._sessions.pop(key, None)
             if s:
-                self._cleanup_components(s.components)
+                cleanup_components(s.components)
 
     def reset_session(self, key: str, system_content: str, old_name: str = ""):
         """重置会话（保留 system prompt）"""
@@ -299,20 +280,6 @@ class SessionManager:
                 s.plan = PlanSessionState()
                 s.components = {}
                 s.refs = 0
-
-    # ── 组件清理 ──
-
-    @staticmethod
-    def _cleanup_components(comp: SessionComponents):
-        if not comp:
-            return
-        for name in ("compactor", "store"):
-            try:
-                obj = comp.get(name)
-                if obj and hasattr(obj, "close"):
-                    obj.close()
-            except Exception as e:
-                logger.warning(f"[Web] 关闭 {name} 失败: {e}")
 
     # ── abort ──
 
@@ -329,7 +296,7 @@ class SessionManager:
             keys_to_delete = [k for k in self._sessions if k.startswith(prefix)]
             for k in keys_to_delete:
                 s = self._sessions.pop(k)
-                self._cleanup_components(s.components)
+                cleanup_components(s.components)
 
         # ── 团队组件 ──
 
@@ -363,54 +330,6 @@ def cache_key(username: str, workspace: str | None, sid: str) -> str:
 
 def ws_key(username: str, workspace: str | None) -> str:
     return SessionManager.ws_key(username, workspace)
-
-def safe_queue_put(queue, item, loop=None):
-    """线程安全投递队列事件。
-
-    终止类事件会尽量腾出一个普通事件槽位；返回 bool 表示是否成功投递。
-    """
-    terminal_events = {e.value for e in TERMINAL_EVENT_TYPES}
-    result = {"ok": False}
-
-    def _put():
-        try:
-            queue.put_nowait(item)
-            result["ok"] = True
-            return
-        except Exception:
-            pass
-        if item.get("event") in terminal_events:
-            try:
-                buffered = []
-                dropped = False
-                while True:
-                    old = queue.get_nowait()
-                    if not dropped and old.get("event") not in terminal_events:
-                        dropped = True
-                        continue
-                    buffered.append(old)
-            except Exception:
-                pass
-            for old in buffered:
-                try:
-                    queue.put_nowait(old)
-                except Exception:
-                    break
-            try:
-                queue.put_nowait(item)
-                result["ok"] = True
-            except Exception:
-                result["ok"] = False
-
-    if loop is not None:
-        try:
-            loop.call_soon_threadsafe(_put)
-        except Exception:
-            return False
-        return True
-
-    _put()
-    return result["ok"]
 
 def abort_all_sessions():
     SessionManager.instance().abort_all()
