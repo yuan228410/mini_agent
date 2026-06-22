@@ -13,9 +13,8 @@ from fastapi import APIRouter, Query, WebSocket
 
 from ...application import chat_compact_service, chat_service, plan_command_service
 from ...core.events import DisplayEvent, DisplayEventType
-from ...core.runtime_types import DisplayWireEvent, MessageDict, PlanArtifactDict
+from ...core.runtime_types import DisplayWireEvent, PlanArtifactDict
 from ...logger import logger
-from ...utils import now_ts
 from ..route_types import (
     ChatHistoryResponse,
     ChatResetRequest,
@@ -90,23 +89,9 @@ async def chat_ws_endpoint(ws: WebSocket):
         session_key = cache_key(username, ws_name, sid)
         base = resolve_base(username, ws_name)
         messages = get_or_create_session(username, sid, base, ws_name)[1]
-        ts = now_ts()
 
         # 构造用户消息（可能包含图片）。审批后的执行由 approved_plan 注入内部指令，不追加可见用户消息。
-        if user_message or images:
-            user_msg: MessageDict = {"role": "user", "content": user_message, "timestamp": ts}
-            if images and len(images) > 0:
-                content_blocks = [{"type": "text", "text": user_message}]
-                for img in images:
-                    data_url = img.get("dataUrl", "")
-                    if data_url.startswith("data:"):
-                        content_blocks.append({
-                            "type": "image_url",
-                            "image_url": {"url": data_url}
-                        })
-                user_msg["content"] = content_blocks
-
-            messages.append(user_msg)
+        chat_service.append_user_message(messages, user_message, images)
         get_or_create_components(username, sid, base, ws_name)
 
         queue: asyncio.Queue = asyncio.Queue(maxsize=1000)

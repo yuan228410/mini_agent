@@ -72,6 +72,32 @@ class ChatExportResult:
     filename: str
 
 
+def build_user_message(user_message: str, images: list[dict[str, Any]] | None = None, *, timestamp: str | None = None) -> MessageDict | None:
+    """Build a runtime user message from adapter-neutral text and image payloads."""
+
+    if not user_message and not images:
+        return None
+
+    message: MessageDict = {"role": "user", "content": user_message, "timestamp": timestamp or now_ts()}
+    if images:
+        content_blocks: list[dict[str, Any]] = [{"type": "text", "text": user_message}]
+        for image in images:
+            data_url = image.get("dataUrl", "") if isinstance(image, dict) else ""
+            if data_url.startswith("data:"):
+                content_blocks.append({"type": "image_url", "image_url": {"url": data_url}})
+        message["content"] = content_blocks
+    return message
+
+
+def append_user_message(messages: list[MessageDict], user_message: str, images: list[dict[str, Any]] | None = None, *, timestamp: str | None = None) -> MessageDict | None:
+    """Append an adapter-neutral user message if there is visible user input."""
+
+    message = build_user_message(user_message, images, timestamp=timestamp)
+    if message is not None:
+        messages.append(message)
+    return message
+
+
 def chat_history(deps: ChatRestDependencies, *, session_id: str = "", username: str, workspace: str = "") -> dict[str, Any]:
     """Return display-ready chat history for a Web session."""
 

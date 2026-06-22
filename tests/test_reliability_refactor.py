@@ -487,6 +487,21 @@ def test_web_chat_route_uses_single_task_launcher():
     assert reader_area.count("await _launch_chat_task") == 3
 
 
+def test_web_chat_route_uses_application_message_builder():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "MessageDict" not in text
+    assert "content_blocks" not in text
+    assert "dataUrl" not in text
+    assert "now_ts" not in text
+    assert "chat_service.append_user_message" in text
+    assert "def build_user_message" in service
+    assert "def append_user_message" in service
+    assert "image_url" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}
