@@ -4,7 +4,6 @@ from __future__ import annotations
 从 web/routes/chat.py 提取，统一管理 13 个全局 dict。
 对外暴露 SessionManager 单例方法，不再暴露裸 dict。
 """
-import json
 import threading
 import uuid
 import time
@@ -17,6 +16,15 @@ from ..core.runtime_factory import build_settings_snapshot
 from ..core.events import TERMINAL_EVENT_TYPES
 from ..core.runtime_types import MessageDict, MetadataDict, SessionComponents, TeamComponents, ToolDefinition, UsageDict
 from .route_types import SessionMeta
+from .session_metadata import (
+    build_meta,
+    load_session_model,
+    load_session_name,
+    parse_created_at,
+    save_session_model,
+    save_session_name,
+)
+from .session_persistence import load_messages_from_db
 from ..logger import logger
 from ..plan.schema import PlanSessionState
 from ..utils import now_ts
@@ -596,61 +604,29 @@ def build_system_prompt(username: str, sid: str, base: Path | None = None, works
 # ═══════════════════════════════════════════
 
 def _load_from_db(username: str, sid: str, base: Path | None = None, workspace: str | None = None) -> list[MessageDict] | None:
-    _t0 = time.time()
-    try:
-        if base is None:
-            base = resolve_base(username, workspace or "default")
-        comp = get_or_create_components(username, sid, base, workspace)
-        settings = comp.get("settings")
-        context_limit = settings.compactor.context_limit if settings else 50
-        result = comp["history_db"].load_session(workspace or "default", sid, limit=context_limit)
-        logger.debug(f"[perf] _load_from_db sid={sid} msgs={len(result) if result else 0} time={time.time()-_t0:.3f}s")
-        return result
-    except Exception as e:
-        logger.error(f"[Web] _load_from_db error: {e}", exc_info=True)
-        return None
+    return load_messages_from_db(
+        username,
+        sid,
+        base,
+        workspace,
+        resolve_base=resolve_base,
+        get_components=get_or_create_components,
+    )
 
 def _parse_created_at(sid: str) -> str:
-    try:
-        dt = datetime.strptime(sid[:15], "%Y%m%d-%H%M%S")
-        return dt.isoformat()
-    except (ValueError, IndexError):
-        return ""
+    return parse_created_at(sid)
+
 
 def _load_session_name(base: Path | None, sid: str) -> str:
-    if not base:
-        return ""
-    meta_path = base / sid / "meta.json"
-    if meta_path.exists():
-        try:
-            return json.loads(meta_path.read_text(encoding="utf-8")).get("name", "")
-        except Exception:
-            pass
-    return ""
+    return load_session_name(base, sid)
+
 
 def _save_session_name(base: Path | None, sid: str, name: str):
-    if not base:
-        return
-    meta_path = base / sid / "meta.json"
-    meta = {}
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    meta["name"] = name
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    save_session_name(base, sid, name)
+
 
 def _load_session_model(base: Path | None, sid: str) -> str:
-    if not base:
-        return ""
-    meta_path = base / sid / "meta.json"
-    if meta_path.exists():
-        try:
-            return json.loads(meta_path.read_text(encoding="utf-8")).get("model", "")
-        except Exception:
-            pass
-    return ""
+    return load_session_model(base, sid)
 
 def _restore_session_model(base: Path | None, sid: str, cache_key: str):
     model = _load_session_model(base, sid)
@@ -659,29 +635,16 @@ def _restore_session_model(base: Path | None, sid: str, cache_key: str):
 
 def _build_meta(sid: str, messages: list[MessageDict], username: str, workspace: str | None = None) -> SessionMeta:
     sm = SessionManager.instance()
-    key = sm.cache_key(username, workspace, sid)
-    non_system = [m for m in messages if m["role"] != "system"]
-    first_user = next((m.get("content", "")[:50] for m in non_system if m["role"] == "user"), "")
-    name = ""
-    try:
-        base = resolve_base(username, workspace or "default")
-        name = _load_session_name(base, sid)
-    except Exception:
-        pass
-    if not name:
-        name = messages[0].get("name", "") if messages else ""
-    if not name:
-        name = first_user or "新会话"
-    return {
-        "session_id": sid,
-        "name": name,
-        "model": sm.get_model(key),
-        "message_count": len(non_system),
-        "preview": first_user,
-        "created_at": _parse_created_at(sid),
-        "updated_at": next((m.get("timestamp", "") for m in reversed(non_system) if m.get("timestamp")), _parse_created_at(sid)),
-        "status": sm.get_status(key),
-    }
+    return build_meta(
+        sid,
+        messages,
+        username,
+        workspace,
+        resolve_base=resolve_base,
+        get_model=sm.get_model,
+        get_status=sm.get_status,
+        cache_key=sm.cache_key,
+    )
 
 def _update_meta_cache(username: str, sid: str, workspace: str | None = None, messages: list[MessageDict] | None = None):
     sm = SessionManager.instance()
@@ -690,17 +653,7 @@ def _update_meta_cache(username: str, sid: str, workspace: str | None = None, me
         sm.set_meta(key, _build_meta(sid, messages, username, workspace))
 
 def _save_session_model(base: Path | None, sid: str, model_name: str):
-    if not base:
-        return
-    meta_path = base / sid / "meta.json"
-    meta = {}
-    if meta_path.exists():
-        try:
-            meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        except Exception:
-            pass
-    meta["model"] = model_name
-    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    save_session_model(base, sid, model_name)
 
 def get_or_create_session(username: str, session_id: str | None, base: Path | None = None, workspace: str | None = None, *, create: bool = True) -> tuple[str, list[MessageDict] | None]:
     _t0 = time.time()
