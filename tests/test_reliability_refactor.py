@@ -487,13 +487,13 @@ def test_web_chat_route_uses_single_task_launcher():
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     launcher = (root / "web" / "chat_task_launcher.py").read_text(encoding="utf-8")
-    reader_area = text.split("async def _reader():", 1)[1].split("# 启动 reader", 1)[0]
+    driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
 
     assert "async def _launch_chat_task" in text
     assert "claim_active_task" not in text
     assert "asyncio.create_task(_run_chat" not in text
     assert "chat_task_launcher" in text
-    assert "dispatch_chat_ws_message" in reader_area
+    assert "dispatch_chat_ws_message" in driver
     assert "def send_plan_command_result" in command_dispatch
     assert command_dispatch.count("await launch_chat_task") == 2
     assert "class ChatTaskLauncher" in launcher
@@ -562,14 +562,15 @@ def test_web_chat_route_delegates_command_dispatch():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
-    reader_area = text.split("async def _reader():", 1)[1].split("# 启动 reader", 1)[0]
+    driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
 
     assert "import json" not in text
     assert "json.loads" not in text
     assert "msg_type" not in text
     assert "user_message =" not in text
     assert "if user_message ==" not in text
-    assert "dispatch_chat_ws_message" in reader_area
+    assert "dispatch_chat_ws_message" not in text
+    assert "dispatch_chat_ws_message" in driver
     assert "class ChatCommandDependencies" in command_dispatch
     assert "class ChatCommandState" in command_dispatch
     assert "def dispatch_chat_ws_message" in command_dispatch
@@ -615,17 +616,51 @@ def test_web_chat_route_delegates_connection_cleanup():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     cleanup = (root / "web" / "chat_connection_cleanup.py").read_text(encoding="utf-8")
-    finally_area = text.split("finally:", 1)[1]
+    driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
 
     assert "cleanup_chat_connection" in text
     assert "reader_task.cancel()" not in text
     assert "get_abort_event(key)" not in text
     assert "asyncio.CancelledError" not in text
-    assert "cleanup_chat_connection" in finally_area
+    assert "cleanup_reader" in text
+    assert "cleanup_reader(reader_task)" in driver
     assert "def cleanup_chat_connection" in cleanup
     assert "reader_task.cancel()" in cleanup
     assert "get_abort_event(key)" in cleanup
     assert "asyncio.CancelledError" in cleanup
+
+
+def test_web_chat_route_delegates_connection_driver():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    driver = (root / "web" / "chat_connection_driver.py").read_text(encoding="utf-8")
+
+    assert "ws_closed" not in text
+    assert "async def _reader" not in text
+    assert "while not" not in text
+    assert "asyncio.wait_for(ws.receive_text" not in text
+    assert "drive_chat_connection" in text
+    assert "class ChatConnectionState" in driver
+    assert "def run_chat_reader_loop" in driver
+    assert "def drive_chat_connection" in driver
+    assert "asyncio.create_task" in driver
+    assert "receive_text" in driver
+
+
+def test_web_chat_export_response_delegates_to_adapter():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    adapter = (root / "web" / "chat_export_response.py").read_text(encoding="utf-8")
+
+    assert "JSONResponse" not in text
+    assert "urllib.parse" not in text
+    assert "Content-Disposition" not in text
+    assert "quote(" not in text
+    assert "chat_export_response" in text
+    assert "def chat_export_response" in adapter
+    assert "JSONResponse" in adapter
+    assert "Content-Disposition" in adapter
+    assert "quote(result.filename)" in adapter
 
 
 def test_web_chat_runner_delegates_session_auto_naming():

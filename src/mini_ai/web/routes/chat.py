@@ -19,9 +19,11 @@ from ..route_types import (
     ImageUpload,
     RouteErrorResponse,
 )
-from ..chat_command_dispatch import ChatCommandDependencies, dispatch_chat_ws_message, error_event
+from ..chat_command_dispatch import ChatCommandDependencies, error_event
 from ..chat_connection_cleanup import cleanup_chat_connection
+from ..chat_connection_driver import drive_chat_connection
 from ..chat_events import relay_chat_queue_events
+from ..chat_export_response import chat_export_response
 from ..chat_run_context import prepare_chat_run_context
 from ..chat_run_finalization import finalize_chat_run
 from ..chat_runner import run_tool_loop_sync
@@ -42,9 +44,7 @@ def _chat_deps():
 async def chat_ws_endpoint(ws: WebSocket):
     await ws.accept()
     _ws_abort_keys: list[str] = []
-    ws_closed = False
     sender = ChatWebSocketSender(ws)
-    _ws_username: str | None = None
     deps = _chat_deps()
     plan_deps = plan_command_dependencies()
     compact_deps = chat_compact_dependencies()
@@ -119,43 +119,16 @@ async def chat_ws_endpoint(ws: WebSocket):
             got_terminal=relay_result.got_terminal if relay_result else False,
         )
 
-    async def _reader():
-        nonlocal ws_closed, _ws_username
-        try:
-            while not ws_closed:
-                try:
-                    raw = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
-                    state = await dispatch_chat_ws_message(
-                        raw,
-                        username=_ws_username,
-                        deps=command_deps,
-                        send=_send,
-                        launch_chat_task=_launch_chat_task,
-                    )
-                    _ws_username = state.username
-
-                except asyncio.TimeoutError:
-                    pass
-                except Exception as e:
-                    logger.debug(f"[Web] WS receive error: {e}")
-                    break
-
-        except Exception as e:
-            logger.debug(f"[Web] WS reader 退出: {e}")
-        finally:
-            ws_closed = True
-
-    # 启动 reader
-    reader_task = asyncio.create_task(_reader())
-
-    try:
-        while not ws_closed:
-            await asyncio.sleep(0.5)
-    except Exception:
-        pass
-    finally:
-        ws_closed = True
+    async def _cleanup_reader(reader_task: asyncio.Task) -> None:
         await cleanup_chat_connection(reader_task=reader_task, abort_keys=_ws_abort_keys, session_manager=sm)
+
+    await drive_chat_connection(
+        receive_text=ws.receive_text,
+        command_deps=command_deps,
+        send=_send,
+        launch_chat_task=_launch_chat_task,
+        cleanup_reader=_cleanup_reader,
+    )
 
 
 # ── REST: 聊天历史 ──
@@ -176,9 +149,6 @@ async def chat_reset(body: ChatResetRequest | None = None) -> ChatResetResponse 
 
 @router.get("/chat/export")
 async def chat_export(session_id: str = Query(default=""), username: str = Query(...), workspace: str = Query(default=""), limit: int = Query(default=0), include_thinking: bool = Query(default=False), include_tools: bool = Query(default=False)):
-    from fastapi.responses import JSONResponse, Response
-    from urllib.parse import quote
-
     result = chat_service.export_chat(
         chat_rest_dependencies(),
         session_id=session_id,
@@ -188,13 +158,4 @@ async def chat_export(session_id: str = Query(default=""), username: str = Query
         include_thinking=include_thinking,
         include_tools=include_tools,
     )
-    if isinstance(result, dict):
-        status_code = int(result.get("status_code", 400))
-        return JSONResponse({"error": result.get("error", "导出失败")}, status_code=status_code)
-
-    encoded_name = quote(result.filename)
-    return Response(
-        content=result.content,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_name}.md"},
-    )
+    return chat_export_response(result)
