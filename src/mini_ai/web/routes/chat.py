@@ -6,12 +6,11 @@
 - REST: chat_history, chat_export, chat_reset
 """
 import asyncio
-import json
 
 from fastapi import APIRouter, Query, WebSocket
 
-from ...application import chat_compact_service, chat_service, plan_command_service
-from ...core.events import DisplayEvent, DisplayEventType
+from ...application import chat_service
+from ...core.events import DisplayEvent
 from ...core.runtime_types import DisplayWireEvent, PlanArtifactDict
 from ...logger import logger
 from ..route_types import (
@@ -21,8 +20,10 @@ from ..route_types import (
     ImageUpload,
     RouteErrorResponse,
 )
+from ..chat_command_dispatch import ChatCommandDependencies, dispatch_chat_ws_message, error_event, ws_event
 from ..chat_events import drain_ready_chat_events, initial_chat_usage, normalize_chat_queue_event
 from ..chat_run_context import prepare_chat_run_context
+from ..chat_run_finalization import finalize_chat_run
 from ..chat_runner import run_tool_loop_sync
 from ..runtime_helpers import chat_compact_dependencies, chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies
 
@@ -45,20 +46,15 @@ async def chat_ws_endpoint(ws: WebSocket):
     deps = _chat_deps()
     plan_deps = plan_command_dependencies()
     compact_deps = chat_compact_dependencies()
+    command_deps = ChatCommandDependencies(
+        session_manager=deps["session_manager"],
+        cache_key=deps["cache_key"],
+        plan_dependencies=plan_deps,
+        compact_dependencies=compact_deps,
+    )
     sm = deps["session_manager"]
     cache_key = deps["cache_key"]
-    resolve_base = deps["resolve_base"]
     update_meta_cache = deps["update_meta_cache"]
-
-    def _ws_event(event: DisplayEventType | str, **data) -> DisplayWireEvent:
-        event_type = event if isinstance(event, DisplayEventType) else DisplayEventType(event)
-        return DisplayEvent(event_type, data).to_wire()
-
-    def _error_event(error: str, session_id: str | None = None) -> DisplayWireEvent:
-        payload = {"error": error}
-        if session_id:
-            payload["session_id"] = session_id
-        return DisplayEvent(DisplayEventType.ERROR, payload).to_wire()
 
     async def _send(data: DisplayWireEvent | DisplayEvent) -> None:
         wire = data.to_wire() if isinstance(data, DisplayEvent) else data
@@ -81,7 +77,7 @@ async def chat_ws_endpoint(ws: WebSocket):
         task = asyncio.create_task(_run_chat(sid, username, user_message, ws_name, images, plan_turn, approved_plan))
         if not sm.claim_active_task(session_key or cache_key(username, ws_name, sid), task):
             task.cancel()
-            await _send(_error_event("当前会话正在生成，请稍后再发送", sid))
+            await _send(error_event("当前会话正在生成，请稍后再发送", sid))
 
     async def _run_chat(sid: str, username: str, user_message: str, ws_name: str | None = None, images: list[ImageUpload] | None = None, plan_turn: bool = False, approved_plan: PlanArtifactDict | None = None) -> None:
         logger.info(f"[Web] WS _run_chat sid={sid} user={username} ws={ws_name} images={len(images) if images else 0} plan_turn={plan_turn} approved={bool(approved_plan)}")
@@ -137,38 +133,21 @@ async def chat_ws_endpoint(ws: WebSocket):
                         break
         except Exception as e:
             logger.error(f"[Web] WS chat task error: {e}", exc_info=True)
-            await _send(_error_event(str(e), sid))
+            await _send(error_event(str(e), sid))
 
-        if aborted:
-            logger.info(f"[Web] chat aborted sid={sid}")
-            await _send(_ws_event(DisplayEventType.ABORTED, session_id=sid))
-            try:
-                future.cancel()
-            except Exception:
-                pass
-
-        usage = complete_usage
-        sm.set_last_usage(run_context.session_key, usage)
-        update_meta_cache(username, sid, ws_name, run_context.messages)
-
-        logger.info(f"[Web] WS loop exit: aborted={aborted} got_terminal={got_terminal} sid={sid}")
-        if not aborted and not got_terminal:
-            try:
-                future.result()
-            except Exception as e:
-                logger.error(f"[Web] chat runner ended without terminal event: {e}", exc_info=True)
-                await _send(_error_event(str(e), sid))
-            else:
-                logger.debug(f"[Web] sending done sid={sid} usage={usage}")
-                await _send(_ws_event(
-                    DisplayEventType.DONE,
-                    prompt_tokens=usage["prompt_tokens"],
-                    completion_tokens=usage["completion_tokens"],
-                    session_id=sid,
-                ))
-
-        current_task = asyncio.current_task()
-        sm.release_active_task(run_context.session_key, current_task)
+        await finalize_chat_run(
+            run_context=run_context,
+            future=future,
+            session_manager=sm,
+            update_meta_cache=update_meta_cache,
+            send=_send,
+            sid=sid,
+            username=username,
+            workspace=ws_name,
+            usage=complete_usage,
+            aborted=aborted,
+            got_terminal=got_terminal,
+        )
 
     async def _reader():
         nonlocal ws_closed, _ws_username
@@ -176,91 +155,14 @@ async def chat_ws_endpoint(ws: WebSocket):
             while not ws_closed:
                 try:
                     raw = await asyncio.wait_for(ws.receive_text(), timeout=30.0)
-                    try:
-                        data = json.loads(raw)
-                    except json.JSONDecodeError:
-                        await _send(_error_event("无效 JSON"))
-                        continue
-
-                    msg_type = data.get("type")
-
-                    if msg_type == "login":
-                        u = data.get("username", "").strip()
-                        if u:
-                            _ws_username = u
-                        continue
-
-                    if msg_type == "ping":
-                        await _send(_ws_event(DisplayEventType.PONG))
-                        continue
-
-                    if not _ws_username:
-                        await _send(_error_event("请先发送 login 消息"))
-                        continue
-
-                    if msg_type == "abort":
-                        abort_sid = data.get("session_id")
-                        abort_username = _ws_username
-                        abort_ws = data.get("workspace")
-                        if abort_sid:
-                            evt = sm.get_abort_event(cache_key(abort_username, abort_ws, abort_sid))
-                            if evt:
-                                evt.set()
-                        continue
-
-                    username = _ws_username
-                    session_id = data.get("session_id")
-                    ws_name = data.get("workspace")
-
-                    if msg_type and msg_type.startswith("plan."):
-                        result = plan_command_service.handle_plan_command(
-                            plan_deps,
-                            username=username,
-                            session_id=session_id,
-                            workspace=ws_name,
-                            msg_type=msg_type,
-                            payload=data,
-                        )
-                        for event in result.events:
-                            await _send(event)
-                        if result.run:
-                            run = result.run
-                            await _launch_chat_task(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan, result.session_key)
-                        continue
-
-                    if msg_type != "chat":
-                        continue
-
-                    user_message = data.get("message", "").strip()
-                    images = data.get("images")
-
-                    # 处理 /compact 命令
-                    if user_message == "/compact":
-                        ws_name = data.get("workspace")
-                        result = chat_compact_service.compact_chat(compact_deps, username=username, session_id=session_id, workspace=ws_name)
-                        await _send(result.event)
-                        continue
-
-                    # 处理 /act 命令（批准当前计划并执行）
-                    if user_message == "/act":
-                        ws_name = data.get("workspace")
-                        result = plan_command_service.approve_current_plan(plan_deps, username=username, session_id=session_id, workspace=ws_name)
-                        for event in result.events:
-                            await _send(event)
-                        if result.run:
-                            run = result.run
-                            await _launch_chat_task(run.sid, run.username, run.user_message, run.workspace, run.images, run.plan_turn, run.approved_plan, result.session_key)
-                        continue
-
-                    if not session_id:
-                        await _send(_error_event("请先选择会话"))
-                        continue
-
-                    ws_name = data.get("workspace")
-                    sid = session_id
-
-                    # 同一会话只允许一个生成任务，避免多个 runner 同时改同一 messages 导致串流
-                    await _launch_chat_task(sid, username, user_message, ws_name, images)
+                    state = await dispatch_chat_ws_message(
+                        raw,
+                        username=_ws_username,
+                        deps=command_deps,
+                        send=_send,
+                        launch_chat_task=_launch_chat_task,
+                    )
+                    _ws_username = state.username
 
                 except asyncio.TimeoutError:
                     pass

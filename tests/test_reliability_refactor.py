@@ -440,6 +440,7 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
 def test_web_chat_plan_commands_delegate_to_application_service():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     service = (root / "application" / "plan_command_service.py").read_text(encoding="utf-8")
 
@@ -447,8 +448,10 @@ def test_web_chat_plan_commands_delegate_to_application_service():
     assert "from ...plan.store import" not in text
     assert "PlanService" not in text
     assert "PlanStore" not in text
-    assert "plan_command_service.handle_plan_command" in text
-    assert "plan_command_service.approve_current_plan" in text
+    assert "plan_command_service.handle_plan_command" not in text
+    assert "plan_command_service.approve_current_plan" not in text
+    assert "plan_command_service.handle_plan_command" in command_dispatch
+    assert "plan_command_service.approve_current_plan" in command_dispatch
     assert "plan_command_dependencies" in text
     assert "def plan_command_dependencies" in runtime_helpers
     assert "class PlanCommandDependencies" in service
@@ -461,6 +464,7 @@ def test_web_chat_plan_commands_delegate_to_application_service():
 def test_web_chat_compact_command_delegates_to_application_service():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_compact_service.py").read_text(encoding="utf-8")
 
@@ -468,7 +472,8 @@ def test_web_chat_compact_command_delegates_to_application_service():
     assert "settings_for_model" not in text
     assert "from ...llm import chat" not in text
     assert "compactor" not in text
-    assert "chat_compact_service.compact_chat" in text
+    assert "chat_compact_service.compact_chat" not in text
+    assert "chat_compact_service.compact_chat" in command_dispatch
     assert "chat_compact_dependencies" in text
     assert "def chat_compact_dependencies" in runtime_helpers
     assert "class ChatCompactDependencies" in service
@@ -480,12 +485,15 @@ def test_web_chat_compact_command_delegates_to_application_service():
 def test_web_chat_route_uses_single_task_launcher():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
     reader_area = text.split("async def _reader():", 1)[1].split("# 启动 reader", 1)[0]
 
     assert "async def _launch_chat_task" in text
     assert "claim_active_task" not in reader_area
     assert "asyncio.create_task(_run_chat" not in reader_area
-    assert reader_area.count("await _launch_chat_task") == 3
+    assert "dispatch_chat_ws_message" in reader_area
+    assert "def send_plan_command_result" in command_dispatch
+    assert command_dispatch.count("await launch_chat_task") == 2
 
 
 def test_web_chat_route_uses_application_message_builder():
@@ -539,6 +547,43 @@ def test_web_chat_route_delegates_run_context_setup():
     assert "def prepare_chat_run_context" in helper
     assert "get_or_create_session" in helper
     assert "get_or_create_components" in helper
+
+
+def test_web_chat_route_delegates_command_dispatch():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
+    reader_area = text.split("async def _reader():", 1)[1].split("# 启动 reader", 1)[0]
+
+    assert "import json" not in text
+    assert "json.loads" not in text
+    assert "msg_type" not in text
+    assert "user_message =" not in text
+    assert "if user_message ==" not in text
+    assert "dispatch_chat_ws_message" in reader_area
+    assert "class ChatCommandDependencies" in command_dispatch
+    assert "class ChatCommandState" in command_dispatch
+    assert "def dispatch_chat_ws_message" in command_dispatch
+    assert "json.loads" in command_dispatch
+    assert "msg_type" in command_dispatch
+
+
+def test_web_chat_route_delegates_run_finalization():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    finalization = (root / "web" / "chat_run_finalization.py").read_text(encoding="utf-8")
+
+    assert "set_last_usage" not in text
+    assert "release_active_task" not in text
+    assert "future.result()" not in text
+    assert "asyncio.current_task" not in text
+    assert "DisplayEventType.DONE" not in text
+    assert "finalize_chat_run" in text
+    assert "def finalize_chat_run" in finalization
+    assert "set_last_usage" in finalization
+    assert "release_active_task" in finalization
+    assert "future.result()" in finalization
+    assert "DisplayEventType.DONE" in finalization
 
 
 def test_web_chat_runner_delegates_session_auto_naming():
