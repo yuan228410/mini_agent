@@ -409,6 +409,7 @@ def test_web_runtime_paths_do_not_import_model_config_global():
 def test_web_chat_route_does_not_import_stale_session_helpers():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
     runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     stale_imports = [
         "ws_key",
@@ -432,7 +433,8 @@ def test_web_chat_route_does_not_import_stale_session_helpers():
     assert "chat_service.reset_chat" in rest_area
     assert "chat_service.export_chat" in rest_area
     assert "chat_rest_dependencies" in rest_area
-    assert "chat_session_dependencies" in text
+    assert "chat_session_dependencies" not in text
+    assert "chat_session_dependencies" in endpoint_state
     assert "def chat_session_dependencies" in runtime_helpers
     assert "def chat_rest_dependencies" in runtime_helpers
 
@@ -441,6 +443,7 @@ def test_web_chat_plan_commands_delegate_to_application_service():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
+    endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
     runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     service = (root / "application" / "plan_command_service.py").read_text(encoding="utf-8")
 
@@ -452,7 +455,8 @@ def test_web_chat_plan_commands_delegate_to_application_service():
     assert "plan_command_service.approve_current_plan" not in text
     assert "plan_command_service.handle_plan_command" in command_dispatch
     assert "plan_command_service.approve_current_plan" in command_dispatch
-    assert "plan_command_dependencies" in text
+    assert "plan_command_dependencies" not in text
+    assert "plan_command_dependencies" in endpoint_state
     assert "def plan_command_dependencies" in runtime_helpers
     assert "class PlanCommandDependencies" in service
     assert "def handle_plan_command" in service
@@ -465,6 +469,7 @@ def test_web_chat_compact_command_delegates_to_application_service():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
     command_dispatch = (root / "web" / "chat_command_dispatch.py").read_text(encoding="utf-8")
+    endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
     runtime_helpers = (root / "web" / "runtime_helpers.py").read_text(encoding="utf-8")
     service = (root / "application" / "chat_compact_service.py").read_text(encoding="utf-8")
 
@@ -474,7 +479,8 @@ def test_web_chat_compact_command_delegates_to_application_service():
     assert "compactor" not in text
     assert "chat_compact_service.compact_chat" not in text
     assert "chat_compact_service.compact_chat" in command_dispatch
-    assert "chat_compact_dependencies" in text
+    assert "chat_compact_dependencies" not in text
+    assert "chat_compact_dependencies" in endpoint_state
     assert "def chat_compact_dependencies" in runtime_helpers
     assert "class ChatCompactDependencies" in service
     assert "def compact_chat" in service
@@ -587,7 +593,8 @@ def test_web_chat_route_delegates_ws_send():
     assert "send_json" not in text
     assert "DisplayWireEvent" not in text
     assert "DisplayEvent" not in text
-    assert "ChatWebSocketSender" in text
+    assert "ChatWebSocketSender" not in text
+    assert "build_chat_endpoint_state" in text
     assert "class ChatWebSocketSender" in sender
     assert "asyncio.Lock" in sender
     assert "send_json" in sender
@@ -645,6 +652,42 @@ def test_web_chat_route_delegates_connection_driver():
     assert "def drive_chat_connection" in driver
     assert "asyncio.create_task" in driver
     assert "receive_text" in driver
+
+
+def test_web_chat_route_delegates_endpoint_state():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    endpoint_state = (root / "web" / "chat_endpoint_state.py").read_text(encoding="utf-8")
+
+    assert "ChatCommandDependencies" not in text
+    assert "ChatWebSocketSender" not in text
+    assert "plan_command_dependencies" not in text
+    assert "chat_compact_dependencies" not in text
+    assert "chat_session_dependencies" not in text
+    assert "build_chat_endpoint_state" in text
+    assert "class ChatEndpointState" in endpoint_state
+    assert "def build_chat_endpoint_state" in endpoint_state
+    assert "ChatCommandDependencies" in endpoint_state
+    assert "ChatWebSocketSender" in endpoint_state
+    assert "plan_command_dependencies" in endpoint_state
+    assert "chat_compact_dependencies" in endpoint_state
+
+
+def test_web_chat_route_delegates_executor_launch():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    text = (root / "web" / "routes" / "chat.py").read_text(encoding="utf-8")
+    executor = (root / "web" / "chat_executor.py").read_text(encoding="utf-8")
+
+    assert "run_tool_loop_sync" not in text
+    assert "from ..chat_runner import _executor" not in text
+    assert "run_in_executor" not in text
+    assert "executor_args(" not in text
+    assert "launch_chat_executor" in text
+    assert "def launch_chat_executor" in executor
+    assert "run_tool_loop_sync" in executor
+    assert "_executor" in executor
+    assert "run_in_executor" in executor
+    assert "executor_args(" in executor
 
 
 def test_web_chat_export_response_delegates_to_adapter():

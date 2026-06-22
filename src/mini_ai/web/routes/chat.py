@@ -19,23 +19,19 @@ from ..route_types import (
     ImageUpload,
     RouteErrorResponse,
 )
-from ..chat_command_dispatch import ChatCommandDependencies, error_event
+from ..chat_command_dispatch import error_event
 from ..chat_connection_cleanup import cleanup_chat_connection
 from ..chat_connection_driver import drive_chat_connection
+from ..chat_endpoint_state import build_chat_endpoint_state
 from ..chat_events import relay_chat_queue_events
+from ..chat_executor import launch_chat_executor
 from ..chat_export_response import chat_export_response
 from ..chat_run_context import prepare_chat_run_context
 from ..chat_run_finalization import finalize_chat_run
-from ..chat_runner import run_tool_loop_sync
-from ..chat_sender import ChatWebSocketSender
 from ..chat_task_launcher import chat_task_launcher
-from ..runtime_helpers import chat_compact_dependencies, chat_rest_dependencies, chat_session_dependencies, plan_command_dependencies
+from ..runtime_helpers import chat_rest_dependencies
 
 router = APIRouter()
-
-
-def _chat_deps():
-    return chat_session_dependencies()
 
 
 # ── WebSocket endpoint ──
@@ -43,22 +39,12 @@ def _chat_deps():
 @router.websocket("/chat/ws")
 async def chat_ws_endpoint(ws: WebSocket):
     await ws.accept()
-    _ws_abort_keys: list[str] = []
-    sender = ChatWebSocketSender(ws)
-    deps = _chat_deps()
-    plan_deps = plan_command_dependencies()
-    compact_deps = chat_compact_dependencies()
-    command_deps = ChatCommandDependencies(
-        session_manager=deps["session_manager"],
-        cache_key=deps["cache_key"],
-        plan_dependencies=plan_deps,
-        compact_dependencies=compact_deps,
-    )
-    sm = deps["session_manager"]
-    update_meta_cache = deps["update_meta_cache"]
+    endpoint_state = build_chat_endpoint_state(ws)
+    deps = endpoint_state.session_dependencies
+    sm = endpoint_state.session_manager
 
     async def _send(data) -> None:
-        await sender.send(data)
+        await endpoint_state.send(data)
 
     async def _launch_chat_task(
         sid: str,
@@ -83,13 +69,14 @@ async def chat_ws_endpoint(ws: WebSocket):
             user_message=user_message,
             images=images,
         )
-        _ws_abort_keys.append(run_context.session_key)
+        endpoint_state.abort_keys.append(run_context.session_key)
 
-        from ..chat_runner import _executor
-        future = run_context.loop.run_in_executor(
-            _executor,
-            run_tool_loop_sync,
-            *run_context.executor_args(username=username, workspace=ws_name, plan_turn=plan_turn, approved_plan=approved_plan),
+        future = launch_chat_executor(
+            run_context,
+            username=username,
+            workspace=ws_name,
+            plan_turn=plan_turn,
+            approved_plan=approved_plan,
         )
 
         try:
@@ -109,7 +96,7 @@ async def chat_ws_endpoint(ws: WebSocket):
             run_context=run_context,
             future=future,
             session_manager=sm,
-            update_meta_cache=update_meta_cache,
+            update_meta_cache=endpoint_state.update_meta_cache,
             send=_send,
             sid=sid,
             username=username,
@@ -120,11 +107,11 @@ async def chat_ws_endpoint(ws: WebSocket):
         )
 
     async def _cleanup_reader(reader_task: asyncio.Task) -> None:
-        await cleanup_chat_connection(reader_task=reader_task, abort_keys=_ws_abort_keys, session_manager=sm)
+        await cleanup_chat_connection(reader_task=reader_task, abort_keys=endpoint_state.abort_keys, session_manager=sm)
 
     await drive_chat_connection(
         receive_text=ws.receive_text,
-        command_deps=command_deps,
+        command_deps=endpoint_state.command_dependencies,
         send=_send,
         launch_chat_task=_launch_chat_task,
         cleanup_reader=_cleanup_reader,
