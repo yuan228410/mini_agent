@@ -2284,6 +2284,8 @@ def test_web_file_routes_use_application_service_boundary():
     repo = Path(__file__).resolve().parents[1]
     routes_files = (repo / "src/mini_ai/web/routes/files.py").read_text()
     file_service = (repo / "src/mini_ai/application/file_service.py").read_text()
+    file_paths = (repo / "src/mini_ai/application/file_paths.py").read_text()
+    file_operations = (repo / "src/mini_ai/application/file_operations.py").read_text()
 
     assert "from ...config import" not in routes_files
     assert "DATA_DIR" not in routes_files
@@ -2301,11 +2303,11 @@ def test_web_file_routes_use_application_service_boundary():
     assert "file_service.raw_file" in routes_files
     assert "file_service.search_files" in routes_files
     assert "file_service.browse_dirs" in routes_files
-    assert "def safe_resolve" in file_service
-    assert "def list_files_at" in file_service
-    assert "def read_text_window" in file_service
-    assert "def search_files_at" in file_service
-    assert "def browse_dirs_at" in file_service
+    assert "def safe_resolve" in file_paths
+    assert "def list_files_at" in file_operations
+    assert "def read_text_window" in file_operations
+    assert "def search_files_at" in file_operations
+    assert "def browse_dirs_at" in file_operations
 
 
 def test_web_skill_routes_use_runtime_settings_boundary():
