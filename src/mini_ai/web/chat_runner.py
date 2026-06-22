@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..llm import get_usage, reset_usage, chat as llm_chat
-from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, default_chat_tools, handle_invalid_chat_result, inject_team_inbox_messages, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools, should_poll_team_followup
+from ..application.chat_service import ApplicationService, RunTurnOptions, append_chat_assistant_message, apply_plan_discussion_response, default_chat_tools, handle_invalid_chat_result, inject_team_inbox_messages, persist_latest_user_message, prepare_execution_turn, prepare_plan_turn, select_turn_tools, should_poll_team_followup, team_followup_timing
 from ..application.session_service import maybe_auto_name_session
 from ..core import build_session_runtime
 from ..core.events import DisplayEvent, DisplayEventType
@@ -159,11 +159,9 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                 team_mgr = comp.get("team_mgr")
                 if should_poll_team_followup(bus, team_mgr, msg):
                     lead_event = threading.Event()
-                    timeout_settings = settings.timeouts if settings else None
-                    deadline = time.monotonic() + (timeout_settings.lead_wait if timeout_settings else 1800)
-                    poll_interval = timeout_settings.lead_poll_interval if timeout_settings else 2
+                    timing = team_followup_timing(settings.timeouts if settings else None, now=time.monotonic())
 
-                    while time.monotonic() < deadline:
+                    while time.monotonic() < timing.deadline:
                         inbox = bus.read_inbox("lead")
                         if inbox:
                             injection = inject_team_inbox_messages(messages, inbox)
@@ -185,7 +183,7 @@ def run_tool_loop_sync(queue: asyncio.Queue, loop: asyncio.AbstractEventLoop,
                                     msg = msg2
                         if abort_event and abort_event.is_set():
                             break
-                        lead_event.wait(timeout=poll_interval)
+                        lead_event.wait(timeout=timing.poll_interval)
 
                 # ── 错误处理 ──
                 if not msg or (not msg.get("content") and not msg.get("tool_calls")):

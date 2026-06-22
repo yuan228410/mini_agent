@@ -88,6 +88,12 @@ class TeamInboxInjectionResult:
     count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class TeamFollowupTiming:
+    deadline: float
+    poll_interval: float
+
+
 PLAN_DISCUSSION_DISPLAY_CONTENT = "计划已更新。请在消息区按向导一步步选择；所有关键选择完成后，最终计划会出现在右侧面板等待确认执行。"
 TEAM_FOLLOWUP_INSTRUCTION = "队友回禀已收到。请先 blackboard_read 获取队友写入黑板的结果，再基于回禀和黑板内容回复用户。"
 
@@ -286,6 +292,14 @@ def should_poll_team_followup(bus: MessageBusProtocol | None, team_mgr: Any | No
     """Return whether a turn should poll teammate inbox replies."""
 
     return bool(bus and team_mgr and message is not None and not message.get("error") and message.get("tool_calls"))
+
+
+def team_followup_timing(timeout_settings: Any | None, *, now: float) -> TeamFollowupTiming:
+    """Return follow-up polling deadline and interval from runtime timeout settings."""
+
+    lead_wait = timeout_settings.lead_wait if timeout_settings else 1800
+    poll_interval = timeout_settings.lead_poll_interval if timeout_settings else 2
+    return TeamFollowupTiming(deadline=now + lead_wait, poll_interval=poll_interval)
 
 
 def inject_team_inbox_messages(messages: list[MessageDict], inbox_messages: list[dict[str, Any]], *, label: str = "兜底", timestamp: str | None = None) -> TeamInboxInjectionResult:

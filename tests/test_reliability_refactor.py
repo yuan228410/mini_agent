@@ -614,6 +614,21 @@ def test_web_chat_runner_delegates_team_followup_injection():
     assert "format_inbox_messages" in service
 
 
+def test_web_chat_runner_delegates_team_followup_timing():
+    root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
+    runner = (root / "web" / "chat_runner.py").read_text(encoding="utf-8")
+    service = (root / "application" / "chat_service.py").read_text(encoding="utf-8")
+
+    assert "lead_wait" not in runner
+    assert "lead_poll_interval" not in runner
+    assert "timeout_settings" not in runner
+    assert "team_followup_timing" in runner
+    assert "class TeamFollowupTiming" in service
+    assert "def team_followup_timing" in service
+    assert "lead_wait" in service
+    assert "lead_poll_interval" in service
+
+
 def test_runtime_sources_do_not_call_module_level_tool_registry_apis():
     root = Path(__file__).resolve().parents[1] / "src" / "mini_ai"
     allowed = {root / "tools" / "__init__.py", root / "tools" / "register_subagent.py"}
